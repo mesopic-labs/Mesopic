@@ -63,6 +63,9 @@ coverage.xml
 htmlcov/
 .tox/
 
+# --- Local agent instructions (kept out of the repo deliberately) ---
+CLAUDE.md
+
 # --- Editors / OS ---
 .DS_Store
 .idea/

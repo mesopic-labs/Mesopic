@@ -20,6 +20,6 @@ what it does and does not store about people.
   don't rewrite.
 - **A rule contributors must follow** goes in [CONTRIBUTING.md](../CONTRIBUTING.md),
   written as prose with its reasoning.
-- **A rule an AI coding agent must follow** goes in [CLAUDE.md](../CLAUDE.md) — short,
-  imperative, and only if it cannot be enforced mechanically. A rule a linter can enforce
-  belongs in the linter, not in a document someone has to remember.
+- **A rule that can be enforced mechanically** goes in the linter, the type checker, or
+  an import-linter contract — not in a document someone has to remember. `make check` is
+  the source of truth for what "correct" means here.

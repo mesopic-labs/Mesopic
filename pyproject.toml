@@ -83,7 +83,7 @@ known-first-party = ["muster"]
 convention = "google"
 
 # ---------------------------------------------------------------------------
-# mypy — strict, and it means it. No blanket ignores (CLAUDE.md).
+# mypy — strict, and it means it. No blanket ignores: narrow the rule and say why.
 # ---------------------------------------------------------------------------
 [tool.mypy]
 python_version = "3.12"

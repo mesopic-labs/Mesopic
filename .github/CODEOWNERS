@@ -26,6 +26,3 @@
 /muster-engine/src/muster/store/          @Emil1J
 /muster-engine/src/muster/sync/           @Emil1J
 /muster-engine/tests/test_privacy_invariants.py @Emil1J
-
-# The agent's operating rules.
-/CLAUDE.md                  @Emil1J
