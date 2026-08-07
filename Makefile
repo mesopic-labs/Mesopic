@@ -1,6 +1,6 @@
 # The same gate as CI, one command. If `make check` is green, CI will be too.
 .DEFAULT_GOAL := help
-.PHONY: help setup fmt lint types arch test check cov image run demo clean
+.PHONY: help setup fmt lint types arch test check cov image run demo test-stream clean
 
 UV ?= uv
 ALL := muster-engine/src muster-engine/tests
@@ -44,6 +44,13 @@ run:  ## Run the engine against ./muster.yaml
 
 demo:  ## Bring up the engine plus a synthetic camera and an MQTT broker
 	docker compose --profile demo up --build
+
+test-stream:  ## Serve a synthetic RTSP camera on :8554 (no engine, no clip needed)
+	@docker compose --profile camera up -d mediamtx
+	@printf '\n  rtsp://127.0.0.1:8554/synthetic   1080p25, generated live\n'
+	@printf '  rtsp://127.0.0.1:8554/sample      your own clip, if examples/clips/sample.mp4 exists\n'
+	@printf '\n  probe:  ffprobe -rtsp_transport tcp rtsp://127.0.0.1:8554/synthetic\n'
+	@printf '  stop:   docker compose --profile camera down\n\n'
 
 clean:  ## Remove caches and build output
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage coverage.xml htmlcov dist build
