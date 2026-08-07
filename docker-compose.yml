@@ -1,0 +1,56 @@
+# The local development and demo stack.
+#
+#   docker compose up            engine only, against your own camera
+#   docker compose --profile demo up   + a looped sample stream and an MQTT broker
+#
+# P3.6 turns the demo profile into the one-command bring-up a stranger runs from the
+# README. Until then it is the dev harness: mediamtx gives us a repeatable RTSP source
+# so reconnect, backoff, and stall handling can be tested without a physical camera.
+
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: docker/engine.Dockerfile
+    image: muster-engine:dev
+    restart: unless-stopped
+    ports:
+      - "8080:8080"        # local HUD dashboard, /healthz, /metrics
+    volumes:
+      - muster-data:/data  # SQLite store, muster.yaml, model cache — nothing else persists
+    environment:
+      # Secrets by reference from the host env, never inline here. See .env.example.
+      MUSTER_RTSP_URL: ${MUSTER_RTSP_URL:-}
+      MUSTER_WEBHOOK_SECRET: ${MUSTER_WEBHOOK_SECRET:-}
+      MUSTER_SITE_TOKEN: ${MUSTER_SITE_TOKEN:-}
+    # The engine reads a stream and writes one file. Give it nothing more than that.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # A synthetic RTSP camera: repeatable, always available, and no credentials to leak.
+  mediamtx:
+    profiles: ["demo"]
+    # The plain tag is distroless — no shell, no ffmpeg — so `runOnInit` silently
+    # does nothing. The -ffmpeg variant is the one that can serve a looped clip.
+    image: bluenviron/mediamtx:latest-ffmpeg
+    restart: unless-stopped
+    ports:
+      - "8554:8554"
+    volumes:
+      - ./docker/mediamtx.yml:/mediamtx.yml:ro
+      - ./examples/clips:/clips:ro
+
+  # For exercising the MQTT exporter and the Home Assistant discovery path locally.
+  mosquitto:
+    profiles: ["demo"]
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+volumes:
+  muster-data:

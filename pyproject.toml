@@ -1,0 +1,170 @@
+# Workspace root. Deliberately NOT a package — it holds the uv workspace and the
+# shared toolchain config; package metadata lives in muster-engine/pyproject.toml.
+#
+# This repository is the MIT engine, and only the MIT engine.
+
+[tool.uv.workspace]
+members = ["muster-engine"]
+# The proprietary hosted layer lives in its own private repository. It is not a
+# workspace member, not a dependency, and not present in this tree — see README.
+
+[tool.uv.sources]
+muster = { workspace = true }
+
+[dependency-groups]
+dev = [
+  "muster",
+  "ruff>=0.14.2",
+  "mypy>=1.18",
+  "import-linter>=2.3",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "pytest-asyncio>=0.24",
+  "hypothesis>=6.115",
+  "pre-commit>=4.0",
+  "types-PyYAML>=6.0",
+]
+
+# ---------------------------------------------------------------------------
+# ruff — lint + format, one tool, one config (tech-stack.md §6)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["muster-engine/src"]
+extend-exclude = ["**/migrations/*"]
+
+[tool.ruff.lint]
+select = [
+  "F",     # pyflakes
+  "E", "W",# pycodestyle
+  "I",     # isort — imports at the top, ordered
+  "N",     # pep8-naming
+  "UP",    # pyupgrade
+  "ANN",   # missing annotations (public API is typed — tech-stack.md §6)
+  "ASYNC", # async correctness
+  "S",     # bandit — the security ruleset
+  "BLE",   # no bare except
+  "B",     # bugbear
+  "A",     # builtin shadowing
+  "C4",    # comprehensions
+  "DTZ",   # naive datetimes — "UTC everywhere" made mechanical
+  "T20",   # no print() outside the CLI
+  "EM",    # exception messages not inlined
+  "PIE", "PT", "RET", "SIM", "TID", "ARG",
+  "PTH",   # pathlib over os.path
+  "ERA",   # no commented-out code
+  "PL",    # pylint subset
+  "TRY",   # exception antipatterns
+  "PERF",
+  "RUF",
+]
+ignore = [
+  "ANN401",  # typing.Any is sometimes the honest annotation at a boundary
+  "TRY003",  # long messages inline are fine for our error types
+  "PLR0913", # argument count is reviewed, not linted
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "PLR2004", "ANN201", "ARG001"]   # asserts and magic numbers are the point
+"**/cli.py" = ["T20"]                                      # the CLI is allowed to print
+"**/conftest.py" = ["ANN201"]
+# `muster.types` is named by the architecture docs.
+# Shadowing the stdlib `types` module is harmless under absolute imports.
+"**/types.py" = ["A005"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[tool.ruff.lint.isort]
+known-first-party = ["muster"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+# ---------------------------------------------------------------------------
+# mypy — strict, and it means it. No blanket ignores (CLAUDE.md).
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+enable_error_code = ["redundant-expr", "truthy-bool", "ignore-without-code"]
+mypy_path = ["muster-engine/src"]
+explicit_package_bases = true
+exclude = ["build/", "dist/"]
+
+# Third-party packages without stubs. Add here with a reason, never inline.
+[[tool.mypy.overrides]]
+module = ["av.*", "cv2.*", "supervision.*", "onnxruntime.*", "paho.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["muster-engine/tests"]
+addopts = "-ra --strict-markers --strict-config"
+asyncio_mode = "auto"
+filterwarnings = ["error"]
+markers = [
+  "slow: heavier tests (golden clips, soaks) — excluded from the fast commit loop",
+  "integration: needs an external service (mediamtx, mqtt)",
+  "privacy: asserts a privacy invariant (no frame bytes, no cross-tenant read)",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["muster-engine/src"]
+
+[tool.coverage.report]
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "class .*\\(Protocol\\):",
+  "@overload",
+]
+
+# ---------------------------------------------------------------------------
+# import-linter — the licence and layering boundaries, enforced structurally
+# (implementation-plan.md P0.4). These are architecture, not style.
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_packages = ["muster"]
+# Some boundaries are drawn against third-party packages: `domain/` must not reach for
+# FastAPI, and the sync client must not reach for a video codec.
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "The MIT engine never imports the proprietary cloud (ADR-0001, ADR-0008)"
+type = "forbidden"
+source_modules = ["muster"]
+# The hosted layer is a separate private repository, so this is belt-and-braces: it
+# catches the day someone vendors it back in for convenience.
+forbidden_modules = ["muster_cloud"]
+
+[[tool.importlinter.contracts]]
+name = "Analytics computes, it does not persist or serve (engine-architecture §2)"
+type = "forbidden"
+source_modules = ["muster.analytics"]
+forbidden_modules = ["muster.store", "muster.api", "muster.sync", "muster.exporters"]
+
+[[tool.importlinter.contracts]]
+name = "Detector and tracker know nothing of geometry or storage (engine-architecture §2)"
+type = "forbidden"
+source_modules = ["muster.detector", "muster.tracker"]
+forbidden_modules = ["muster.analytics", "muster.store", "muster.aggregator", "muster.api"]
+
+[[tool.importlinter.contracts]]
+name = "Ingest hands over frames and nothing else (engine-architecture §4)"
+type = "forbidden"
+source_modules = ["muster.ingest"]
+forbidden_modules = ["muster.detector", "muster.tracker", "muster.analytics", "muster.store"]
+
+[[tool.importlinter.contracts]]
+name = "The sync client reads metrics, never frames (ADR-0005)"
+type = "forbidden"
+source_modules = ["muster.sync"]
+forbidden_modules = ["muster.ingest", "muster.detector", "av", "cv2"]

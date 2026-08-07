@@ -1,0 +1,31 @@
+# Review is required from a code owner on every path below. The point is not gatekeeping
+# for its own sake — these are the files where a bad change is expensive or invisible.
+#
+# NOTE: a CODEOWNERS entry naming a user or team that cannot access the repository is
+# silently ignored by GitHub. If this moves into an organisation, switch these to the
+# @org/team form and check the Settings → Branches UI reports no CODEOWNERS errors.
+
+# Default owner for everything.
+*                           @Emil1J
+
+# Supply chain and release. The highest-value targets in an open-source repo: a change
+# here can compromise every downstream user without touching a line of product code.
+/.github/                   @Emil1J
+/docker/                    @Emil1J
+/.pre-commit-config.yaml    @Emil1J
+/.gitleaks.toml             @Emil1J
+/uv.lock                    @Emil1J
+
+# Licence boundaries. ADR-0008 and ADR-0013 live or die in these files.
+/LICENSE                    @Emil1J
+/muster-engine/LICENSE      @Emil1J
+/pyproject.toml             @Emil1J
+/muster-engine/pyproject.toml @Emil1J
+
+# The privacy invariants and the boundaries that enforce them.
+/muster-engine/src/muster/store/          @Emil1J
+/muster-engine/src/muster/sync/           @Emil1J
+/muster-engine/tests/test_privacy_invariants.py @Emil1J
+
+# The agent's operating rules.
+/CLAUDE.md                  @Emil1J

@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in the engine behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste an RTSP URL, a token, or a frame from your site.** RTSP URLs
+        contain camera credentials, and a frame of a real space is personal data.
+        Redact credentials as `rtsp://user:pass@…` and describe the scene in words.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Config (redacted) …
+        2. Ran …
+        3. Observed …
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Muster version
+      placeholder: "v0.1.0, or the image digest"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How are you running it?
+      options: ["Docker image", "docker compose", "pip install -e (from source)", "Other"]
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Box and OS
+      placeholder: "Intel N100, 8GB, Debian 12, no accelerator"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Redact credentials and hostnames before pasting.
+      render: shell

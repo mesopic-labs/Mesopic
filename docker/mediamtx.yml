@@ -1,0 +1,20 @@
+# A synthetic RTSP camera for local development and CI.
+#
+# Drop an .mp4 into ./examples/clips/ and it is served, on loop, at
+#   rtsp://127.0.0.1:8554/sample
+# (on the Apple `container` compatibility layer, the VM is at 192.168.64.2, not localhost).
+#
+# Clips are gitignored: a real clip of a real space is personal data, and this repo has
+# no business holding one.
+
+logLevel: info
+rtspAddress: :8554
+protocols: [tcp]
+
+paths:
+  sample:
+    runOnInit: >
+      ffmpeg -re -stream_loop -1 -i /clips/sample.mp4
+      -c:v libx264 -preset veryfast -tune zerolatency -g 50 -an
+      -f rtsp rtsp://localhost:8554/sample
+    runOnInitRestart: yes

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: mailto:muster.project@gmail.com
+    about: Report privately. Please do not open a public issue for a vulnerability.
+  - name: Question or idea
+    url: mailto:muster.project@gmail.com
+    about: Usage questions, camera setup help, and feature ideas.

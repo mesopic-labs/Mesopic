@@ -1,0 +1,46 @@
+name: Camera compatibility report
+description: Tell us a camera works — or misbehaves. These reports are genuinely valuable.
+labels: ["camera-compat"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Muster claims to work with "any RTSP/ONVIF camera". That claim is only as good as
+        the reports behind it, which is why this template exists.
+
+        **Never paste your RTSP URL** — it contains your camera's credentials. Describe
+        the stream path shape instead (e.g. `/Streaming/Channels/102`).
+
+  - type: input
+    id: model
+    attributes:
+      label: Make and model
+      placeholder: "Hikvision DS-2CD2143G2-I"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works — counts correctly
+        - Connects, but counting is wrong
+        - Connects, then drops or stalls
+        - Will not connect at all
+    validations:
+      required: true
+
+  - type: input
+    id: stream
+    attributes:
+      label: Stream used (codec, resolution, fps)
+      placeholder: "sub-stream, H.264, 704x576, 12fps"
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Mounting height and angle matter a lot for counting accuracy — mention them.

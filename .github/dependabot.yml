@@ -1,0 +1,45 @@
+version: 2
+
+updates:
+  # Actions are pinned to SHAs, which is exactly why this matters: without Dependabot a
+  # SHA pin quietly becomes an un-patched pin.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 5
+    groups:
+      # Routine bumps are batched and reviewed together. Security patches jump the queue
+      # on their own (tech-stack.md §7), so they are deliberately not grouped.
+      dev-tooling:
+        dependency-type: development
+        patterns: ["*"]
+    ignore:
+      # ABI-sensitive native wheels break silently across platforms. They are pinned
+      # hardest and bumped deliberately, validated on the target base image — never by an
+      # automated PR (tech-stack.md §7).
+      - dependency-name: onnxruntime
+      - dependency-name: av
+      - dependency-name: opencv-python-headless
+
+  # The base image is pinned in docker/engine.Dockerfile. Dependabot matches files
+   # named `Dockerfile*`, so `engine.Dockerfile` is found via the directory below.
+  - package-ecosystem: docker
+    directories:
+      - /docker
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(docker)"
