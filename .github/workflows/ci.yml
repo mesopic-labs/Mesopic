@@ -91,18 +91,33 @@ jobs:
   secrets:
     name: gitleaks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The action reads a pull request's commit list over the API to know what to scan.
+      # The workflow-level default is `contents: read` only, so this has to be asked for.
+      pull-requests: read
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0   # scan history, not just the diff
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
+          # Required since v2 to scan a pull request. Without it the job fails *before*
+          # scanning anything — a secret-scanning gate that never looked at the diff is
+          # worse than no gate, because the red looks like a finding rather than a
+          # misconfiguration.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
 
   dependencies:
     name: dependency review
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    # Dependency review needs the dependency graph *plus* GitHub Advanced Security, which
+    # a private repository does not have. Gated on visibility rather than deleted, so it
+    # starts running by itself the day the repo goes public — the licence gate below is
+    # the mechanism that keeps AGPL out of the default graph (ADR-0013), and it should be
+    # live from the first public PR without anyone having to remember to re-add it.
+    if: github.event_name == 'pull_request' && github.event.repository.visibility == 'public'
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
