@@ -29,6 +29,7 @@ dependencies = [
   "numpy>=2.1",
   "opencv-python-headless>=4.10",   # headless: no GUI/X11 on a server box
   "onnxruntime>=1.20",              # default CPU execution provider (ADR-0012)
+  "onnx>=1.17",                     # graph IR — onnxruntime.quantization imports it (P1.4)
   "supervision>=0.25",              # ByteTrack implementation (ADR-0014)
   "pydantic>=2.9",                  # muster.yaml validation
   "pydantic-settings>=2.6",

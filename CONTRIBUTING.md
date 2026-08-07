@@ -49,9 +49,11 @@ make setup          # uv sync + install the git hooks
 make check          # lint, types, boundaries, tests — the same gate CI runs
 ```
 
-Run the engine against any RTSP stream — a real camera, or the simulated one below:
+Run the engine against any RTSP stream — a real camera, or the [simulated
+one](#hardware-free-rtsp-the-mediamtx-simulation), which needs no camera and no clip:
 
 ```bash
+make test-stream                      # a synthetic camera on rtsp://127.0.0.1:8554/synthetic
 uv run muster run --config ./muster.yaml
 ```
 
@@ -93,15 +95,38 @@ make cov                         # with a coverage report
 
 #### Hardware-free RTSP: the mediamtx simulation
 
-You do **not** need a camera to test ingest. We manufacture a live RTSP stream in
-software with `mediamtx` + `ffmpeg`, so ingest, reconnect, and the full pipeline get
-automated coverage on a CPU-only runner:
+You do **not** need a camera to test ingest, and you do not need a clip either. We
+manufacture a live RTSP stream in software with `mediamtx` + `ffmpeg`, so ingest,
+reconnect, and the full pipeline get automated coverage on a CPU-only runner:
 
 ```bash
-# drop a clip into examples/clips/, then:
-docker compose --profile demo up
-# the stream is served at rtsp://127.0.0.1:8554/sample
+make test-stream                 # serves a camera on :8554; no engine, no clip, no download
 ```
+
+Two paths are published:
+
+| Path | What it is |
+|---|---|
+| `rtsp://127.0.0.1:8554/synthetic` | 1080p25 H.264, generated live. **Always available.** Develop against this one. |
+| `rtsp://127.0.0.1:8554/sample` | your own clip on loop, if `examples/clips/sample.mp4` exists |
+
+`/synthetic` needs no file on disk, which is deliberate: it carries no licence question,
+works offline, and is the same 1080p25 shape the M0 perf gate is specified against. If
+you want *byte-identical* frames across runs — comparing perf between commits, say —
+`scripts/make-sample-clip.sh` writes a synthetic clip to `examples/clips/` and `/sample`
+will serve it.
+
+Check it is up with any RTSP client:
+
+```bash
+ffprobe -rtsp_transport tcp rtsp://127.0.0.1:8554/synthetic
+docker compose --profile camera down          # stop it
+```
+
+**Never point `/sample` at footage of a real space.** Clips are gitignored (`*.mp4`), but
+the reason is the point rather than the mechanism: footage of real people is personal
+data, and this repository has no business holding any. Labelled footage for accuracy work
+is sourced and licensed separately, and never committed.
 
 Real cameras belong to the manual hardware track, never to CI.
 

@@ -30,8 +30,10 @@ services:
       - ALL
 
   # A synthetic RTSP camera: repeatable, always available, and no credentials to leak.
+  # In the `camera` profile as well as `demo`, so `make test-stream` can bring up just a
+  # stream to develop ingest against without building or running the engine.
   mediamtx:
-    profiles: ["demo"]
+    profiles: ["demo", "camera"]
     # The plain tag is distroless — no shell, no ffmpeg — so `runOnInit` silently
     # does nothing. The -ffmpeg variant is the one that can serve a looped clip.
     image: bluenviron/mediamtx:latest-ffmpeg

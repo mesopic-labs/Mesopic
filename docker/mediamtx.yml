@@ -1,20 +1,46 @@
 # A synthetic RTSP camera for local development and CI.
 #
-# Drop an .mp4 into ./examples/clips/ and it is served, on loop, at
-#   rtsp://127.0.0.1:8554/sample
-# (on the Apple `container` compatibility layer, the VM is at 192.168.64.2, not localhost).
+# Two paths, for two different jobs:
 #
-# Clips are gitignored: a real clip of a real space is personal data, and this repo has
-# no business holding one.
+#   rtsp://127.0.0.1:8554/synthetic   always available. Generated live by ffmpeg, so it
+#                                     needs no file, no download, and carries no licence
+#                                     question. This is the one CI and `make test-stream`
+#                                     use, and the one to develop P1.2 against.
+#
+#   rtsp://127.0.0.1:8554/sample      a real clip on loop, if you have dropped one into
+#                                     ./examples/clips/sample.mp4. Absent by design —
+#                                     see below.
+#
+# (On the Apple `container` compatibility layer the VM is at 192.168.64.2, not localhost.)
+#
+# Clips are gitignored (`*.mp4`). A real clip of a real space is personal data, and this
+# repo has no business holding one. `scripts/make-sample-clip.sh` generates a synthetic
+# file if you want a byte-identical loop across runs; real labelled footage is MK.2's
+# job, not this file's.
 
 logLevel: info
 rtspAddress: :8554
 protocols: [tcp]
 
 paths:
+  # 1080p25, the shape the M0 perf gate is specified against. `testsrc2` moves, so
+  # motion-dependent code (sampling, tracking, reconnect bursts) sees something change
+  # between frames rather than a still image that hides ordering bugs.
+  synthetic:
+    runOnInit: >
+      ffmpeg -re -f lavfi -i testsrc2=size=1920x1080:rate=25
+      -c:v libx264 -preset veryfast -tune zerolatency -g 50 -pix_fmt yuv420p -an
+      -f rtsp rtsp://localhost:8554/synthetic
+    runOnInitRestart: yes
+
+  # Guarded: without the guard, a missing clip fails instantly and `runOnInitRestart`
+  # turns that into a restart loop that buries every other log line.
   sample:
     runOnInit: >
-      ffmpeg -re -stream_loop -1 -i /clips/sample.mp4
-      -c:v libx264 -preset veryfast -tune zerolatency -g 50 -an
-      -f rtsp rtsp://localhost:8554/sample
+      sh -c 'if [ -f /clips/sample.mp4 ]; then
+      exec ffmpeg -re -stream_loop -1 -i /clips/sample.mp4
+      -c:v libx264 -preset veryfast -tune zerolatency -g 50 -pix_fmt yuv420p -an
+      -f rtsp rtsp://localhost:8554/sample;
+      else echo "muster: no /clips/sample.mp4 — use /synthetic, or run scripts/make-sample-clip.sh";
+      sleep 86400; fi'
     runOnInitRestart: yes
