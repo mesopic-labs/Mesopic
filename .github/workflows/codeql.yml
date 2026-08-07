@@ -20,6 +20,14 @@ jobs:
   analyze:
     name: analyze (python)
     runs-on: ubuntu-latest
+    # Uploading results needs code scanning enabled, which on a private repository means
+    # GitHub Advanced Security. Without it the queries run for several minutes and then
+    # fail at the upload step, so gating here saves the run rather than just the error.
+    #
+    # Gated on visibility rather than deleted: the repo goes public at launch, and this
+    # is a security gate that should be live on the first public pull request without
+    # depending on anyone remembering to restore it.
+    if: github.event.repository.visibility == 'public'
     permissions:
       security-events: write
       actions: read
