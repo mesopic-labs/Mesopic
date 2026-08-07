@@ -1252,7 +1252,7 @@ requires-dist = [
     { name = "supervision", specifier = ">=0.25" },
     { name = "typer", specifier = ">=0.15" },
     { name = "ultralytics", marker = "extra == 'ultralytics'", specifier = ">=8.3" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.1" },
 ]
 provides-extras = ["openvino", "ultralytics"]
 
