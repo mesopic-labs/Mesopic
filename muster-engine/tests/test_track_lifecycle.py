@@ -43,6 +43,23 @@ def test_n_init_of_one_confirms_on_birth() -> None:
     assert _new(n_init=1).state is TrackState.CONFIRMED
 
 
+def test_a_partly_proven_track_is_still_not_a_person() -> None:
+    """One match short of n_init must not confirm -- the off-by-one boundary.
+
+    Both states are captured before either is asserted: narrowing `track.state` in an
+    assertion would hide the mutation `mark_matched` performs from the type checker.
+    """
+    track = _new(n_init=3)
+
+    track.mark_matched(BOX, 0.9, _at(0.5))
+    after_one_match = track.state
+    track.mark_matched(BOX, 0.9, _at(1.0))
+    after_two_matches = track.state
+
+    assert after_one_match is TrackState.TENTATIVE
+    assert after_two_matches is TrackState.CONFIRMED
+
+
 def test_an_unmatched_tentative_track_is_not_worth_keeping() -> None:
     track = _new(n_init=3)
     track.mark_missed()
