@@ -68,6 +68,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S101", "PLR2004", "ANN201", "ARG001"]   # asserts and magic numbers are the point
 "**/cli.py" = ["T20"]                                      # the CLI is allowed to print
+"**/tests/association/test_sweep.py" = ["T20"]              # the sweep's table IS its output
 "**/conftest.py" = ["ANN201"]
 # `muster.types` is named by the architecture docs.
 # Shadowing the stdlib `types` module is harmless under absolute imports.

@@ -143,3 +143,40 @@ COSTS: dict[str, CostFunction] = {
     "expansion_iou": expansion_iou_cost,
 }
 """Every candidate ADR-0014 shortlisted, keyed by the name the sweep reports."""
+
+COST_CEILING: dict[str, float | None] = {
+    "iou": 1.0,
+    "giou": 2.0,
+    "centre_distance": None,
+    "expansion_iou": 1.0,
+}
+"""Each cost's supremum, or `None` if it has none (ADR-0014 Task 9, Constraint 4).
+
+The additive gate `max_cost + kappa * dt` grows without bound while every bounded cost
+saturates, so past some dt the gate exceeds the cost's own ceiling and refuses nothing
+at all (`bytetrack.py`'s `test_the_additive_gate_stops_refusing_below_about_1_7_fps`).
+A saturating gate needs to know what it must stay under. `centre_distance_cost` has no
+such ceiling -- it is Euclidean distance over a scale-agreement penalty, unbounded by
+construction -- so a saturating gate is not defined for it; `bytetrack.py` raises rather
+than silently falling back to the additive form for that combination.
+"""
+
+
+def ceiling_for(cost: CostFunction) -> float | None:
+    """The registered ceiling for `cost`, by identity lookup against `COSTS`.
+
+    Args:
+        cost: One of `COSTS`'s values.
+
+    Returns:
+        The cost's supremum, or `None` if it has none.
+
+    Raises:
+        ValueError: If `cost` is not one of `COSTS` -- a saturating gate can only be
+            calibrated against a cost this module knows the range of.
+    """
+    for name, fn in COSTS.items():
+        if fn is cost:
+            return COST_CEILING[name]
+    msg = "cost function is not registered in COSTS; its ceiling is unknown"
+    raise ValueError(msg)

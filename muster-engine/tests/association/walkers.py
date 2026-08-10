@@ -60,6 +60,30 @@ _SPEED_MS = 1.5
 
 SCENARIOS = ("single", "crossing", "group", "entering")
 
+_GROUP_DEPTH_SPACING_M = 0.7
+"""`group`'s three walkers' depth spacing (ADR-0014 Task 9, Constraint 3).
+
+Was `0.5`, giving a true minimum foot-point separation of **43.1 px** at closest
+approach (`t≈2.67s`, between the two nearest walkers) -- half of that, 21.5 px, is the
+budget `score.py`'s match radius must stay under to tell them apart. That budget could
+not also clear the sweep's own detection jitter at its upper bound (`box_sigma=8`px):
+the noise floor there is `3 * 8 = 24` px, which exceeds 21.5 px, so `score_run` raised
+`ValueError` rather than return a `NEVER`/`MT` number that would not have meant what it
+claimed (task-8-report.md, fix round 2).
+
+The spacing had to widen, not the jitter this scenario is swept at -- `group` is the
+one scenario built to stress crowding, and capping its `box_sigma` to dodge the problem
+would mean the sweep's most crowded case never actually runs at the sweep's own upper
+jitter bound, hiding exactly the regime ADR-0014 cares about.
+
+`0.7` gives a true minimum foot-point separation of **56.1 px** (half: 28.0 px) --
+comfortably (not razor-thin: ~4 px / ~14% headroom) above the 24 px `sigma=8` noise
+floor, while still recognisably "three people close together" rather than a spacing
+chosen to make the problem disappear. Measured directly by scanning the scenario's
+ground truth at `dt=0.01s` over its full 6 s run; see `task-9-report.md` for the full
+spacing/separation table this value was chosen from.
+"""
+
 # One empty frame, reused for every tick. The tracker reads ts/width/height only.
 _NO_PIXELS = np.zeros((1, 1, 3), dtype=np.uint8)
 
@@ -120,9 +144,11 @@ def _walkers(name: str) -> tuple[list[_Walker], float]:
             _Walker(1, (4.0, 6.3), (-1.0, 0.0), 0.0),
         ], 6.0
     if name == "group":
-        # Three abreast, half a metre apart: every box is a plausible match for its
-        # neighbour, which is where centre-distance costs are weakest.
-        return [_Walker(i, (-4.0, 5.5 + i * 0.5), (1.0, 0.0), 0.0) for i in range(3)], 6.0
+        # Three abreast, _GROUP_DEPTH_SPACING_M apart: every box is a plausible match
+        # for its neighbour, which is where centre-distance costs are weakest.
+        return [
+            _Walker(i, (-4.0, 5.5 + i * _GROUP_DEPTH_SPACING_M), (1.0, 0.0), 0.0) for i in range(3)
+        ], 6.0
     if name == "entering":
         # Staggered arrivals at the frame edge -- the birth case ADR-0014 says the
         # damage concentrates on, and what N_init is actually trading against.

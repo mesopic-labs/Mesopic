@@ -11,12 +11,13 @@ Implements P1.5.
 from __future__ import annotations
 
 from itertools import count
+from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import linear_sum_assignment
 
-from muster.tracker.cost import CostFunction, giou_cost
+from muster.tracker.cost import CostFunction, ceiling_for, centre_distance_cost
 from muster.tracker.track import TrackRecord, TrackState
 from muster.types import (
     DecodedFrame,
@@ -68,12 +69,13 @@ class ByteTrackTracker:
         self,
         *,
         track_thresh: float = 0.5,
-        max_cost: float = 0.8,
-        max_cost_low: float = 0.5,
+        max_cost: float = 0.4,
+        max_cost_low: float = 0.25,
         n_init: int = 2,
         track_memory_s: float = 2.0,
-        cost: CostFunction = giou_cost,
-        gate_widening_per_second: float = 2.0,
+        cost: CostFunction = centre_distance_cost,
+        gate_widening_per_second: float = 0.3,
+        gate_form: Literal["additive", "saturating"] = "additive",
     ) -> None:
         # `max_cost` gates the association COST (1 - similarity), not the similarity.
         # The upstream name (`match_thresh`) invites exactly the wrong reading, and that
@@ -90,23 +92,62 @@ class ByteTrackTracker:
         # kappa (ADR-0014 Decision #1): "accept iff cost < max_cost + kappa * dt_s". The
         # gate must widen with the sampling gap because displacement grows with it -- a
         # newly-born track has no velocity estimate yet and predicts "it didn't move",
-        # so a flat gate refuses exactly the step that matters most. 1.0 measured to
-        # REFUSE a brisk 2.0 m/s walker (kalman.py's _MAX_WALK_SPEED_MS -- two modules
-        # must not silently disagree about how fast a person may walk) at 2 and 3 fps.
-        # Fix round 1 raised this to 1.5 against a pixel scale that was NOT derived from
-        # kalman.py's own metres-to-pixels formula (scale = height_px / _PERSON_HEIGHT_M)
-        # and turned out to understate the true displacement -- 1.5 still REFUSES that
-        # same walker at 3 fps once computed honestly (cost 1.3245 vs gate 1.3000,
-        # margin -0.0245; see test_a_brisk_walker_is_admitted_at_the_worst_case_fps and
-        # the kappa table in task-7-report.md's fix round 2). 2.0 clears 1/2/3/5 fps
-        # with the corrected scale (worst-case margin +0.1189 at 5 fps). kappa is a
-        # SWEPT axis, not a tuned constant: raising it trades birth-survival against
-        # ID-swap risk -- the tradeoff ADR-0014 names -- and only the Task 9 sweep can
-        # settle where it should sit.
+        # so a flat gate refuses exactly the step that matters most. Pre-Task-9 history,
+        # kept because it explains why kappa was never trusted as "just a constant": 1.0
+        # measured to REFUSE a brisk 2.0 m/s walker (kalman.py's _MAX_WALK_SPEED_MS) at
+        # 2 and 3 fps; 1.5 (fix round 1) still refused it at 3 fps once the pixel scale
+        # was computed honestly; 2.0 (fix round 2) cleared 1/2/3/5 fps -- all of this
+        # against the THEN-default `giou_cost`.
+        #
+        # Task 9's sweep (task-9-report.md) is what actually settled it, per-candidate
+        # (Constraint 1: one gate cannot serve costs with different ranges, so each of
+        # `giou_cost`, `iou_cost`, `centre_distance_cost`, `expansion_iou_cost` got its
+        # own tuned `(max_cost, kappa)`, both additive and saturating gate forms). The
+        # winner across fps in {1,2,3,5} x n_init in {1,2,3} x all four scenarios x five
+        # seeds, under detection corruption: `centre_distance_cost`, with the LOWEST
+        # combined ID-switch + merge total of every candidate (including the `iou_cost`
+        # control) while matching or beating every other candidate's never-confirmed
+        # rate outside of two candidates that only won never-confirmed by matching
+        # almost anything (`iou_cost` and `expansion_iou_cost` both had dramatically
+        # WORSE id-switch + merge totals than `centre_distance_cost` -- ADR-0014's own
+        # named failure mode of a too-permissive gate, moving the error rather than
+        # removing it). `max_cost=0.4, kappa=0.3` is `centre_distance_cost`'s own Phase A
+        # operating point, not a scaled-down guess from GIoU's numbers -- its cost is on
+        # a different scale entirely (normalized centre distance plus a scale-agreement
+        # penalty, not `1 - similarity`). `gate_form="additive"` because the saturating
+        # alternative (Constraint 4) never beat it for the winning candidate, and was
+        # actively worse for two others -- the additive form's dead zone below ~1.67 fps
+        # (still real, still documented below) did not materialize as a practical
+        # problem at this operating point. `n_init=2` unchanged: `n_init=1` zeroed
+        # never-confirmed at every fps but at 2-5x the id-switch + merge cost, not the
+        # "clear win" ADR-0014 decision #4 requires to justify moving off 2.
         self._gate_widening_per_second = gate_widening_per_second
+        # Gate FORM (ADR-0014 Task 9, Constraint 4): see `_gate`'s docstring for what
+        # "additive" vs "saturating" mean and why the latter needs a cost ceiling.
+        self._gate_form = gate_form
+        self._ceiling = self._resolve_ceiling(gate_form, cost)
         self._tracks: list[TrackRecord] = []
         self._ids = count(1)
         self._last_ts: FrameTs | None = None
+
+    @staticmethod
+    def _resolve_ceiling(gate_form: str, cost: CostFunction) -> float | None:
+        """The cost's ceiling, required only by the saturating gate form.
+
+        Resolved eagerly so a misconfiguration (a saturating gate paired with an
+        unbounded cost, e.g. `centre_distance_cost`) fails at construction, not on the
+        first call to `update`.
+        """
+        if gate_form != "saturating":
+            return None
+        ceiling = ceiling_for(cost)
+        if ceiling is None:
+            msg = (
+                "gate_form='saturating' requires a cost function with a finite ceiling; "
+                "this cost has none (e.g. centre_distance_cost) -- use 'additive' instead"
+            )
+            raise ValueError(msg)
+        return ceiling
 
     def update(self, frame: DecodedFrame, detections: list[Detection]) -> list[Track]:
         """Advance the tracker one tick and return the currently live tracks."""
@@ -204,20 +245,40 @@ class ByteTrackTracker:
         return self.cost(np.array([t.box for t in tracks]), det_boxes, dt_s)
 
     def _gate(self, tracks: list[TrackRecord], max_cost: float, ts: FrameTs) -> NDArray[np.float64]:
-        """Per-track accept threshold: `max_cost + kappa * (gap since last observed)`.
+        """Per-track accept threshold, widened by the gap since each track was last
+        OBSERVED (not since the last tick): a track missed for three ticks must bridge
+        three ticks' worth of displacement, so a reacquisition after a multi-tick
+        occlusion is gated proportionally to what it needs to bridge, not to a single
+        missed frame (ADR-0014 Decision #1: dt is the gap being bridged, not the tick
+        interval).
 
-        Widens by the gap since each track was last OBSERVED, not since the last tick:
-        a track missed for three ticks must bridge three ticks' worth of displacement,
-        so a reacquisition after a multi-tick occlusion is gated proportionally to what
-        it needs to bridge, not to a single missed frame (ADR-0014 Decision #1: dt is
-        the gap being bridged, not the tick interval).
+        Two forms (`gate_form`, ADR-0014 Task 9 Constraint 4):
+
+        * `additive`: `max_cost + kappa * gap`. ADR-0014 Decision #1's own formula.
+          Unbounded, so past some gap it exceeds a bounded cost's ceiling and refuses
+          nothing at all -- a dead zone, not a typo (see `__init__`).
+        * `saturating`: `ceiling - (ceiling - max_cost) * exp(-kappa * gap)`. Starts at
+          `max_cost` when `gap == 0`, same as the additive form, then approaches (never
+          reaches) the cost's ceiling as the gap grows -- so there is always some margin
+          left to refuse an implausible match, however large the gap.
         """
         gaps = np.array(
             [max((ts - t.last_observed_ts).total_seconds(), 0.0) for t in tracks],
             dtype=np.float64,
         )
-        gate: NDArray[np.float64] = max_cost + self._gate_widening_per_second * gaps
-        return gate
+        if self._gate_form == "additive":
+            gate: NDArray[np.float64] = max_cost + self._gate_widening_per_second * gaps
+            return gate
+        if self._ceiling is None:
+            # Unreachable: __init__ raises before a saturating tracker with no ceiling
+            # can exist. Guards mypy's narrowing rather than expressing a real runtime
+            # possibility.
+            msg = "saturating gate requires a ceiling; __init__ should have refused this"
+            raise RuntimeError(msg)
+        saturating: NDArray[np.float64] = self._ceiling - (self._ceiling - max_cost) * np.exp(
+            -self._gate_widening_per_second * gaps
+        )
+        return saturating
 
     def _birth(self, unclaimed: list[Detection], ts: FrameTs) -> None:
         """Start tracks from confident detections no existing track claimed."""

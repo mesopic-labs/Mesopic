@@ -45,6 +45,12 @@ This floor alone is not sufficient across the depth range, though (fix round 2):
 because the *detection* moved, not the track. See `_JITTER_MULTIPLE` for the other
 floor the radius must also clear, and `_assert_radius_resolves_crowding` for the check
 that the two floors haven't been asked to do something impossible in a given run.
+
+`group`'s own spacing widened `0.5m -> 0.7m` in Task 9 (`walkers.py`'s
+`_GROUP_DEPTH_SPACING_M`) so the scenario resolves at the sweep's upper jitter bound
+(`box_sigma=8`); the ~43 px / ~0.5 m figures above describe the geometry this constant
+was originally derived against, not the geometry `group` runs at now. `0.04` itself is
+unchanged -- widening the spacing only gives it more headroom, never less.
 """
 
 _JITTER_MULTIPLE = 3.0

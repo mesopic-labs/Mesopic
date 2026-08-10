@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from muster.tracker.bytetrack import ByteTrackTracker
-from muster.tracker.cost import CostFunction, iou_cost
+from muster.tracker.cost import CostFunction, giou_cost, iou_cost
 from muster.tracker.kalman import _MAX_WALK_SPEED_MS, _PERSON_HEIGHT_M
 from muster.types import CameraId, DecodedFrame, Detection, FrameTs, TrackId
 
@@ -69,24 +69,28 @@ def test_plain_iou_swaps_identities_where_the_default_cost_does_not() -> None:
     So this tests the actual mechanism ADR-0014 names instead: "the Hungarian solver
     is handed a matrix of identical 1.0s and matches arbitrarily" (cost.py). Two people
     far enough apart that every track-detection pair has zero overlap -- a genuinely
-    flat IoU matrix -- but at different true distances, so GIoU (which keeps
-    decreasing past zero overlap) can still tell the correct pairing from the swap and
-    IoU cannot. This isolates the *assignment* step from the gate -- but the gate still
-    has to ACCEPT whichever pairing the assignment step picked, and it is not free:
-    fix round 2's re-review found that at kappa=1.0 the correct GIoU pairing's cost
-    (1.4286) exceeds the gate (1.3), so that leg coasts instead of matching, a third
-    (spurious) track gets born from the unclaimed detection, and an unguarded
-    `next(...)` selector picked the coasting track and returned `True` by accident.
-    Measured directly (see task-7-report.md's fix round 2): this demonstration holds
-    for `gate_widening_per_second >= ~1.26` (both legs verified at 1.5, 2.0 and 3.0;
-    fails at 1.0 and below, where GIoU's correct pairing itself gets refused). The
-    shipped default (2.0) clears this with margin. `len(tracks) == 2` below is the
-    guard against exactly that accident: a coasted or spurious track now fails loudly
-    instead of being silently selected.
+    flat IoU matrix -- but at different true distances, so a cost that keeps
+    decreasing past zero overlap can still tell the correct pairing from the swap and
+    plain IoU cannot.
+
+    The gate is deliberately neutralized (`max_cost=1_000.0, gate_widening_per_second=
+    0.0`) rather than left at either cost's shipped or tuned settings: Task 9's sweep
+    (ADR-0014 Constraint 1) found that no single `(max_cost, kappa)` pair serves both
+    `iou_cost` and whatever the default happens to be, since their cost ranges do not
+    overlap -- gating this test at either cost's own tuned point would sometimes refuse
+    the very match being tested, for reasons that have nothing to do with the
+    assignment step this test exists to isolate (fix round 2's re-review hit exactly
+    this failure mode once already, when a too-tight gate coasted a leg and a silent
+    `next(...)` selector picked the wrong track and returned `True` by accident --
+    `len(tracks) == 2` below is the guard against that). A gate wide enough to never
+    refuse anything removes the gate as a variable entirely, leaving only the
+    assignment step under test.
     """
 
     def run(cost: CostFunction) -> bool:
-        tracker = ByteTrackTracker(n_init=1, cost=cost)
+        tracker = ByteTrackTracker(
+            n_init=1, cost=cost, max_cost=1_000.0, gate_widening_per_second=0.0
+        )
         born = tracker.update(
             _frame(0.0),
             [
@@ -117,7 +121,7 @@ def test_plain_iou_swaps_identities_where_the_default_cost_does_not() -> None:
         return id_at_200 == id_near_100 and id_at_400 == id_near_350
 
     assert run(iou_cost) is False, "a flat IoU matrix must not reliably avoid the swap"
-    assert run(ByteTrackTracker().cost) is True, "GIoU must keep the correct identities"
+    assert run(ByteTrackTracker().cost) is True, "the shipped default must keep correct identities"
 
 
 def test_a_tentative_track_is_not_published() -> None:
@@ -286,8 +290,16 @@ def test_stage_2s_gate_is_tighter_than_stage_1s() -> None:
     `gate_widening_per_second=1.5`, dt=0.5s, a detection 100px from the track predicts
     a GIoU cost of ~1.4286 -- inside stage 1's widened gate (0.8 + 1.5*0.5 = 1.55, which
     "would accept") but outside stage 2's (0.5 + 1.5*0.5 = 1.25, which must refuse).
+
+    Pinned against an EXPLICIT `cost=giou_cost` with its own historical `(max_cost,
+    max_cost_low, kappa)` rather than the class defaults (Task 9 changed those to
+    `centre_distance_cost`'s own tuned point, a different scale entirely) -- this test
+    is about the two-stage gate's relative strictness, a property of any cost/gate
+    combination, not about whichever cost currently ships.
     """
-    tracker = ByteTrackTracker(n_init=1, gate_widening_per_second=1.5)
+    tracker = ByteTrackTracker(
+        n_init=1, cost=giou_cost, max_cost=0.8, max_cost_low=0.5, gate_widening_per_second=1.5
+    )
     born = {
         t.track_id
         for t in tracker.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
@@ -419,25 +431,29 @@ def test_a_brisk_walker_is_admitted_at_every_supported_frame_rate(fps: int) -> N
 def test_the_additive_gate_stops_refusing_below_about_1_7_fps() -> None:
     """A known limitation of ADR-0014 Decision #1's gate form, pinned rather than fixed.
 
-    `gate = max_cost + kappa * dt` grows without bound as dt grows, but `giou_cost` is
-    bounded above by 2.0 (cost.py: `1 - GIoU`, GIoU in `[-1, 1]`). Once the gate exceeds
-    that ceiling, it refuses NOTHING -- at any separation, however absurd. The ADR did
-    not consider that an additive gate can outgrow a bounded cost; this is under
-    measurement in the Task 9 sweep, which will now carry gate FORM (additive vs. some
-    saturating alternative) as its own axis, not just kappa's magnitude. Correcting the
-    form here would be a fourth guess at this constant on this branch -- the previous
-    three (round 1's 1.5, its wrong pixel scale, round 2's "3 fps is worst case") were
-    all wrong. This test exists so a future kappa change cannot move the dead zone
-    without a test noticing -- a documented limitation with a test around it; without
-    one it is a latent bug.
+    `gate = max_cost + kappa * dt` grows without bound as dt grows, but a BOUNDED cost
+    (e.g. `giou_cost`, bounded above by 2.0: cost.py, `1 - GIoU`, GIoU in `[-1, 1]`) is
+    not. Once the gate exceeds that ceiling, it refuses NOTHING -- at any separation,
+    however absurd. The ADR did not consider that an additive gate can outgrow a bounded
+    cost.
+
+    Task 9's sweep settled this as a real but non-blocking property: `gate_form` is now
+    a swept axis (a `saturating` alternative exists precisely because of this dead
+    zone -- `cost.py`'s `COST_CEILING`, `bytetrack.py`'s `_gate`), but the winning
+    candidate, `centre_distance_cost`, has NO ceiling (unbounded by construction), so it
+    cannot have this dead zone at all under the additive form -- there is nothing for
+    the gate to outgrow. This test therefore pins the dead zone against an EXPLICIT
+    bounded cost (`giou_cost`, its own historical `max_cost=0.8, kappa=2.0`) rather than
+    the shipped default, since the property being tested is "an additive gate paired
+    with a bounded cost", not "whatever ships".
 
     The crossover (gate == giou_cost's ceiling) is `dt = (2.0 - max_cost) / kappa`. At
-    the shipped defaults that is dt=0.6s, ~1.667 fps. Muster's product-documented 1 fps
-    floor -- and the rate the adaptive controller lands on under load, i.e. exactly
-    when a busy scene makes swap risk highest -- sits inside this dead zone.
+    `max_cost=0.8, kappa=2.0` that is dt=0.6s, ~1.667 fps. Muster's product-documented
+    1 fps floor -- and the rate the adaptive controller lands on under load, i.e. exactly
+    when a busy scene makes swap risk highest -- sits inside this dead zone, for any
+    bounded cost run under the additive form at these settings.
     """
-    tracker = ByteTrackTracker()
-    max_cost, kappa = tracker._max_cost, tracker._gate_widening_per_second
+    max_cost, kappa = 0.8, 2.0
     giou_ceiling = 2.0  # cost.py: `1 - GIoU`, GIoU in [-1, 1] -> cost in [0, 2]
     crossover_dt = (giou_ceiling - max_cost) / kappa
 
@@ -447,14 +463,18 @@ def test_the_additive_gate_stops_refusing_below_about_1_7_fps() -> None:
     # Below the crossover (1 fps: the product floor, and where the controller lands
     # under load): the gate exceeds giou_cost's own ceiling, so an absurd jump that no
     # real cost value could ever clear is still admitted -- verified end to end.
-    below = ByteTrackTracker(n_init=1)
+    below = ByteTrackTracker(
+        n_init=1, cost=giou_cost, max_cost=max_cost, gate_widening_per_second=kappa
+    )
     below.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
     tracks = below.update(_frame(1.0), [Detection(box=(100_000, 500, 100_040, 700), score=0.9)])
     assert tracks[0].time_since_update == 0, "below ~1.67 fps the gate refuses nothing at all"
 
     # Above the crossover (2 fps): the gate is still bounded below the ceiling, so the
     # same absurd jump is correctly refused -- the gate has real discriminating power.
-    above = ByteTrackTracker(n_init=1)
+    above = ByteTrackTracker(
+        n_init=1, cost=giou_cost, max_cost=max_cost, gate_widening_per_second=kappa
+    )
     above.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
     tracks = above.update(_frame(0.5), [Detection(box=(100_000, 500, 100_040, 700), score=0.9)])
     assert tracks[0].time_since_update == 1, "above ~1.67 fps the same jump must still be refused"
