@@ -101,9 +101,10 @@ module = ["av.*", "cv2.*", "onnxruntime.*", "paho.*"]
 ignore_missing_imports = true
 
 # scipy.optimize.linear_sum_assignment is the tracker's Hungarian solver (ADR-0014).
-# scipy ships py.typed but mypy still asks for the separate scipy-stubs package here.
+# scipy (1.18.0, this workspace) ships no py.typed marker, so mypy has no inline types
+# to fall back on and wants the separate scipy-stubs package instead.
 [[tool.mypy.overrides]]
-module = ["scipy.*"]
+module = ["scipy.optimize"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------

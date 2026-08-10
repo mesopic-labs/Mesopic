@@ -52,17 +52,56 @@ def test_a_person_walking_through_keeps_one_track_id() -> None:
     assert len(seen) == 1
 
 
-def test_plain_iou_fragments_where_the_default_cost_does_not() -> None:
-    """ADR-0014's premise, end to end: same input, two costs, different identities."""
+def test_plain_iou_swaps_identities_where_the_default_cost_does_not() -> None:
+    """ADR-0014's premise, end to end: same input, two costs, different identities.
 
-    def count_ids(cost: CostFunction) -> int:
-        tracker = ByteTrackTracker(n_init=2, cost=cost)
-        seen: set[TrackId] = set()
-        for frame, dets in _walk(10, dt=0.5, dx=80):
-            seen.update(t.track_id for t in tracker.update(frame, dets))
-        return len(seen)
+    Originally this walked a single person and counted unique ids -- but that
+    demonstration turns out to be structurally impossible once the gate widens enough
+    to rescue a cold-start match at Muster's fps range (fix round 1, Important 1):
+    `giou_cost` for a stationary (zero-velocity) prediction is `1 + (d-w)/(d+w)`, which
+    exceeds 1.0 -- `iou_cost`'s own ceiling -- exactly when `d > w`, i.e. exactly
+    ADR-0014's stated failure regime. Any `kappa` wide enough to admit a GIoU cold
+    start there necessarily widens the gate past 1.0 too, so `iou_cost` stops ever
+    being refused -- both costs converge to "always accepted" and the walk can no
+    longer tell them apart by id count.
 
-    assert count_ids(iou_cost) > count_ids(ByteTrackTracker().cost)
+    So this tests the actual mechanism ADR-0014 names instead: "the Hungarian solver
+    is handed a matrix of identical 1.0s and matches arbitrarily" (cost.py). Two people
+    far enough apart that every track-detection pair has zero overlap -- a genuinely
+    flat IoU matrix -- but at different true distances, so GIoU (which keeps
+    decreasing past zero overlap) can still tell the correct pairing from the swap and
+    IoU cannot. This isolates the assignment step from the gate entirely, so it holds
+    for any kappa.
+    """
+
+    def run(cost: CostFunction) -> bool:
+        tracker = ByteTrackTracker(n_init=1, cost=cost)
+        born = tracker.update(
+            _frame(0.0),
+            [
+                Detection(box=(100, 500, 140, 700), score=0.9),
+                Detection(box=(350, 500, 390, 700), score=0.9),
+            ],
+        )
+        id_near_100 = next(t.track_id for t in born if t.foot_point[0] * WIDTH < 300)
+        id_near_350 = next(t.track_id for t in born if t.foot_point[0] * WIDTH >= 300)
+
+        # Detections deliberately listed out of "natural" order: a detector's output
+        # order carries no identity information, so the test must not accidentally
+        # rely on it.
+        tracks = tracker.update(
+            _frame(0.5),
+            [
+                Detection(box=(400, 500, 440, 700), score=0.9),  # true continuation of 350
+                Detection(box=(200, 500, 240, 700), score=0.9),  # true continuation of 100
+            ],
+        )
+        id_at_200 = next(t.track_id for t in tracks if t.foot_point[0] * WIDTH < 300)
+        id_at_400 = next(t.track_id for t in tracks if t.foot_point[0] * WIDTH >= 300)
+        return id_at_200 == id_near_100 and id_at_400 == id_near_350
+
+    assert run(iou_cost) is False, "a flat IoU matrix must not reliably avoid the swap"
+    assert run(ByteTrackTracker().cost) is True, "GIoU must keep the correct identities"
 
 
 def test_a_tentative_track_is_not_published() -> None:
@@ -73,10 +112,23 @@ def test_a_tentative_track_is_not_published() -> None:
 
 
 def test_a_marginal_detection_sustains_but_cannot_birth() -> None:
-    """§3.2's third band: 0.55 is above track_thresh but below det_thresh."""
+    """§3.2's third band: 0.55 is above track_thresh but below det_thresh.
+
+    It sustains an existing track (stage 1's loose gate only cares about
+    track_thresh) but can never start one on its own (birth requires det_thresh).
+    An implementation that discarded every sub-det_thresh detection outright would
+    pass the first half of this test but not the second.
+    """
     tracker = ByteTrackTracker(n_init=1)
-    frame, _ = next(_walk(1, dt=0.5))
-    assert tracker.update(frame, [Detection(box=(100, 500, 140, 700), score=0.55)]) == []
+    box = (100, 500, 140, 700)
+
+    assert tracker.update(_frame(0.0), [Detection(box=box, score=0.55)]) == []
+
+    born = {t.track_id for t in tracker.update(_frame(0.5), [Detection(box=box, score=0.9)])}
+    tracks = tracker.update(_frame(1.0), [Detection(box=box, score=0.55)])
+
+    assert {t.track_id for t in tracks} == born
+    assert tracks[0].time_since_update == 0
 
 
 def test_a_confident_detection_births() -> None:
@@ -163,3 +215,86 @@ def test_gate_widens_with_the_sampling_gap() -> None:
 
     assert tight_ids != born_tight, "an ungated dt term must refuse this match"
     assert widened_ids == born_widened, "a widened gate must keep the same identity"
+
+
+# --- Stage 2 (low-confidence recovery) ---------------------------------------------
+#
+# None of the tests above ever construct a detection below track_thresh, so max_cost_low
+# and the whole recovery pass go completely unexercised: a stage 2 that did nothing at
+# all would still pass every test above. These pin it down directly.
+
+
+def test_a_low_confidence_detection_sustains_a_confirmed_track() -> None:
+    """Stage 2 exists to keep a track alive through a momentary confidence dip."""
+    tracker = ByteTrackTracker(n_init=1)
+    box = (100, 500, 140, 700)
+    born = {t.track_id for t in tracker.update(_frame(0.0), [Detection(box=box, score=0.9)])}
+
+    tracks = tracker.update(_frame(0.5), [Detection(box=box, score=0.3)])
+
+    assert {t.track_id for t in tracks} == born
+    assert tracks[0].time_since_update == 0
+
+
+def test_an_unmatched_low_confidence_detection_never_creates_a_track() -> None:
+    """A sub-track_thresh detection may sustain an identity; it may never start one."""
+    tracker = ByteTrackTracker(n_init=1)
+    box = (100, 500, 140, 700)
+    assert tracker.update(_frame(0.0), [Detection(box=box, score=0.3)]) == []
+    assert tracker.update(_frame(0.5), [Detection(box=box, score=0.3)]) == []
+
+
+def test_a_tentative_track_is_not_confirmed_by_a_low_confidence_match() -> None:
+    """The stricter-birth-than-sustain rule must hold during recovery too.
+
+    Stage 2 offering a low-confidence detection to an unproven track would let a
+    single 0.9-score flicker plus a 0.3-score dip confirm a permanent identity --
+    exactly the false-birth risk the module's own docstring says birth must avoid.
+    """
+    tracker = ByteTrackTracker(n_init=2)
+    box = (100, 500, 140, 700)
+    tracker.update(_frame(0.0), [Detection(box=box, score=0.9)])  # still TENTATIVE
+
+    tracks = tracker.update(_frame(0.5), [Detection(box=box, score=0.3)])
+
+    assert tracks == []
+
+
+def test_a_far_low_confidence_detection_does_not_sustain() -> None:
+    """max_cost_low must actually gate stage 2, not accept anything offered to it."""
+    tracker = ByteTrackTracker(n_init=1)
+    born = {
+        t.track_id
+        for t in tracker.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
+    }
+
+    tracks = tracker.update(_frame(0.5), [Detection(box=(1200, 500, 1240, 700), score=0.3)])
+
+    assert {t.track_id for t in tracks} == born, "the track must coast, not vanish"
+    assert tracks[0].time_since_update == 1, "a distant low-confidence hit must not match"
+
+
+# --- Out-of-order and identical timestamps -----------------------------------------
+
+
+def test_an_out_of_order_frame_does_not_crash_or_corrupt_state() -> None:
+    """A late frame (RTSP reconnect glitch) must degrade the tracker, not kill it."""
+    tracker = ByteTrackTracker(n_init=1)
+    tracker.update(_frame(1.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
+
+    tracker.update(_frame(0.5), [])  # arrives late; must not raise or rewind _last_ts
+
+    tracks = tracker.update(_frame(1.5), [])
+    assert tracks[0].time_since_update == 2, "the late frame counts as a miss, not a crash"
+
+
+def test_identical_consecutive_timestamps_are_safe() -> None:
+    """dt=0 must never be mistaken for the out-of-order case."""
+    tracker = ByteTrackTracker(n_init=1)
+    box = (100, 500, 140, 700)
+    tracker.update(_frame(1.0), [Detection(box=box, score=0.9)])
+
+    tracks = tracker.update(_frame(1.0), [Detection(box=box, score=0.9)])
+
+    assert len(tracks) == 1
+    assert tracks[0].time_since_update == 0

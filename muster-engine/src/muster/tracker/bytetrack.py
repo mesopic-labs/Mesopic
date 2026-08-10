@@ -73,7 +73,7 @@ class ByteTrackTracker:
         n_init: int = 2,
         track_memory_s: float = 2.0,
         cost: CostFunction = giou_cost,
-        gate_widening_per_second: float = 1.0,
+        gate_widening_per_second: float = 1.5,
     ) -> None:
         # `max_cost` gates the association COST (1 - similarity), not the similarity.
         # The upstream name (`match_thresh`) invites exactly the wrong reading, and that
@@ -90,9 +90,13 @@ class ByteTrackTracker:
         # kappa (ADR-0014 Decision #1): "accept iff cost < max_cost + kappa * dt_s". The
         # gate must widen with the sampling gap because displacement grows with it -- a
         # newly-born track has no velocity estimate yet and predicts "it didn't move",
-        # so a flat gate refuses exactly the step that matters most. Provisional pending
-        # the Task 9 sweep, which tunes kappa alongside the cost-function choice; it is
-        # a swept parameter, not a tuned constant.
+        # so a flat gate refuses exactly the step that matters most. 1.0 measured to
+        # REFUSE a brisk 2.0 m/s walker (kalman.py's _MAX_WALK_SPEED_MS -- two modules
+        # must not silently disagree about how fast a person may walk) at 2 and 3 fps;
+        # 1.5 clears that walker at 1/2/3/5 fps (see the kappa table in
+        # task-7-report.md). kappa is a SWEPT axis, not a tuned constant: raising it
+        # trades birth-survival against ID-swap risk -- the tradeoff ADR-0014 names --
+        # and only the Task 9 sweep can settle where it should sit.
         self._gate_widening_per_second = gate_widening_per_second
         self._tracks: list[TrackRecord] = []
         self._ids = count(1)
@@ -108,9 +112,16 @@ class ByteTrackTracker:
         low = [d for d in detections if d.score < self._track_thresh]
 
         unmatched, claimed = self._associate(self._tracks, high, dt_s, self._max_cost, frame.ts)
-        still_unmatched, _ = self._associate(unmatched, low, dt_s, self._max_cost_low, frame.ts)
+        # Stage 2 may only SUSTAIN an identity that already exists, never confirm one.
+        # A false birth is a permanent overcount, so creating an identity stays on the
+        # strict path (a high-confidence match, or det_thresh at birth) even during
+        # recovery -- an unproven track offered only a low-confidence detection falls
+        # straight through to a miss and dies, exactly as if nothing had matched at all.
+        recoverable = [t for t in unmatched if t.state is not TrackState.TENTATIVE]
+        unrecoverable = [t for t in unmatched if t.state is TrackState.TENTATIVE]
+        still_unmatched, _ = self._associate(recoverable, low, dt_s, self._max_cost_low, frame.ts)
 
-        for track in still_unmatched:
+        for track in [*still_unmatched, *unrecoverable]:
             track.mark_missed()
         # Only detections no track claimed may start one. Anything else double-counts
         # the same person as both a continuation and a birth.
@@ -121,9 +132,19 @@ class ByteTrackTracker:
         ]
 
     def _elapsed(self, ts: FrameTs) -> float:
-        """Seconds since the previous tick. The first tick has no gap to advance over."""
-        previous, self._last_ts = self._last_ts, ts
-        return 0.0 if previous is None else (ts - previous).total_seconds()
+        """Seconds since the previous tick. The first tick has no gap to advance over.
+
+        A frame arriving out of order (an RTSP reconnect glitch, not a rare corner
+        case in practice) must degrade the tracker, not crash the camera worker: a
+        dropped or reordered frame should cost a missed tick, never a process. Clamp
+        the gap to zero -- "no time passed" -- rather than raising, and never let
+        `_last_ts` move backward: rewinding it would silently inflate the *next*
+        well-ordered frame's gap by however early this one arrived.
+        """
+        previous = self._last_ts
+        if previous is None or ts > previous:
+            self._last_ts = ts
+        return 0.0 if previous is None else max((ts - previous).total_seconds(), 0.0)
 
     def _associate(
         self,
@@ -144,13 +165,22 @@ class ByteTrackTracker:
             return tracks, set()
         det_boxes = np.array([d.box for d in detections], dtype=np.float64)
         costs = self.cost(np.array([t.box for t in tracks]), det_boxes, dt_s)
-        gate = max_cost + self._gate_widening_per_second * dt_s
+        # The gate widens by the gap since each track was last OBSERVED, not since the
+        # last tick: a track missed for three ticks must bridge three ticks' worth of
+        # displacement, or a reacquisition after a multi-tick occlusion is gated no
+        # more loosely than a single missed frame -- even though it needs to be (ADR-
+        # 0014 Decision #1: dt is the gap being bridged, not the tick interval).
+        gaps = np.array(
+            [max((ts - t.last_observed_ts).total_seconds(), 0.0) for t in tracks],
+            dtype=np.float64,
+        )
+        gate = max_cost + self._gate_widening_per_second * gaps
 
         rows, cols = linear_sum_assignment(costs)
         matched_tracks: set[int] = set()
         claimed_dets: set[int] = set()
         for row, col in zip(rows, cols, strict=True):
-            if costs[row, col] >= gate:
+            if costs[row, col] >= gate[row]:
                 continue
             tracks[row].mark_matched(det_boxes[col], detections[col].score, ts)
             matched_tracks.add(row)
