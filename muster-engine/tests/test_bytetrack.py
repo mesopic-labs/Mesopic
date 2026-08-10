@@ -361,26 +361,36 @@ def test_a_stray_frame_never_rewinds_the_elapsed_time_clock() -> None:
     assert next_gap == pytest.approx(0.5), "the next well-ordered gap must be the real one"
 
 
-def test_a_brisk_walker_is_admitted_at_the_worst_case_fps() -> None:
-    """kappa's default must actually admit kalman.py's own walking-speed envelope.
+@pytest.mark.parametrize("fps", [1, 2, 3, 5])
+def test_a_brisk_walker_is_admitted_at_every_supported_frame_rate(fps: int) -> None:
+    """kappa's default must actually admit kalman.py's own walking-speed envelope,
+    at every fps Muster supports -- not just whichever one someone currently believes
+    is tightest.
 
-    Fix round 1 claimed a +0.157 margin at 3 fps for this walker, computed against a
-    pixel scale that was never tied to kalman.py's own metres-to-pixels derivation and
-    turned out to understate the true displacement -- that number was wrong. Recomputed
-    honestly here using kalman.py's own formula (`scale = height_px / _PERSON_HEIGHT_M`)
-    with this suite's box aspect ratio (width = 0.2 * height, `_walk`'s own convention):
-    the resulting cold-start GIoU cost is invariant to the box's absolute size for a
-    fixed aspect ratio (both the walker's pixel displacement and the box width scale
-    linearly with height, so their ratio does not), so 200px is a concrete but
-    arbitrary choice, not a tuned one. Importing `_MAX_WALK_SPEED_MS` and
-    `_PERSON_HEIGHT_M` directly, rather than hardcoding numbers, means this test cannot
-    silently drift from kalman.py's own definition of "brisk" again. 3 fps is the
-    worst case across 1/2/3/5 fps (see the corrected kappa table in
-    task-7-report.md's fix round 2) -- margin +0.1422 at kappa=2.0.
+    Fix round 1 claimed 3 fps was the worst case, at a +0.157 margin, computed against
+    a pixel scale that was never tied to kalman.py's own metres-to-pixels derivation --
+    that number was wrong twice over: the scale was wrong, AND 3 fps was not even the
+    tightest point once corrected (fix round 2 corrected the scale and found 3 fps
+    refused at kappa=1.5; fix round 3's re-review found 5 fps is actually tighter than
+    3 fps at the corrected kappa=2.0: margins are +0.1422 at 3 fps vs +0.1189 at 5 fps).
+    Naming a single fps "the worst case" invites exactly this kind of silent drift when
+    kappa or the cost function changes. Parametrizing over all four rates means no
+    single point can be mislabelled, and a future kappa change that shifts which rate
+    is tightest is still covered without anyone needing to notice or relabel it.
+
+    Recomputed honestly using kalman.py's own formula
+    (`scale = height_px / _PERSON_HEIGHT_M`) with this suite's box aspect ratio
+    (width = 0.2 * height, `_walk`'s own convention): the resulting cold-start GIoU
+    cost is invariant to the box's absolute size for a fixed aspect ratio (both the
+    walker's pixel displacement and the box width scale linearly with height, so their
+    ratio does not), so 200px is a concrete but arbitrary choice, not a tuned one.
+    Importing `_MAX_WALK_SPEED_MS` and `_PERSON_HEIGHT_M` directly, rather than
+    hardcoding numbers, means this test cannot silently drift from kalman.py's own
+    definition of "brisk" again.
     """
     height, width = 200, 40
     scale = height / _PERSON_HEIGHT_M  # px/m, kalman.py's own metres-to-pixels anchor
-    dt = 1.0 / 3.0  # 3 fps: the tightest margin across Muster's 1-5 fps range
+    dt = 1.0 / fps
     displacement = round(_MAX_WALK_SPEED_MS * dt * scale)
 
     tracker = ByteTrackTracker(n_init=1)
@@ -401,7 +411,53 @@ def test_a_brisk_walker_is_admitted_at_the_worst_case_fps() -> None:
     )
 
     assert len(tracks) == 1
-    assert tracks[0].time_since_update == 0, "the brisk walker's first step must be admitted"
+    assert tracks[0].time_since_update == 0, (
+        f"the brisk walker's first step must be admitted at {fps} fps"
+    )
+
+
+def test_the_additive_gate_stops_refusing_below_about_1_7_fps() -> None:
+    """A known limitation of ADR-0014 Decision #1's gate form, pinned rather than fixed.
+
+    `gate = max_cost + kappa * dt` grows without bound as dt grows, but `giou_cost` is
+    bounded above by 2.0 (cost.py: `1 - GIoU`, GIoU in `[-1, 1]`). Once the gate exceeds
+    that ceiling, it refuses NOTHING -- at any separation, however absurd. The ADR did
+    not consider that an additive gate can outgrow a bounded cost; this is under
+    measurement in the Task 9 sweep, which will now carry gate FORM (additive vs. some
+    saturating alternative) as its own axis, not just kappa's magnitude. Correcting the
+    form here would be a fourth guess at this constant on this branch -- the previous
+    three (round 1's 1.5, its wrong pixel scale, round 2's "3 fps is worst case") were
+    all wrong. This test exists so a future kappa change cannot move the dead zone
+    without a test noticing -- a documented limitation with a test around it; without
+    one it is a latent bug.
+
+    The crossover (gate == giou_cost's ceiling) is `dt = (2.0 - max_cost) / kappa`. At
+    the shipped defaults that is dt=0.6s, ~1.667 fps. Muster's product-documented 1 fps
+    floor -- and the rate the adaptive controller lands on under load, i.e. exactly
+    when a busy scene makes swap risk highest -- sits inside this dead zone.
+    """
+    tracker = ByteTrackTracker()
+    max_cost, kappa = tracker._max_cost, tracker._gate_widening_per_second
+    giou_ceiling = 2.0  # cost.py: `1 - GIoU`, GIoU in [-1, 1] -> cost in [0, 2]
+    crossover_dt = (giou_ceiling - max_cost) / kappa
+
+    assert crossover_dt == pytest.approx(0.6)
+    assert 1.0 / crossover_dt == pytest.approx(1.6667, abs=1e-3)
+
+    # Below the crossover (1 fps: the product floor, and where the controller lands
+    # under load): the gate exceeds giou_cost's own ceiling, so an absurd jump that no
+    # real cost value could ever clear is still admitted -- verified end to end.
+    below = ByteTrackTracker(n_init=1)
+    below.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
+    tracks = below.update(_frame(1.0), [Detection(box=(100_000, 500, 100_040, 700), score=0.9)])
+    assert tracks[0].time_since_update == 0, "below ~1.67 fps the gate refuses nothing at all"
+
+    # Above the crossover (2 fps): the gate is still bounded below the ceiling, so the
+    # same absurd jump is correctly refused -- the gate has real discriminating power.
+    above = ByteTrackTracker(n_init=1)
+    above.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
+    tracks = above.update(_frame(0.5), [Detection(box=(100_000, 500, 100_040, 700), score=0.9)])
+    assert tracks[0].time_since_update == 1, "above ~1.67 fps the same jump must still be refused"
 
 
 def test_a_multi_tick_occlusion_reacquires_under_gap_based_widening_only() -> None:
