@@ -32,6 +32,8 @@ def test_foot_point_is_resolution_agnostic() -> None:
     [
         ((-40, 0, 40, 1200), (0.0, 1.0)),  # overhangs left and bottom
         ((1900, 0, 2000, 100), (1.0, 0.0925925925925926)),  # overhangs right
+        ((-100, 0, -20, 200), (0.0, 200 / 1080)),  # entirely left, exercises x lower clamp
+        ((0, -300, 40, -100), (20 / 1920, 0.0)),  # entirely above, exercises y lower clamp
     ],
 )
 def test_foot_point_clamps_boxes_that_overhang_the_frame(
