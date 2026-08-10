@@ -97,7 +97,7 @@ exclude = ["build/", "dist/"]
 
 # Third-party packages without stubs. Add here with a reason, never inline.
 [[tool.mypy.overrides]]
-module = ["av.*", "cv2.*", "supervision.*", "onnxruntime.*", "paho.*"]
+module = ["av.*", "cv2.*", "onnxruntime.*", "paho.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------

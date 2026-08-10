@@ -24,7 +24,7 @@ def foot_point(box: PixelBox, frame_width: int, frame_height: int) -> NormPoint:
 
 
 class ByteTrackTracker:
-    """A `Tracker` backed by ByteTrack via `supervision`."""
+    """A `Tracker` implementing BYTE association with a pluggable cost (ADR-0014)."""
 
     def __init__(self, *, track_thresh: float = 0.5, max_iou_cost: float = 0.8) -> None:
         # `max_iou_cost` gates the association COST (1 - IoU), not the IoU. 0.8 means a
