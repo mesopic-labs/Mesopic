@@ -19,8 +19,25 @@ def foot_point(box: PixelBox, frame_width: int, frame_height: int) -> NormPoint:
     The single most important geometric convention in the engine: approximately where
     the person meets the floor, which is what every metric is actually about. Defined in
     algorithms.md; this is its one implementation.
+
+    Args:
+        box: `(x1, y1, x2, y2)` in inference-frame pixels.
+        frame_width: Inference-frame width in pixels.
+        frame_height: Inference-frame height in pixels.
+
+    Returns:
+        `(x, y)` in `[0.0, 1.0]`, origin top-left.
+
+    Raises:
+        ValueError: If either frame dimension is not positive.
     """
-    raise NotImplementedError
+    if frame_width <= 0 or frame_height <= 0:
+        msg = f"frame dimensions must be positive, got {frame_width}x{frame_height}"
+        raise ValueError(msg)
+    x1, _, x2, y2 = box
+    x = (x1 + x2) / 2.0 / frame_width
+    y = y2 / frame_height
+    return (min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0))
 
 
 class ByteTrackTracker:
