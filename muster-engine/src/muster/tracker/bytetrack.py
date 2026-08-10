@@ -10,7 +10,28 @@ Implements P1.5.
 
 from __future__ import annotations
 
-from muster.types import DecodedFrame, Detection, NormPoint, PixelBox, Track
+from itertools import count
+
+import numpy as np
+from numpy.typing import NDArray
+from scipy.optimize import linear_sum_assignment
+
+from muster.tracker.cost import CostFunction, giou_cost
+from muster.tracker.track import TrackRecord, TrackState
+from muster.types import (
+    DecodedFrame,
+    Detection,
+    FrameTs,
+    NormPoint,
+    PixelBox,
+    Track,
+    TrackId,
+)
+
+_BIRTH_MARGIN = 0.1
+"""How much more confident a detection must be to *create* an identity than to sustain
+one (algorithms.md §3.2). A false birth is a permanent overcount; a false sustain
+self-corrects."""
 
 
 def foot_point(box: PixelBox, frame_width: int, frame_height: int) -> NormPoint:
@@ -43,11 +64,126 @@ def foot_point(box: PixelBox, frame_width: int, frame_height: int) -> NormPoint:
 class ByteTrackTracker:
     """A `Tracker` implementing BYTE association with a pluggable cost (ADR-0014)."""
 
-    def __init__(self, *, track_thresh: float = 0.5, max_iou_cost: float = 0.8) -> None:
-        # `max_iou_cost` gates the association COST (1 - IoU), not the IoU. 0.8 means a
-        # minimum IoU of 0.2. The upstream name (`match_thresh`) invites exactly the
-        # wrong reading, and that misreading was a real bug in the design drafts.
-        raise NotImplementedError
+    def __init__(
+        self,
+        *,
+        track_thresh: float = 0.5,
+        max_cost: float = 0.8,
+        max_cost_low: float = 0.5,
+        n_init: int = 2,
+        track_memory_s: float = 2.0,
+        cost: CostFunction = giou_cost,
+        gate_widening_per_second: float = 1.0,
+    ) -> None:
+        # `max_cost` gates the association COST (1 - similarity), not the similarity.
+        # The upstream name (`match_thresh`) invites exactly the wrong reading, and that
+        # misreading was a real bug in the design drafts (algorithms.md §3.3). Stage 1
+        # is the LOOSE gate and stage 2 the tight one -- also the opposite of what the
+        # names suggest.
+        self.cost = cost
+        self._track_thresh = track_thresh
+        self._det_thresh = track_thresh + _BIRTH_MARGIN
+        self._max_cost = max_cost
+        self._max_cost_low = max_cost_low
+        self._n_init = n_init
+        self._track_memory_s = track_memory_s
+        # kappa (ADR-0014 Decision #1): "accept iff cost < max_cost + kappa * dt_s". The
+        # gate must widen with the sampling gap because displacement grows with it -- a
+        # newly-born track has no velocity estimate yet and predicts "it didn't move",
+        # so a flat gate refuses exactly the step that matters most. Provisional pending
+        # the Task 9 sweep, which tunes kappa alongside the cost-function choice; it is
+        # a swept parameter, not a tuned constant.
+        self._gate_widening_per_second = gate_widening_per_second
+        self._tracks: list[TrackRecord] = []
+        self._ids = count(1)
+        self._last_ts: FrameTs | None = None
 
     def update(self, frame: DecodedFrame, detections: list[Detection]) -> list[Track]:
-        raise NotImplementedError
+        """Advance the tracker one tick and return the currently live tracks."""
+        dt_s = self._elapsed(frame.ts)
+        for track in self._tracks:
+            track.predict(dt_s)
+
+        high = [d for d in detections if d.score >= self._track_thresh]
+        low = [d for d in detections if d.score < self._track_thresh]
+
+        unmatched, claimed = self._associate(self._tracks, high, dt_s, self._max_cost, frame.ts)
+        still_unmatched, _ = self._associate(unmatched, low, dt_s, self._max_cost_low, frame.ts)
+
+        for track in still_unmatched:
+            track.mark_missed()
+        # Only detections no track claimed may start one. Anything else double-counts
+        # the same person as both a continuation and a birth.
+        self._birth([d for i, d in enumerate(high) if i not in claimed], frame.ts)
+        self._tracks = [t for t in self._tracks if not t.is_expired(frame.ts, self._track_memory_s)]
+        return [
+            self._publish(t, frame) for t in self._tracks if t.state is not TrackState.TENTATIVE
+        ]
+
+    def _elapsed(self, ts: FrameTs) -> float:
+        """Seconds since the previous tick. The first tick has no gap to advance over."""
+        previous, self._last_ts = self._last_ts, ts
+        return 0.0 if previous is None else (ts - previous).total_seconds()
+
+    def _associate(
+        self,
+        tracks: list[TrackRecord],
+        detections: list[Detection],
+        dt_s: float,
+        max_cost: float,
+        ts: FrameTs,
+    ) -> tuple[list[TrackRecord], set[int]]:
+        """Match `tracks` to `detections`.
+
+        Returns:
+            The tracks left unmatched, and the indices of the detections that were
+            claimed. The caller needs the second half to keep a detection from both
+            continuing a track and starting a new one.
+        """
+        if not tracks or not detections:
+            return tracks, set()
+        det_boxes = np.array([d.box for d in detections], dtype=np.float64)
+        costs = self.cost(np.array([t.box for t in tracks]), det_boxes, dt_s)
+        gate = max_cost + self._gate_widening_per_second * dt_s
+
+        rows, cols = linear_sum_assignment(costs)
+        matched_tracks: set[int] = set()
+        claimed_dets: set[int] = set()
+        for row, col in zip(rows, cols, strict=True):
+            if costs[row, col] >= gate:
+                continue
+            tracks[row].mark_matched(det_boxes[col], detections[col].score, ts)
+            matched_tracks.add(row)
+            claimed_dets.add(int(col))
+        return [t for i, t in enumerate(tracks) if i not in matched_tracks], claimed_dets
+
+    def _birth(self, unclaimed: list[Detection], ts: FrameTs) -> None:
+        """Start tracks from confident detections no existing track claimed."""
+        for detection in unclaimed:
+            if detection.score < self._det_thresh:
+                continue
+            self._tracks.append(
+                TrackRecord(
+                    track_id=TrackId(next(self._ids)),
+                    box=np.array(detection.box, dtype=np.float64),
+                    score=detection.score,
+                    ts=ts,
+                    n_init=self._n_init,
+                )
+            )
+
+    def _publish(self, track: TrackRecord, frame: DecodedFrame) -> Track:
+        """Convert to the frozen, normalized payload geometry consumes."""
+        return Track(
+            camera_id=frame.camera_id,
+            track_id=track.track_id,
+            ts=frame.ts,
+            foot_point=self._foot_point(track.box, frame),
+            score=track.score,
+            time_since_update=track.time_since_update,
+        )
+
+    @staticmethod
+    def _foot_point(box: NDArray[np.float64], frame: DecodedFrame) -> NormPoint:
+        x1, y1, x2, y2 = (round(v) for v in box)
+        return foot_point((x1, y1, x2, y2), frame.width, frame.height)

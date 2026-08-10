@@ -100,6 +100,12 @@ exclude = ["build/", "dist/"]
 module = ["av.*", "cv2.*", "onnxruntime.*", "paho.*"]
 ignore_missing_imports = true
 
+# scipy.optimize.linear_sum_assignment is the tracker's Hungarian solver (ADR-0014).
+# scipy ships py.typed but mypy still asks for the separate scipy-stubs package here.
+[[tool.mypy.overrides]]
+module = ["scipy.*"]
+ignore_missing_imports = true
+
 # ---------------------------------------------------------------------------
 # pytest
 # ---------------------------------------------------------------------------
