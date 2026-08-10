@@ -89,11 +89,19 @@ def giou_cost(tracks: Boxes, dets: Boxes, dt_s: float) -> CostMatrix:
 
 
 def centre_distance_cost(tracks: Boxes, dets: Boxes, dt_s: float) -> CostMatrix:
-    """Normalized centre separation plus a size-agreement penalty.
+    """Normalized centre separation plus a size-agreement penalty, in `[0, 2)`.
 
     The cheapest and most interpretable candidate, and the one the OC-SORT paper itself
     suggests. Distance is scaled by the enclosing box's diagonal so it stays comparable
-    across a frame where near people are large and far people are small.
+    across a frame where near people are large and far people are small -- and, because
+    both box centres always lie inside their own enclosing box, that normalized term is
+    itself bounded by 1 (the enclosing box's diagonal is the longest distance any two
+    points inside it can be apart). The scale-agreement term is a sum of two `|a-b|/
+    (a+b)` ratios, each bounded by 1, weighted by `_SCALE_PENALTY_WEIGHT=0.5`, so it too
+    contributes at most 1. Total ceiling: **2.0** -- the same supremum as `giou_cost`,
+    reached the same way (a strict bound approached in the degenerate limit, not
+    generally attained by any real box pair; see `COST_CEILING`'s docstring for the
+    measurement that caught this cost was wrongly treated as unbounded).
     """
     del dt_s
     centres_t = (tracks[:, :2] + tracks[:, 2:]) / 2.0
@@ -147,7 +155,7 @@ COSTS: dict[str, CostFunction] = {
 COST_CEILING: dict[str, float | None] = {
     "iou": 1.0,
     "giou": 2.0,
-    "centre_distance": None,
+    "centre_distance": 2.0,
     "expansion_iou": 1.0,
 }
 """Each cost's supremum, or `None` if it has none (ADR-0014 Task 9, Constraint 4).
@@ -155,10 +163,20 @@ COST_CEILING: dict[str, float | None] = {
 The additive gate `max_cost + kappa * dt` grows without bound while every bounded cost
 saturates, so past some dt the gate exceeds the cost's own ceiling and refuses nothing
 at all (`bytetrack.py`'s `test_the_additive_gate_stops_refusing_below_about_1_7_fps`).
-A saturating gate needs to know what it must stay under. `centre_distance_cost` has no
-such ceiling -- it is Euclidean distance over a scale-agreement penalty, unbounded by
-construction -- so a saturating gate is not defined for it; `bytetrack.py` raises rather
-than silently falling back to the additive form for that combination.
+A saturating gate needs to know what it must stay under.
+
+`centre_distance_cost` was originally entered here as `None` ("effectively unbounded")
+on the strength of the task-9-brief's own framing, without checking the actual
+implementation -- wrong, and caught by review (task-9-report.md's "Fix round 1",
+Critical 2). Both terms it sums are self-normalizing: separation is divided by the
+enclosing box's own diagonal (which grows with separation, capping the ratio at 1 --
+see `centre_distance_cost`'s docstring), and the scale-agreement term is a sum of two
+ratios individually bounded by 1. The cost is bounded above by 2.0, the same supremum
+as `giou_cost`, confirmed empirically (2,000,000 random box pairs spanning sizes from
+1e-6 to 2000px: max observed 1.859, consistent with a strict-but-unreached 2.0 bound,
+the same character as `giou_cost`'s own ceiling). Getting this wrong meant the
+saturating gate form was never actually swept for `centre_distance_cost` in the first
+sweep -- Constraint 4 was unsatisfied exactly where the result mattered most.
 """
 
 

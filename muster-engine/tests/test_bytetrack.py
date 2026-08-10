@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from muster.tracker.bytetrack import ByteTrackTracker
-from muster.tracker.cost import CostFunction, giou_cost, iou_cost
+from muster.tracker.cost import CostFunction, ceiling_for, giou_cost, iou_cost
 from muster.tracker.kalman import _MAX_WALK_SPEED_MS, _PERSON_HEIGHT_M
 from muster.types import CameraId, DecodedFrame, Detection, FrameTs, TrackId
 
@@ -311,15 +311,48 @@ def test_stage_2s_gate_is_tighter_than_stage_1s() -> None:
     assert tracks[0].time_since_update == 1, "stage 2's tighter gate must refuse this cost"
 
 
-def test_a_far_low_confidence_detection_does_not_sustain() -> None:
-    """max_cost_low must actually gate stage 2, not accept anything offered to it."""
+def test_stage_2_uses_the_shipped_max_cost_low() -> None:
+    """The two-stage design's tighter stage-2 gate, pinned against the SHIPPED default
+    specifically -- `test_stage_2s_gate_is_tighter_than_stage_1s` covers the same
+    property against an explicit `giou_cost`, but nothing before this touched whatever
+    `max_cost_low` actually ships (Fix round 1, Important 8).
+
+    A detection 300px away at `dt=0.5s` costs `centre_distance_cost` ~1.120 (found by
+    search over box sizes and offsets -- `centre_distance_cost` needs a size mismatch as
+    well as a position offset to clear 1.0, since two same-size boxes at any distance
+    apart give a strictly-below-1.0 cost, only the scale-agreement term can push it past
+    that): inside stage 1's gate (`0.4 + 1.5*0.5 = 1.15`, "would accept") but outside
+    stage 2's (`0.25 + 1.5*0.5 = 1.0`, must refuse).
+    """
     tracker = ByteTrackTracker(n_init=1)
     born = {
         t.track_id
         for t in tracker.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
     }
 
-    tracks = tracker.update(_frame(0.5), [Detection(box=(1200, 500, 1240, 700), score=0.3)])
+    tracks = tracker.update(_frame(0.5), [Detection(box=(400, 500, 440, 540), score=0.3)])
+
+    assert {t.track_id for t in tracks} == born, "the track must coast, not vanish"
+    assert tracks[0].time_since_update == 1, "the shipped stage-2 gate must refuse this cost"
+
+
+def test_a_far_low_confidence_detection_does_not_sustain() -> None:
+    """max_cost_low must actually gate stage 2, not accept anything offered to it.
+
+    A same-size box offered at any distance can never trigger this under the shipped
+    `centre_distance_cost` -- two equal-size boxes cap the cost strictly below 1.0
+    however far apart (`cost.py`'s `COST_CEILING` docstring: the scale-agreement term
+    needs an actual size mismatch, not just distance), so the box here is also a
+    different size, not just far away, landing at cost ~1.66 -- comfortably past the
+    shipped `max_cost_low` gate at this dt (`0.25 + 1.5*0.5 = 1.0`).
+    """
+    tracker = ByteTrackTracker(n_init=1)
+    born = {
+        t.track_id
+        for t in tracker.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
+    }
+
+    tracks = tracker.update(_frame(0.5), [Detection(box=(900, 500, 1700, 505), score=0.3)])
 
     assert {t.track_id for t in tracks} == born, "the track must coast, not vanish"
     assert tracks[0].time_since_update == 1, "a distant low-confidence hit must not match"
@@ -428,56 +461,78 @@ def test_a_brisk_walker_is_admitted_at_every_supported_frame_rate(fps: int) -> N
     )
 
 
-def test_the_additive_gate_stops_refusing_below_about_1_7_fps() -> None:
+def test_the_additive_gate_has_a_crossover_fps_below_which_it_refuses_nothing() -> None:
     """A known limitation of ADR-0014 Decision #1's gate form, pinned rather than fixed.
 
-    `gate = max_cost + kappa * dt` grows without bound as dt grows, but a BOUNDED cost
-    (e.g. `giou_cost`, bounded above by 2.0: cost.py, `1 - GIoU`, GIoU in `[-1, 1]`) is
-    not. Once the gate exceeds that ceiling, it refuses NOTHING -- at any separation,
-    however absurd. The ADR did not consider that an additive gate can outgrow a bounded
-    cost.
+    `gate = max_cost + kappa * dt` grows without bound as dt grows, but every cost this
+    module ships is bounded (`cost.py`'s `COST_CEILING`). Once the gate exceeds a cost's
+    ceiling, it refuses NOTHING -- at any separation, however absurd. The ADR did not
+    consider that an additive gate can outgrow a bounded cost.
 
-    Task 9's sweep settled this as a real but non-blocking property: `gate_form` is now
-    a swept axis (a `saturating` alternative exists precisely because of this dead
-    zone -- `cost.py`'s `COST_CEILING`, `bytetrack.py`'s `_gate`), but the winning
-    candidate, `centre_distance_cost`, has NO ceiling (unbounded by construction), so it
-    cannot have this dead zone at all under the additive form -- there is nothing for
-    the gate to outgrow. This test therefore pins the dead zone against an EXPLICIT
-    bounded cost (`giou_cost`, its own historical `max_cost=0.8, kappa=2.0`) rather than
-    the shipped default, since the property being tested is "an additive gate paired
-    with a bounded cost", not "whatever ships".
+    Reads `max_cost`/`kappa`/the cost's ceiling live off a bare `ByteTrackTracker()`
+    (Fix round 1, Important 8: a prior round hardcoded `giou_cost`'s historical
+    `0.8`/`2.0` here, which decoupled the assertion from the actual shipped defaults and
+    turned it into an arithmetic tautology -- the stated purpose of this test, that a
+    future kappa change cannot move the dead zone without a test noticing, requires
+    reading the live values, not a frozen snapshot of some other cost's numbers).
 
-    The crossover (gate == giou_cost's ceiling) is `dt = (2.0 - max_cost) / kappa`. At
-    `max_cost=0.8, kappa=2.0` that is dt=0.6s, ~1.667 fps. Muster's product-documented
-    1 fps floor -- and the rate the adaptive controller lands on under load, i.e. exactly
-    when a busy scene makes swap risk highest -- sits inside this dead zone, for any
-    bounded cost run under the additive form at these settings.
+    That decoupling happened because, at the time, `centre_distance_cost` (the winning
+    candidate) was wrongly believed to have no ceiling at all -- `cost.py`'s Fix round 1
+    Critical 2 found it is in fact bounded by 2.0, the same as `giou_cost`, so the
+    shipped default DOES have a well-defined crossover, and there is no longer a reason
+    not to read it straight off the tracker.
+
+    The crossover this pins is TIGHT: `max_cost=0.4, kappa=1.5` gives `dt=(2.0-0.4)/1.5
+    ~= 1.067s`, i.e. **~0.9375 fps** -- just BELOW Muster's 1 fps product floor, not
+    comfortably above it the way the previous default's `~1.667 fps` was. At exactly
+    1 fps the gate (1.9) still sits under the ceiling (2.0), so it retains real
+    discriminating power there, but with only ~5% headroom, not the wide margin the
+    earlier (wrongly-tuned) operating point had.
     """
-    max_cost, kappa = 0.8, 2.0
-    giou_ceiling = 2.0  # cost.py: `1 - GIoU`, GIoU in [-1, 1] -> cost in [0, 2]
-    crossover_dt = (giou_ceiling - max_cost) / kappa
+    reference = ByteTrackTracker()
+    cost, max_cost, kappa = reference.cost, reference._max_cost, reference._gate_widening_per_second
+    ceiling = ceiling_for(cost)
+    assert ceiling is not None, "the shipped cost must have a finite ceiling"
+    crossover_dt = (ceiling - max_cost) / kappa
 
-    assert crossover_dt == pytest.approx(0.6)
-    assert 1.0 / crossover_dt == pytest.approx(1.6667, abs=1e-3)
+    assert crossover_dt == pytest.approx(1.0667, abs=1e-3)
+    assert 1.0 / crossover_dt == pytest.approx(0.9375, abs=1e-3)
 
-    # Below the crossover (1 fps: the product floor, and where the controller lands
-    # under load): the gate exceeds giou_cost's own ceiling, so an absurd jump that no
-    # real cost value could ever clear is still admitted -- verified end to end.
-    below = ByteTrackTracker(
-        n_init=1, cost=giou_cost, max_cost=max_cost, gate_widening_per_second=kappa
-    )
-    below.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
-    tracks = below.update(_frame(1.0), [Detection(box=(100_000, 500, 100_040, 700), score=0.9)])
-    assert tracks[0].time_since_update == 0, "below ~1.67 fps the gate refuses nothing at all"
+    # A near-ceiling pair for the shipped cost (centre_distance_cost): two same-size
+    # boxes can never exceed cost 1.0 however far apart (the scale-agreement term needs
+    # a genuine size mismatch too, not just distance -- found by search, cost.py's
+    # COST_CEILING docstring), so "absurd" here means both far apart AND wildly
+    # mismatched in size, landing at ~1.945 -- close enough to the 2.0 ceiling to sit
+    # above the 1fps gate (1.9) while nowhere near the 0.4-0.7-ish range a real walker's
+    # cold-start cost actually occupies (see test_sweep.py's Phase A grid comment).
+    origin = (1979, 2876, 2117, 2878)  # w=138 h=2
+    far_mismatched = (-2954, -1708, -2951, -1273)  # w=3 h=435
 
-    # Above the crossover (2 fps): the gate is still bounded below the ceiling, so the
-    # same absurd jump is correctly refused -- the gate has real discriminating power.
-    above = ByteTrackTracker(
-        n_init=1, cost=giou_cost, max_cost=max_cost, gate_widening_per_second=kappa
-    )
-    above.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
-    tracks = above.update(_frame(0.5), [Detection(box=(100_000, 500, 100_040, 700), score=0.9)])
-    assert tracks[0].time_since_update == 1, "above ~1.67 fps the same jump must still be refused"
+    # n_init=1 explicitly, same as the other gate-mechanism tests in this file: a
+    # refused SECOND association on a still-TENTATIVE (n_init=2) track dies outright
+    # rather than coasting, which would confound birth-confirmation policy with the
+    # gate discrimination this test isolates. cost/max_cost/kappa still come from the
+    # live shipped tracker above, not re-guessed here.
+    def _tracker() -> ByteTrackTracker:
+        return ByteTrackTracker(
+            n_init=1, cost=cost, max_cost=max_cost, gate_widening_per_second=kappa
+        )
+
+    # Below the crossover (a gap even the adaptive controller's lowest supported fps
+    # does not produce): the gate exceeds the shipped cost's own ceiling, so this
+    # near-ceiling pair is still admitted -- verified end to end.
+    below = _tracker()
+    below.update(_frame(0.0), [Detection(box=origin, score=0.9)])
+    below_dt = crossover_dt + 1.0
+    tracks = below.update(_frame(below_dt), [Detection(box=far_mismatched, score=0.9)])
+    assert tracks[0].time_since_update == 0, "beyond the crossover the gate refuses nothing at all"
+
+    # At the product's documented 1 fps floor: the crossover sits just below it, so the
+    # gate must still discriminate there -- barely, but for real.
+    above = _tracker()
+    above.update(_frame(0.0), [Detection(box=origin, score=0.9)])
+    tracks = above.update(_frame(1.0), [Detection(box=far_mismatched, score=0.9)])
+    assert tracks[0].time_since_update == 1, "at the 1fps product floor the gate must still refuse"
 
 
 def test_a_multi_tick_occlusion_reacquires_under_gap_based_widening_only() -> None:

@@ -9,10 +9,16 @@ Structured in two phases (task-9-report.md has both tables in full):
 
 * **Phase A** tunes each (cost function, gate form) pair's own `(max_cost, kappa)`.
   Constraint 1 (task-9-brief.md's six carried-forward constraints): the candidates'
-  cost ranges do not overlap (`iou_cost` in `[0, 1]`, `giou_cost` in `[0, 2]`,
-  `centre_distance_cost` effectively unbounded), so one fixed gate cannot serve all of
-  them -- sweeping candidates against a shared gate would measure gate calibration, not
-  cost quality. Each candidate is tuned at its own best operating point instead.
+  cost ranges do not overlap (`iou_cost`/`expansion_iou_cost` in `[0, 1]`, `giou_cost`/
+  `centre_distance_cost` in `[0, 2)`), so one fixed gate cannot serve all of them --
+  sweeping candidates against a shared gate would measure gate calibration, not cost
+  quality. Each candidate is tuned at its own best operating point instead. Tuned
+  jointly across `n_init in {1, 2, 3}` (Fix round 1, Important 6) rather than at a
+  single fixed `n_init`, which the first pass got wrong: at `n_init=2` alone every
+  `centre_distance_cost` cell tied at `never-confirmed=0`, so selection silently fell
+  through to the simplicity tiebreak (smallest kappa) on a metric that was not actually
+  discriminating -- aggregating over all three `n_init` breaks that degenerate tie
+  honestly.
 * **Phase B** compares the tuned candidates across fps x n_init x scenario x seed.
 
 Both phases run under detection corruption only (Constraint 2): on clean input all four
@@ -21,12 +27,12 @@ leaves nothing for any cost to disambiguate -- an all-tie result is evidence the
 does not fabricate discrimination, not a ranking result. `test_clean_input_is_a_tie`
 keeps that sanity check in the suite without letting it leak into the decision.
 
-Runtime: a single `_run` call is ~1.3ms (measured). Phase A's grid (7 cost/gate-form
-combinations x up to 20 (max_cost, kappa) cells x 4 fps x 4 scenarios x 3 seeds) is
-~7,000 runs, and Phase B's comparison (7 combinations x 4 fps x 3 n_init x 4 scenarios
-x 5 seeds) is ~1,700 runs -- under 15 seconds combined, measured directly. Nothing was
-cut from the grid specified in the dispatch: the full fps/n_init/scenario/seed ranges
-ran as originally planned.
+Runtime: a single `_run` call is ~1.3ms (measured). At the seed counts below (Fix round
+1 raised these for significance -- Important 3 -- and widened Phase A's tuning to the
+full `n_init` grid -- Important 6), the full file (Phase A + Phase B +
+`test_significance_of_the_ranking` + the clean-input check) measures **180s (3 minutes),
+measured directly** (`pytest -m slow -s`, wall clock). Comfortably under the 15 minute
+budget; nothing was cut to get there.
 """
 
 from __future__ import annotations
@@ -37,6 +43,7 @@ from functools import cache
 from typing import Literal
 
 import pytest
+from scipy.stats import ttest_rel
 
 from muster.tracker.bytetrack import ByteTrackTracker
 from muster.tracker.cost import COSTS, iou_cost
@@ -48,15 +55,23 @@ GateForm = Literal["additive", "saturating"]
 
 FPS_GRID = (5.0, 3.0, 2.0, 1.0)
 N_INIT_GRID = (1, 2, 3)
-SEEDS = (1, 2, 3, 4, 5)
+SEEDS = tuple(range(1, 41))
+"""40, not the original 5 (Fix round 1, Important 3): at 5 seeds the full-grid ranking
+between the top two candidates was not statistically significant (paired t, p~0.20) --
+a real property of the noise floor, not a mistake, but one the report must not paper
+over with a ranking stated as fact. `test_significance_of_the_ranking` computes and
+prints the actual statistic at this seed count; see task-9-report.md's Fix round 1 for
+the count-vs-significance table that justified stopping at 40 rather than going higher
+or lower."""
+
 GUARD_SEEDS = (1, 2)
 """The regression guard runs on the fast path, so it takes a subset. If the margin it
 asserts is not visible over two seeds, the margin is too thin to defend anyway."""
 
-TUNE_SEEDS = (1, 2, 3)
-"""Phase A tunes on a subset of `SEEDS` -- fast enough to use all five, but three
-already separates the candidates cleanly (task-9-report.md), and holding two seeds back
-means Phase B's full-seed numbers are not just re-reporting what Phase A already saw."""
+TUNE_SEEDS = tuple(range(1, 11))
+"""Phase A tunes on a subset of `SEEDS` -- separates the candidates cleanly at 10 while
+staying well short of Phase B's full 40, so Phase B's own numbers are not just
+re-reporting what Phase A already saw with more seeds."""
 
 # The corrupted operating point every decision number in this file comes from
 # (Constraint 2). `box_sigma` is deliberately the sweep's own UPPER jitter bound, not a
@@ -79,13 +94,20 @@ _MAX_COST_LOW_RATIO = 0.625  # bytetrack.py's own shipped ratio: 0.5 / 0.8
 # `_MAX_WALK_SPEED_MS`) walker's first post-birth match produces at 1-5 fps -- measured
 # directly (task-9-report.md): iou/expansion_iou saturate at their 1.0 ceiling by 2 fps,
 # giou ranges ~1.08-1.71, centre_distance ~0.22-0.69. Kappa's saturating-form range runs
-# higher than its additive-form range because the saturating gate divides its widening
-# by `(ceiling - max_cost)` (see bytetrack.py's `_gate`), so an additive-scaled kappa
-# would barely move it.
+# higher than its additive-form range because the saturating gate MULTIPLIES its
+# widening by `(ceiling - max_cost)` (see bytetrack.py's `_gate`: `ceiling - (ceiling -
+# max_cost) * exp(-kappa * gap)`), so an additive-scaled kappa would barely move it.
+#
+# `centre_distance_cost` has a saturating grid too (Fix round 1, Critical 2): it was
+# wrongly treated as unbounded in the first pass -- both its terms are self-normalizing
+# and it is in fact bounded by 2.0, the same ceiling as `giou_cost` (`cost.py`'s
+# `COST_CEILING` docstring has the measurement) -- so a saturating gate is well-defined
+# for it, and the omission meant Constraint 4 was never actually checked for the
+# candidate the sweep went on to choose.
 GATE_FORMS_BY_COST: dict[str, tuple[GateForm, ...]] = {
     "iou": ("additive", "saturating"),
     "giou": ("additive", "saturating"),
-    "centre_distance": ("additive",),  # unbounded cost -- no ceiling to saturate against
+    "centre_distance": ("additive", "saturating"),
     "expansion_iou": ("additive", "saturating"),
 }
 
@@ -100,6 +122,7 @@ _GRIDS: dict[str, dict[GateForm, tuple[tuple[float, ...], tuple[float, ...]]]] =
     },
     "centre_distance": {
         "additive": ((0.2, 0.4, 0.6, 0.8), (0.0, 0.3, 0.6, 1.0, 1.5)),
+        "saturating": ((0.2, 0.4, 0.6, 0.8), (0.5, 1.0, 2.0, 4.0, 8.0)),
     },
     "expansion_iou": {
         "additive": ((0.5, 0.7, 0.85, 0.95), (0.0, 0.25, 0.5, 0.75, 1.0)),
@@ -171,7 +194,7 @@ def _run(
 def _aggregate(
     candidate: Candidate,
     fps_values: tuple[float, ...],
-    n_init: int,
+    n_inits: tuple[int, ...],
     seeds: tuple[int, ...],
     *,
     clean: bool = False,
@@ -182,6 +205,7 @@ def _aggregate(
         _run(candidate, scenario, fps, n_init, seed, corruption=corruption)
         for scenario in SCENARIOS
         for fps in fps_values
+        for n_init in n_inits
         for seed in seeds
     ]
     n = len(scores)
@@ -203,12 +227,19 @@ def _tune(cost_name: str, gate_form: GateForm) -> OperatingPoint:
     one with the lowest mean `id_switches + merges`, then -- among any cells still tied
     -- the smallest kappa and max_cost (Step 3's simplicity tiebreak: a more
     conservative gate is easier to reason about when nothing else distinguishes two
-    cells). Tuned at the shipped default `n_init=2`; `n_init` itself is a Phase B axis
-    (ADR-0014 decision #4), not tuned here.
+    cells).
+
+    Aggregated jointly across `N_INIT_GRID`, not a single fixed `n_init` (Fix round 1,
+    Important 6): tuning at `n_init=2` alone let every `centre_distance_cost` cell tie
+    at `never-confirmed=0` (2-3 confirming hits arrive well within any of the grid's
+    gates at that n_init), so selection silently fell through to the kappa tiebreak on
+    a metric that was not actually discriminating between cells. `n_init` is still a
+    Phase B axis in its own right (ADR-0014 decision #4) -- this does not tune it, it
+    just stops Phase A's OWN selection from resting on a degenerate slice of the grid.
     """
     max_costs, kappas = _GRIDS[cost_name][gate_form]
     points = [
-        OperatingPoint(candidate, _aggregate(candidate, FPS_GRID, 2, TUNE_SEEDS))
+        OperatingPoint(candidate, _aggregate(candidate, FPS_GRID, N_INIT_GRID, TUNE_SEEDS))
         for max_cost, kappa in itertools.product(max_costs, kappas)
         for candidate in [Candidate(cost_name, gate_form, max_cost, kappa)]
     ]
@@ -256,9 +287,59 @@ def test_phase_b_compare_tuned_candidates() -> None:
     )
     for point in _all_operating_points():
         for fps, n_init in itertools.product(FPS_GRID, N_INIT_GRID):
-            score = _aggregate(point.candidate, (fps,), n_init, SEEDS)
+            score = _aggregate(point.candidate, (fps,), (n_init,), SEEDS)
             prefix = f"{fps:>5.0f}{n_init:>8}"
             _print_row(point.candidate.cost_name, point.candidate.gate_form, prefix, score)
+
+
+def _grid_sum(candidate: Candidate, seed: int) -> float:
+    """One seed's total `id_switches + merges`, summed over the whole fps x n_init x
+    scenario grid -- the per-seed observation the significance test pairs on."""
+    return sum(
+        s.id_switches + s.merges
+        for scenario in SCENARIOS
+        for fps in FPS_GRID
+        for n_init in N_INIT_GRID
+        for s in [_run(candidate, scenario, fps, n_init, seed, corruption=CORRUPTED)]
+    )
+
+
+@pytest.mark.slow
+def test_significance_of_the_ranking() -> None:
+    """Not an assertion -- the study. Fix round 1, Important 3: the first pass reported
+    a ranking (by mean full-grid ID-switches + merges) without checking whether the
+    seeds it ran actually separated the candidates. They did not, at 5 seeds (paired t,
+    p~0.20 against the runner-up) -- a real property of the noise floor at that seed
+    count, not a mistake, but the report stated the ranking as settled fact regardless.
+
+    Runs a paired t-test (`scipy.stats.ttest_rel`, one observation per seed: that seed's
+    total `id_switches + merges` across the whole fps x n_init x scenario grid) between
+    the lowest-total candidate and every other candidate, at `SEEDS`'s full 40. Paired,
+    not independent-samples, because the same 40 seeds generate both candidates' runs --
+    the walker geometry and detection corruption are identical between the two, so only
+    the tracker's cost/gate differs, exactly what a paired test isolates for.
+    """
+    points = _all_operating_points()
+
+    def _penalty(point: OperatingPoint) -> float:
+        score = _aggregate(point.candidate, FPS_GRID, N_INIT_GRID, SEEDS)
+        return score.idsw + score.merges
+
+    winner = min(points, key=_penalty)
+    winner_vals = [_grid_sum(winner.candidate, seed) for seed in SEEDS]
+
+    print(f"\nwinner: {winner.candidate.cost_name}/{winner.candidate.gate_form}")
+    print(f"{'rival':<18}{'gate':<12}{'winner mean':>12}{'rival mean':>12}{'t':>8}{'p':>10}")
+    for point in points:
+        if point is winner:
+            continue
+        rival_vals = [_grid_sum(point.candidate, seed) for seed in SEEDS]
+        t_stat, p_value = ttest_rel(winner_vals, rival_vals)
+        print(
+            f"{point.candidate.cost_name:<18}{point.candidate.gate_form:<12}"
+            f"{sum(winner_vals) / len(winner_vals):>12.2f}"
+            f"{sum(rival_vals) / len(rival_vals):>12.2f}{t_stat:>8.2f}{p_value:>10.4f}"
+        )
 
 
 @pytest.mark.slow
@@ -272,7 +353,7 @@ def test_clean_input_is_a_tie() -> None:
     """
     print(f"\n{'cost':<18}{'gate':<12}{'IDSW':>8}{'NEVER':>8}{'MERGE':>8}{'MT':>8}")
     for point in _all_operating_points():
-        score = _aggregate(point.candidate, FPS_GRID, 2, TUNE_SEEDS, clean=True)
+        score = _aggregate(point.candidate, FPS_GRID, N_INIT_GRID, TUNE_SEEDS, clean=True)
         _print_row(point.candidate.cost_name, point.candidate.gate_form, "", score)
 
 
@@ -281,12 +362,20 @@ def test_clean_input_is_a_tie() -> None:
 # Frozen from Phase A's own measurement (task-9-report.md), not recomputed here: the
 # fast path must not re-run the grid search on every commit, and a hardcoded, documented
 # baseline is what makes this a REGRESSION guard rather than a second copy of the study.
-_TUNED_IOU_CANDIDATE = Candidate(cost_name="iou", gate_form="additive", max_cost=0.85, kappa=0.25)
+_TUNED_IOU_CANDIDATE = Candidate(cost_name="iou", gate_form="additive", max_cost=0.95, kappa=0.25)
 """`iou_cost`'s own Phase A winner (task-9-report.md, Phase A table) -- the fair
 baseline this guard holds the shipped default to. Comparing against `iou_cost` run at
 the SHIPPED DEFAULT's gate settings would measure whose gate the defaults happen to
 fit, not whether the chosen cost function is actually better once IoU gets its own fair
-tuning too."""
+tuning too.
+
+`max_cost` was wrongly frozen as `0.85` in the first pass -- transcribed from an
+intermediate run rather than the Phase A table actually printed alongside it, which
+already said `0.95` (Fix round 1, Important 7). At the wrong value the guard's own
+"real margin" was partly an artifact of an under-tuned baseline (NEVER=1.375, MT=0.042
+at 0.85 vs NEVER=0.000, MT=0.448 at the true 0.95, against this candidate's own
+GUARD_SEEDS numbers) -- a guard that flatters the shipped default by comparing it to a
+strawman is worse than no guard. Fixed to match Phase A's actual, reproducible output."""
 
 
 def test_the_chosen_cost_still_beats_a_tuned_iou_baseline() -> None:
@@ -303,8 +392,8 @@ def test_the_chosen_cost_still_beats_a_tuned_iou_baseline() -> None:
         max_cost=default_tracker._max_cost,
         kappa=default_tracker._gate_widening_per_second,
     )
-    chosen_score = _aggregate(chosen_candidate, (2.0,), n_init, GUARD_SEEDS)
-    iou_score = _aggregate(_TUNED_IOU_CANDIDATE, (2.0,), n_init, GUARD_SEEDS)
+    chosen_score = _aggregate(chosen_candidate, (2.0,), (n_init,), GUARD_SEEDS)
+    iou_score = _aggregate(_TUNED_IOU_CANDIDATE, (2.0,), (n_init,), GUARD_SEEDS)
 
     assert chosen_score.never <= iou_score.never
     assert chosen_score.mostly_tracked > iou_score.mostly_tracked

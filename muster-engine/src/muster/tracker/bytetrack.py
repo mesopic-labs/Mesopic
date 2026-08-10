@@ -74,7 +74,7 @@ class ByteTrackTracker:
         n_init: int = 2,
         track_memory_s: float = 2.0,
         cost: CostFunction = centre_distance_cost,
-        gate_widening_per_second: float = 0.3,
+        gate_widening_per_second: float = 1.5,
         gate_form: Literal["additive", "saturating"] = "additive",
     ) -> None:
         # `max_cost` gates the association COST (1 - similarity), not the similarity.
@@ -102,25 +102,36 @@ class ByteTrackTracker:
         # Task 9's sweep (task-9-report.md) is what actually settled it, per-candidate
         # (Constraint 1: one gate cannot serve costs with different ranges, so each of
         # `giou_cost`, `iou_cost`, `centre_distance_cost`, `expansion_iou_cost` got its
-        # own tuned `(max_cost, kappa)`, both additive and saturating gate forms). The
-        # winner across fps in {1,2,3,5} x n_init in {1,2,3} x all four scenarios x five
-        # seeds, under detection corruption: `centre_distance_cost`, with the LOWEST
-        # combined ID-switch + merge total of every candidate (including the `iou_cost`
-        # control) while matching or beating every other candidate's never-confirmed
-        # rate outside of two candidates that only won never-confirmed by matching
-        # almost anything (`iou_cost` and `expansion_iou_cost` both had dramatically
-        # WORSE id-switch + merge totals than `centre_distance_cost` -- ADR-0014's own
-        # named failure mode of a too-permissive gate, moving the error rather than
-        # removing it). `max_cost=0.4, kappa=0.3` is `centre_distance_cost`'s own Phase A
-        # operating point, not a scaled-down guess from GIoU's numbers -- its cost is on
-        # a different scale entirely (normalized centre distance plus a scale-agreement
-        # penalty, not `1 - similarity`). `gate_form="additive"` because the saturating
-        # alternative (Constraint 4) never beat it for the winning candidate, and was
-        # actively worse for two others -- the additive form's dead zone below ~1.67 fps
-        # (still real, still documented below) did not materialize as a practical
-        # problem at this operating point. `n_init=2` unchanged: `n_init=1` zeroed
-        # never-confirmed at every fps but at 2-5x the id-switch + merge cost, not the
-        # "clear win" ADR-0014 decision #4 requires to justify moving off 2.
+        # own tuned `(max_cost, kappa)`, both additive and saturating gate forms). Winner
+        # across fps in {1,2,3,5} x n_init in {1,2,3} x all four scenarios x FORTY seeds
+        # (raised from five in Fix round 1 once the original seed count turned out not
+        # to separate the top two candidates at statistical significance -- see below),
+        # under detection corruption: `centre_distance_cost`, with the LOWEST combined
+        # ID-switch + merge total of every candidate (including the `iou_cost` control),
+        # confirmed significant by a paired t-test against every rival (p<=0.014, worst
+        # case `giou_cost`'s saturating form; p<0.005 against `giou_cost` additive, the
+        # closest competitor on the primary metric). `max_cost=0.4, kappa=1.5` is
+        # `centre_distance_cost`'s own Phase A operating point, not a scaled-down guess
+        # from GIoU's numbers -- its cost is on a different scale entirely (normalized
+        # centre distance plus a scale-agreement penalty, not `1 - similarity`).
+        # `gate_form="additive"` because the saturating alternative (Constraint 4) lost
+        # to it even once correctly evaluated (Fix round 1, Critical 2:
+        # `centre_distance_cost` was wrongly entered as unbounded in the first pass,
+        # which meant the saturating form had never actually been swept for it at all --
+        # `cost.py`'s `COST_CEILING` now correctly gives it a `2.0` ceiling, the same as
+        # `giou_cost`, and the saturating form scores WORSE once swept: 27.16 vs 21.09
+        # combined switches+merges over the full grid). `n_init=2` unchanged:
+        # `n_init=1` reduces never-confirmed by ~0.02 events over the whole grid (noise)
+        # at nearly double the id-switch + merge cost -- not the "clear win" ADR-0014
+        # decision #4 requires to justify moving off 2.
+        #
+        # HONEST CAVEAT, not smoothed over (Fix round 1, Critical 1): at 1 fps
+        # specifically -- the product's documented floor, and where the adaptive
+        # controller lands under load -- plain `iou_cost` beats `centre_distance_cost`
+        # on the primary metric (7.53 vs 9.81 combined switches+merges, summed over all
+        # three n_init, corrupted, 40 seeds). `centre_distance_cost`'s advantage is real
+        # and decisive in aggregate (it wins at 2/3/5 fps by a wide and growing margin as
+        # fps rises), but 1 fps is not one of those cells, and the ADR must say so.
         self._gate_widening_per_second = gate_widening_per_second
         # Gate FORM (ADR-0014 Task 9, Constraint 4): see `_gate`'s docstring for what
         # "additive" vs "saturating" mean and why the latter needs a cost ceiling.
@@ -135,8 +146,11 @@ class ByteTrackTracker:
         """The cost's ceiling, required only by the saturating gate form.
 
         Resolved eagerly so a misconfiguration (a saturating gate paired with an
-        unbounded cost, e.g. `centre_distance_cost`) fails at construction, not on the
-        first call to `update`.
+        unbounded cost) fails at construction, not on the first call to `update`. Every
+        cost `cost.py`'s `COSTS` currently registers has a finite ceiling -- including
+        `centre_distance_cost`, wrongly entered as unbounded in the first pass at this
+        (task-9-report.md's "Fix round 1", Critical 2) -- so this guard is not reachable
+        today, but stays here for whatever candidate joins `COSTS` next.
         """
         if gate_form != "saturating":
             return None
@@ -144,7 +158,7 @@ class ByteTrackTracker:
         if ceiling is None:
             msg = (
                 "gate_form='saturating' requires a cost function with a finite ceiling; "
-                "this cost has none (e.g. centre_distance_cost) -- use 'additive' instead"
+                "this cost has none -- use 'additive' instead"
             )
             raise ValueError(msg)
         return ceiling
