@@ -21,6 +21,19 @@ foreshortening bites the vertical and horizontal extents differently. The consta
 ratio this module produces is an artifact of the simplification, not evidence the
 projection is exact -- fine for a relative benchmark that compares costs against each
 other under one camera model, not fine as a claim of geometric correctness.
+
+**`crossing` on clean (uncorrupted) input ties across all four candidate costs** and
+is not evidence for ranking them: the walkers move at exact constant velocity with
+zero process noise, so `BoxKalmanFilter`'s constant-velocity prediction is already
+correct every tick, leaving nothing for any cost function to disambiguate. The costs
+only diverge once detection corruption (`recall < 1.0` and/or `box_sigma > 0.0`) makes
+the prediction genuinely uncertain -- confirmed by hand (task-8-report.md, fix round
+1): plain `iou_cost` swaps and merges identities on a corrupted `crossing` run where
+`giou_cost`, `centre_distance_cost` and `expansion_iou_cost` do not. **Task 9's
+decision numbers must come from corrupted runs.** Clean-input `crossing` stays in the
+sweep as a sanity check -- an all-tie result there proves the harness is not
+fabricating discrimination it has no basis for -- but a clean-input tie is not a
+finding about which cost to prefer.
 """
 
 from __future__ import annotations
