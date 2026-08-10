@@ -16,6 +16,7 @@ import pytest
 
 from muster.tracker.bytetrack import ByteTrackTracker
 from muster.tracker.cost import CostFunction, iou_cost
+from muster.tracker.kalman import _MAX_WALK_SPEED_MS, _PERSON_HEIGHT_M
 from muster.types import CameraId, DecodedFrame, Detection, FrameTs, TrackId
 
 WIDTH, HEIGHT = 1920, 1080
@@ -70,8 +71,18 @@ def test_plain_iou_swaps_identities_where_the_default_cost_does_not() -> None:
     far enough apart that every track-detection pair has zero overlap -- a genuinely
     flat IoU matrix -- but at different true distances, so GIoU (which keeps
     decreasing past zero overlap) can still tell the correct pairing from the swap and
-    IoU cannot. This isolates the assignment step from the gate entirely, so it holds
-    for any kappa.
+    IoU cannot. This isolates the *assignment* step from the gate -- but the gate still
+    has to ACCEPT whichever pairing the assignment step picked, and it is not free:
+    fix round 2's re-review found that at kappa=1.0 the correct GIoU pairing's cost
+    (1.4286) exceeds the gate (1.3), so that leg coasts instead of matching, a third
+    (spurious) track gets born from the unclaimed detection, and an unguarded
+    `next(...)` selector picked the coasting track and returned `True` by accident.
+    Measured directly (see task-7-report.md's fix round 2): this demonstration holds
+    for `gate_widening_per_second >= ~1.26` (both legs verified at 1.5, 2.0 and 3.0;
+    fails at 1.0 and below, where GIoU's correct pairing itself gets refused). The
+    shipped default (2.0) clears this with margin. `len(tracks) == 2` below is the
+    guard against exactly that accident: a coasted or spurious track now fails loudly
+    instead of being silently selected.
     """
 
     def run(cost: CostFunction) -> bool:
@@ -83,6 +94,7 @@ def test_plain_iou_swaps_identities_where_the_default_cost_does_not() -> None:
                 Detection(box=(350, 500, 390, 700), score=0.9),
             ],
         )
+        assert len(born) == 2
         id_near_100 = next(t.track_id for t in born if t.foot_point[0] * WIDTH < 300)
         id_near_350 = next(t.track_id for t in born if t.foot_point[0] * WIDTH >= 300)
 
@@ -96,6 +108,10 @@ def test_plain_iou_swaps_identities_where_the_default_cost_does_not() -> None:
                 Detection(box=(200, 500, 240, 700), score=0.9),  # true continuation of 100
             ],
         )
+        # A track that coasted (gate refused) or a spurious birth would otherwise let
+        # the selectors below silently pick the wrong track and pass for the wrong
+        # reason -- exactly the accident the re-review found at kappa=1.0.
+        assert len(tracks) == 2, "every leg must actually match, not coast or spawn a third track"
         id_at_200 = next(t.track_id for t in tracks if t.foot_point[0] * WIDTH < 300)
         id_at_400 = next(t.track_id for t in tracks if t.foot_point[0] * WIDTH >= 300)
         return id_at_200 == id_near_100 and id_at_400 == id_near_350
@@ -260,6 +276,29 @@ def test_a_tentative_track_is_not_confirmed_by_a_low_confidence_match() -> None:
     assert tracks == []
 
 
+def test_stage_2s_gate_is_tighter_than_stage_1s() -> None:
+    """The two-stage design's defining property: stage 2 must be STRICTER, not just
+    gated at all.
+
+    Swapping `max_cost_low` for `max_cost` at the stage-2 call site leaves every other
+    test in this file green (measured -- see fix round 2 in task-7-report.md), because
+    none of them place a cost strictly between the two thresholds. This one does: at
+    `gate_widening_per_second=1.5`, dt=0.5s, a detection 100px from the track predicts
+    a GIoU cost of ~1.4286 -- inside stage 1's widened gate (0.8 + 1.5*0.5 = 1.55, which
+    "would accept") but outside stage 2's (0.5 + 1.5*0.5 = 1.25, which must refuse).
+    """
+    tracker = ByteTrackTracker(n_init=1, gate_widening_per_second=1.5)
+    born = {
+        t.track_id
+        for t in tracker.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
+    }
+
+    tracks = tracker.update(_frame(0.5), [Detection(box=(200, 500, 240, 700), score=0.3)])
+
+    assert {t.track_id for t in tracks} == born, "the track must coast, not vanish"
+    assert tracks[0].time_since_update == 1, "stage 2's tighter gate must refuse this cost"
+
+
 def test_a_far_low_confidence_detection_does_not_sustain() -> None:
     """max_cost_low must actually gate stage 2, not accept anything offered to it."""
     tracker = ByteTrackTracker(n_init=1)
@@ -297,4 +336,94 @@ def test_identical_consecutive_timestamps_are_safe() -> None:
     tracks = tracker.update(_frame(1.0), [Detection(box=box, score=0.9)])
 
     assert len(tracks) == 1
+    assert tracks[0].time_since_update == 0
+
+
+def test_a_stray_frame_never_rewinds_the_elapsed_time_clock() -> None:
+    """The actual corruption fix round 1's Important 4 named.
+
+    `time_since_update` cannot catch a rewound `_last_ts`: it counts missed TICKS, a
+    quantity invariant to how large dt was computed to be, so the round 1 report's
+    claim that it would detect a rewind was wrong. This checks the tracker's own
+    notion of elapsed time directly: after a late frame, `_last_ts` must still be the
+    last WELL-ORDERED timestamp, and the next legitimate frame's gap must be the real
+    one -- not inflated by however early the stray frame arrived.
+    """
+    tracker = ByteTrackTracker(n_init=1)
+    tracker.update(_frame(1.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
+
+    tracker.update(_frame(0.5), [])  # arrives late; must not become the new "previous"
+
+    last_ts_after_late_frame = tracker._last_ts
+    assert last_ts_after_late_frame == _frame(1.0).ts, "a late frame must not rewind _last_ts"
+
+    next_gap = tracker._elapsed(_frame(1.5).ts)
+    assert next_gap == pytest.approx(0.5), "the next well-ordered gap must be the real one"
+
+
+def test_a_brisk_walker_is_admitted_at_the_worst_case_fps() -> None:
+    """kappa's default must actually admit kalman.py's own walking-speed envelope.
+
+    Fix round 1 claimed a +0.157 margin at 3 fps for this walker, computed against a
+    pixel scale that was never tied to kalman.py's own metres-to-pixels derivation and
+    turned out to understate the true displacement -- that number was wrong. Recomputed
+    honestly here using kalman.py's own formula (`scale = height_px / _PERSON_HEIGHT_M`)
+    with this suite's box aspect ratio (width = 0.2 * height, `_walk`'s own convention):
+    the resulting cold-start GIoU cost is invariant to the box's absolute size for a
+    fixed aspect ratio (both the walker's pixel displacement and the box width scale
+    linearly with height, so their ratio does not), so 200px is a concrete but
+    arbitrary choice, not a tuned one. Importing `_MAX_WALK_SPEED_MS` and
+    `_PERSON_HEIGHT_M` directly, rather than hardcoding numbers, means this test cannot
+    silently drift from kalman.py's own definition of "brisk" again. 3 fps is the
+    worst case across 1/2/3/5 fps (see the corrected kappa table in
+    task-7-report.md's fix round 2) -- margin +0.1422 at kappa=2.0.
+    """
+    height, width = 200, 40
+    scale = height / _PERSON_HEIGHT_M  # px/m, kalman.py's own metres-to-pixels anchor
+    dt = 1.0 / 3.0  # 3 fps: the tightest margin across Muster's 1-5 fps range
+    displacement = round(_MAX_WALK_SPEED_MS * dt * scale)
+
+    tracker = ByteTrackTracker(n_init=1)
+    tracker.update(_frame(0.0), [Detection(box=(100, 500, 100 + width, 500 + height), score=0.9)])
+    tracks = tracker.update(
+        _frame(dt),
+        [
+            Detection(
+                box=(
+                    100 + displacement,
+                    500,
+                    100 + width + displacement,
+                    500 + height,
+                ),
+                score=0.9,
+            )
+        ],
+    )
+
+    assert len(tracks) == 1
+    assert tracks[0].time_since_update == 0, "the brisk walker's first step must be admitted"
+
+
+def test_a_multi_tick_occlusion_reacquires_under_gap_based_widening_only() -> None:
+    """Gap-based widening (fix round 1, folded-in finding): the gate must widen by the
+    gap since a track was last OBSERVED, not by the current tick's interval alone.
+
+    A track misses three ticks (0.5s each), then a detection appears 300px away --
+    reachable only because 1.5s has actually elapsed since the last real observation.
+    Reverting to tick-based widening (using only the last tick's 0.5s) leaves this
+    unreachable and the track never reacquires -- measured directly below, not
+    hypothesised: mutating `_gate` to use `dt_s` instead of the per-track gap turns
+    this from a reacquisition into a fresh birth.
+    """
+    tracker = ByteTrackTracker(n_init=1, gate_widening_per_second=1.5, track_memory_s=5.0)
+    born = {
+        t.track_id
+        for t in tracker.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
+    }
+    for missed_tick in (0.5, 1.0, 1.5):
+        tracker.update(_frame(missed_tick), [])
+
+    tracks = tracker.update(_frame(2.0), [Detection(box=(400, 500, 440, 700), score=0.9)])
+
+    assert {t.track_id for t in tracks} == born, "gap-based widening must reacquire the track"
     assert tracks[0].time_since_update == 0

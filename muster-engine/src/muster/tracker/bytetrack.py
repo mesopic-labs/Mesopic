@@ -73,7 +73,7 @@ class ByteTrackTracker:
         n_init: int = 2,
         track_memory_s: float = 2.0,
         cost: CostFunction = giou_cost,
-        gate_widening_per_second: float = 1.5,
+        gate_widening_per_second: float = 2.0,
     ) -> None:
         # `max_cost` gates the association COST (1 - similarity), not the similarity.
         # The upstream name (`match_thresh`) invites exactly the wrong reading, and that
@@ -92,11 +92,17 @@ class ByteTrackTracker:
         # newly-born track has no velocity estimate yet and predicts "it didn't move",
         # so a flat gate refuses exactly the step that matters most. 1.0 measured to
         # REFUSE a brisk 2.0 m/s walker (kalman.py's _MAX_WALK_SPEED_MS -- two modules
-        # must not silently disagree about how fast a person may walk) at 2 and 3 fps;
-        # 1.5 clears that walker at 1/2/3/5 fps (see the kappa table in
-        # task-7-report.md). kappa is a SWEPT axis, not a tuned constant: raising it
-        # trades birth-survival against ID-swap risk -- the tradeoff ADR-0014 names --
-        # and only the Task 9 sweep can settle where it should sit.
+        # must not silently disagree about how fast a person may walk) at 2 and 3 fps.
+        # Fix round 1 raised this to 1.5 against a pixel scale that was NOT derived from
+        # kalman.py's own metres-to-pixels formula (scale = height_px / _PERSON_HEIGHT_M)
+        # and turned out to understate the true displacement -- 1.5 still REFUSES that
+        # same walker at 3 fps once computed honestly (cost 1.3245 vs gate 1.3000,
+        # margin -0.0245; see test_a_brisk_walker_is_admitted_at_the_worst_case_fps and
+        # the kappa table in task-7-report.md's fix round 2). 2.0 clears 1/2/3/5 fps
+        # with the corrected scale (worst-case margin +0.1189 at 5 fps). kappa is a
+        # SWEPT axis, not a tuned constant: raising it trades birth-survival against
+        # ID-swap risk -- the tradeoff ADR-0014 names -- and only the Task 9 sweep can
+        # settle where it should sit.
         self._gate_widening_per_second = gate_widening_per_second
         self._tracks: list[TrackRecord] = []
         self._ids = count(1)
@@ -164,17 +170,8 @@ class ByteTrackTracker:
         if not tracks or not detections:
             return tracks, set()
         det_boxes = np.array([d.box for d in detections], dtype=np.float64)
-        costs = self.cost(np.array([t.box for t in tracks]), det_boxes, dt_s)
-        # The gate widens by the gap since each track was last OBSERVED, not since the
-        # last tick: a track missed for three ticks must bridge three ticks' worth of
-        # displacement, or a reacquisition after a multi-tick occlusion is gated no
-        # more loosely than a single missed frame -- even though it needs to be (ADR-
-        # 0014 Decision #1: dt is the gap being bridged, not the tick interval).
-        gaps = np.array(
-            [max((ts - t.last_observed_ts).total_seconds(), 0.0) for t in tracks],
-            dtype=np.float64,
-        )
-        gate = max_cost + self._gate_widening_per_second * gaps
+        costs = self._cost_matrix(tracks, det_boxes, dt_s)
+        gate = self._gate(tracks, max_cost, ts)
 
         rows, cols = linear_sum_assignment(costs)
         matched_tracks: set[int] = set()
@@ -186,6 +183,41 @@ class ByteTrackTracker:
             matched_tracks.add(row)
             claimed_dets.add(int(col))
         return [t for i, t in enumerate(tracks) if i not in matched_tracks], claimed_dets
+
+    def _cost_matrix(
+        self, tracks: list[TrackRecord], det_boxes: NDArray[np.float64], dt_s: float
+    ) -> NDArray[np.float64]:
+        """Pairwise cost, `(len(tracks), len(det_boxes))`.
+
+        KNOWN LIMITATION (fix round 2, item 6): `dt_s` here is the TICK's interval,
+        while `_gate` widens by each track's own OBSERVED gap -- the two diverge only
+        for a coasted track (a fresh match has gap == dt_s by definition). Harmless for
+        `giou_cost`, which ignores `dt_s` entirely, but `expansion_iou_cost` (a Task 9
+        sweep candidate) inflates boxes by a dt_s-scaled margin, so for a reacquired
+        track it will under-inflate relative to the gap the gate actually bridges.
+        Bounded: within one sweep cell fps is fixed, so only coasted tracks (not the
+        common case) diverge. Not fixed here on purpose -- doing it properly makes the
+        expansion per-pair rather than per-box, a real `cost.py` redesign that is not
+        landing unreviewed against the M0 date. Task 9 must carry this caveat into the
+        ADR if `expansion_iou_cost` is the sweep's chosen candidate.
+        """
+        return self.cost(np.array([t.box for t in tracks]), det_boxes, dt_s)
+
+    def _gate(self, tracks: list[TrackRecord], max_cost: float, ts: FrameTs) -> NDArray[np.float64]:
+        """Per-track accept threshold: `max_cost + kappa * (gap since last observed)`.
+
+        Widens by the gap since each track was last OBSERVED, not since the last tick:
+        a track missed for three ticks must bridge three ticks' worth of displacement,
+        so a reacquisition after a multi-tick occlusion is gated proportionally to what
+        it needs to bridge, not to a single missed frame (ADR-0014 Decision #1: dt is
+        the gap being bridged, not the tick interval).
+        """
+        gaps = np.array(
+            [max((ts - t.last_observed_ts).total_seconds(), 0.0) for t in tracks],
+            dtype=np.float64,
+        )
+        gate: NDArray[np.float64] = max_cost + self._gate_widening_per_second * gaps
+        return gate
 
     def _birth(self, unclaimed: list[Detection], ts: FrameTs) -> None:
         """Start tracks from confident detections no existing track claimed."""
