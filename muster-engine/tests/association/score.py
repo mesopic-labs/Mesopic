@@ -5,6 +5,15 @@ project measures: ADR-0014's finding is that at low fps a large fraction of real
 never reach CONFIRMED, so they never reach geometry at all. That is a silent undercount
 that looks exactly like ordinary detector recall loss, which is why it needs its own
 metric rather than being folded into IDF1.
+
+Matching is a single global one-to-one assignment per tick -- Hungarian, gated by a
+radius, exactly the way `ByteTrackTracker` itself associates tracks to detections (fix
+round 1). Matching each ground-truth walker to its independently-nearest track instead
+lets two walkers claim the same track when they are close together, which is precisely
+the `crossing` scenario's whole premise -- that independent-nearest bug manufactured
+phantom ID switches out of a tie-break, not a real tracker mistake, and it would have
+let an identity-collapsing tracker hide behind whichever walker its lone track happened
+to be nearest that tick, gaming `never_confirmed` invisibly.
 """
 
 from __future__ import annotations
@@ -12,23 +21,25 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+from numpy.typing import NDArray
+from scipy.optimize import linear_sum_assignment
 
 from muster.types import PixelBox, Track
 
-_MATCH_FRACTION_OF_HEIGHT = 0.35
+_MATCH_FRACTION_OF_HEIGHT = 0.04
 """How close a published foot-point must be to a true one, as a fraction of the true
 walker's own box height, to count as that person.
 
-A flat pixel budget is wrong on purpose here: box height falls off with depth by
-design (task-8-report.md measures ~568 px at 3 m down to ~196 px at 12 m for this
-rig), so a fixed threshold is generous for a near person and tight for a far one --
-exactly backwards, since a near person's foot-point also moves more pixels per frame
-for the same real-world speed. Scaling by the true box's own height keeps the match
-tolerance proportional to the walker's apparent size instead. 0.35 is anchored at the
-scenarios' reference depth (6 m, ~348 px tall): 0.35 * 348 ~= 122 px, matching the
-flat 120 px this replaces at the distance the scenarios are actually built around, so
-existing intuition about "how close counts" still holds there while now scaling
-honestly for everyone else.
+Derived from `group`, the scenario built to be the hard case: three walkers half a
+metre apart in depth produce a true minimum foot-point separation of ~43 px (measured
+by hand, task-8-report.md, between the z=6.0 and z=6.5 walkers at their closest
+approach). A match radius must sit comfortably below half that separation (~21.5 px) or
+it cannot tell two crowded walkers apart even when the tracker itself can -- the
+original flat 120 px, and an earlier 0.35-of-height draft (~122 px at the 6 m reference
+depth), were both roughly 5-6x too generous to ever discriminate that case. 0.04 gives
+~14 px at 6 m: comfortably inside the ~21.5 px budget, and still loose relative to
+ordinary pixel quantization, without being generous enough to blur two crowded walkers
+together.
 """
 
 
@@ -40,13 +51,15 @@ class RunScore:
     fragmentations: int
     never_confirmed: int
     mostly_tracked: float
+    merges: int = field(default=0)
     walkers: int = field(default=0)
 
     def as_row(self) -> str:
         """Render as a fixed-width line for a sweep report."""
         return (
             f"IDSW={self.id_switches:<3} FRAG={self.fragmentations:<3} "
-            f"NEVER={self.never_confirmed}/{self.walkers} MT={self.mostly_tracked:.2f}"
+            f"MERGE={self.merges:<3} NEVER={self.never_confirmed}/{self.walkers} "
+            f"MT={self.mostly_tracked:.2f}"
         )
 
 
@@ -54,6 +67,49 @@ def _true_foot_point(box: PixelBox, width: int, height: int) -> tuple[float, flo
     """Bottom-centre of `box`, normalized -- the same convention `foot_point` uses."""
     x1, _, x2, y2 = box
     return ((x1 + x2) / 2.0 / width, y2 / height)
+
+
+def _match_radius(box: PixelBox) -> float:
+    """The acceptance radius for `box`'s true owner -- see `_MATCH_FRACTION_OF_HEIGHT`."""
+    _, y1, _, y2 = box
+    return _MATCH_FRACTION_OF_HEIGHT * (y2 - y1)
+
+
+def _pixel_distance(
+    truth: tuple[float, float], published: tuple[float, float], width: int, height: int
+) -> float:
+    dx = (published[0] - truth[0]) * width
+    dy = (published[1] - truth[1]) * height
+    return float(np.hypot(dx, dy))
+
+
+def _match_tick(
+    present: dict[int, PixelBox], observed: list[Track], width: int, height: int
+) -> dict[int, int]:
+    """One tick's walker -> track assignment: a single global one-to-one solve.
+
+    Built the same way the tracker itself associates -- a distance matrix and
+    `linear_sum_assignment` -- then reject any solved pair whose distance exceeds
+    that walker's own radius. Rejecting after solving, rather than gating the matrix
+    before solving, keeps a rejected row genuinely unmatched instead of letting scipy
+    silently hand it a worse column.
+    """
+    if not present or not observed:
+        return {}
+    walker_ids = list(present)
+    points = {w: _true_foot_point(present[w], width, height) for w in walker_ids}
+    distances: NDArray[np.float64] = np.array(
+        [
+            [_pixel_distance(points[w], t.foot_point, width, height) for t in observed]
+            for w in walker_ids
+        ]
+    )
+    rows, cols = linear_sum_assignment(distances)
+    matches: dict[int, int] = {}
+    for row, col in zip(rows, cols, strict=True):
+        if distances[row, col] < _match_radius(present[walker_ids[row]]):
+            matches[walker_ids[row]] = int(observed[col].track_id)
+    return matches
 
 
 def score_run(
@@ -76,27 +132,42 @@ def score_run(
     Returns:
         The scenario's `RunScore`.
     """
-    assignments: dict[int, int] = {}  # walker_id -> the track_id it currently owns
+    walker_track: dict[int, int] = {}  # walker_id -> the track_id it currently owns
+    track_walker: dict[int, int] = {}  # track_id -> the walker_id it currently owns
+    tracked_last: dict[int, bool] = {}  # walker_id -> was it matched last time present
     seen_ticks: dict[int, int] = {}  # walker_id -> ticks it was tracked at all
     total_ticks: dict[int, int] = {}  # walker_id -> ticks it was actually present
     switches = 0
     fragmentations = 0
+    merges = 0
 
     for tracks, present in zip(published, truth, strict=True):
         observed = [t for t in tracks if t.time_since_update == 0]
-        for walker_id, box in present.items():
+        matches = _match_tick(present, observed, width, height)
+        for walker_id in present:
             total_ticks[walker_id] = total_ticks.get(walker_id, 0) + 1
-            point = _true_foot_point(box, width, height)
-            match = _nearest(observed, point, box, width, height)
-            if match is None:
-                if walker_id in assignments:
+            track_id = matches.get(walker_id)
+            if track_id is None:
+                if tracked_last.get(walker_id, False):
                     fragmentations += 1
+                tracked_last[walker_id] = False
                 continue
             seen_ticks[walker_id] = seen_ticks.get(walker_id, 0) + 1
-            previous = assignments.get(walker_id)
-            if previous is not None and previous != match:
+            tracked_last[walker_id] = True
+
+            previous_track = walker_track.get(walker_id)
+            if previous_track is not None and previous_track != track_id:
                 switches += 1
-            assignments[walker_id] = match
+            walker_track[walker_id] = track_id
+
+            # A merge is the same failure as a switch, seen from the track's side: one
+            # published identity absorbing a second real person is a distinct, silent
+            # failure (fix round 1, Critical 3) -- invisible to id_switches, which only
+            # ever looks from the walker's side.
+            previous_walker = track_walker.get(track_id)
+            if previous_walker is not None and previous_walker != walker_id:
+                merges += 1
+            track_walker[track_id] = walker_id
 
     walkers = len(total_ticks)
     never = walkers - len(seen_ticks)
@@ -106,30 +177,6 @@ def score_run(
         fragmentations=fragmentations,
         never_confirmed=never,
         mostly_tracked=mostly / walkers if walkers else 0.0,
+        merges=merges,
         walkers=walkers,
     )
-
-
-def _nearest(
-    tracks: list[Track],
-    point: tuple[float, float],
-    true_box: PixelBox,
-    width: int,
-    height: int,
-) -> int | None:
-    """The track whose foot-point is closest to `point`, if any is close enough.
-
-    The acceptance radius scales with `true_box`'s own height rather than a flat
-    pixel count -- see `_MATCH_FRACTION_OF_HEIGHT`.
-    """
-    _, y1, _, y2 = true_box
-    max_distance = _MATCH_FRACTION_OF_HEIGHT * (y2 - y1)
-    best_id: int | None = None
-    best_distance = max_distance
-    for track in tracks:
-        dx = (track.foot_point[0] - point[0]) * width
-        dy = (track.foot_point[1] - point[1]) * height
-        distance = float(np.hypot(dx, dy))
-        if distance < best_distance:
-            best_distance, best_id = distance, int(track.track_id)
-    return best_id

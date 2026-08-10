@@ -11,6 +11,16 @@ does, which matters because centre-distance costs are scale-sensitive. Verified 
 hand (task-8-report.md): a 6 m walker projects to ~348 px tall, well inside a plausible
 150-350 px band for a 1.7 m adult on this rig, and height falls monotonically with
 depth (568 px at 3 m, 348 px at 6 m, 251 px at 9 m, 196 px at 12 m).
+
+`_project` is a simplified pinhole, not a rigid rotation -- `height_m` enters the
+image-vertical term unrotated and is left out of `depth`, an approximation good to
+within a few percent at these ranges but not exact. One symptom: box aspect ratio
+(height/width) comes out ~3.4 at every depth here, where a correct rotated pinhole
+gives a ratio that itself changes with depth (e.g. ~3.14 at 3 m, ~3.70 at 12 m) as
+foreshortening bites the vertical and horizontal extents differently. The constant
+ratio this module produces is an artifact of the simplification, not evidence the
+projection is exact -- fine for a relative benchmark that compares costs against each
+other under one camera model, not fine as a claim of geometric correctness.
 """
 
 from __future__ import annotations
@@ -84,18 +94,17 @@ def _walkers(name: str) -> tuple[list[_Walker], float]:
     if name == "single":
         return [_Walker(0, (-4.0, 6.0), (1.0, 0.0), 0.0)], 6.0
     if name == "crossing":
-        # Two people on opposing paths, timed to meet at t=2s -- an integer number of
-        # seconds, which is a multiple of every standard sampling interval this
-        # benchmark is run at (1-5 fps => dt in {1, 0.5, 1/3, 0.25, 0.2}s). The tick
-        # nearest the crossing therefore always lands exactly ON it -- full box
-        # coincidence, not a graze whose outcome depends on the phase between the
-        # crossing instant and the tick grid. Verified by hand (task-8-report.md): the
-        # original +-4.0 m start crossed at t=8/3s, which at dt=0.5s (2 fps) landed
-        # exactly on the *edge* of the two walkers' overlap window and produced zero
-        # box overlap -- the scenario was silently not testing what it claimed to.
+        # Two people on opposing paths, offset slightly in depth (z=5.7 vs 6.3) so
+        # they pass as a near miss rather than a byte-identical coincidence: two
+        # people at exactly the same point produce an all-zeros 2x2 cost matrix under
+        # every candidate, which every cost function scores identically and the
+        # resulting assignment is scipy's row order, not evidence about the cost
+        # (task-8-report.md, fix round 1). Not timed to land on any particular tick
+        # grid -- a scenario tuned to a sampling rate is measuring the grid, not the
+        # tracker, and this one is deliberately checked off-grid as well as on it.
         return [
-            _Walker(0, (-3.0, 6.0), (1.0, 0.0), 0.0),
-            _Walker(1, (3.0, 6.0), (-1.0, 0.0), 0.0),
+            _Walker(0, (-4.0, 5.7), (1.0, 0.0), 0.0),
+            _Walker(1, (4.0, 6.3), (-1.0, 0.0), 0.0),
         ], 6.0
     if name == "group":
         # Three abreast, half a metre apart: every box is a plausible match for its
