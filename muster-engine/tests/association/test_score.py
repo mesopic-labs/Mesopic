@@ -1,9 +1,8 @@
 """Validate the scorer against known-bad trackers, not just the honest one.
 
-`make check` ran nothing against `tests/association` before this file existed (fix
-round 1, Important 5) -- a scorer with no tests of its own is not evidence, it is an
-unverified assumption wearing the shape of evidence. Each cheat below is a tracker that
-is obviously wrong in one specific way; the scorer must catch that way and no other.
+A scorer with no tests of its own is not evidence, it is an unverified assumption
+wearing the shape of evidence. Each cheat below is a tracker that is obviously wrong in
+one specific way; the scorer must catch that way and no other.
 """
 
 from __future__ import annotations
@@ -27,9 +26,10 @@ def _single_walker_run(z_m: float, *, dt_s: float, seed: int, box_sigma: float) 
     """A single straight-line walker at an arbitrary depth, corrupted the way
     `walk_scenario` corrupts `single`.
 
-    `single` itself is fixed at z=6 m; this reaches the depths (3 m, 12 m) fix round 2's
-    A/B needs to check the match radius's two floors across, reusing `walkers.py`'s own
-    geometry and jitter so the numbers stay consistent with the rest of the harness.
+    `single` itself is fixed at z=6 m; this reaches the other depths (3 m, 12 m) needed
+    to check the match radius's two floors across the sweep's depth range, reusing
+    `walkers.py`'s own geometry and jitter so the numbers stay consistent with the rest
+    of the harness.
     """
     rng = np.random.default_rng(seed)
     walker = _Walker(0, (-4.0, z_m), (1.0, 0.0), 0.0)
@@ -134,10 +134,11 @@ def test_new_track_each_tick_scores_badly_on_id_switches() -> None:
 def test_match_radius_tolerates_sweep_jitter_at_every_depth() -> None:
     """A perfectly-tracked walker must not read as lost purely from detection noise.
 
-    Fix round 2: the crowding-only 0.04-of-height radius gives ~7.8 px at 12 m, tighter
-    than the sweep's own box_sigma=5-8 px corruption -- a perfectly tracked far walker
-    was scoring FRAG=1-4, MT=0.00 for no reason but jitter. The radius's noise floor
-    (`_JITTER_MULTIPLE`) must clear that at every depth the sweep actually uses.
+    The crowding-only 0.04-of-height radius gives ~7.8 px at 12 m, tighter than the
+    sweep's own box_sigma=5-8 px corruption -- without a noise floor on top, a
+    perfectly tracked far walker would score badly on fragmentation and mostly-tracked
+    for no reason but jitter. The radius's noise floor (`_JITTER_MULTIPLE`) must clear
+    that at every depth the sweep actually uses.
     """
     for z_m in (3.0, 6.0, 12.0):
         for sigma in (5.0, 8.0):
@@ -153,8 +154,8 @@ def test_match_radius_tolerates_sweep_jitter_at_every_depth() -> None:
 def test_group_still_resolves_its_three_walkers_without_merging() -> None:
     """The noise floor must not have widened the radius past `group`'s own spacing.
 
-    `group`'s three walkers are the scenario the crowding floor was derived to resolve
-    (fix round 1); adding a noise floor on top (fix round 2) must not have undone that.
+    `group`'s three walkers are the scenario the crowding floor was derived to resolve;
+    adding a noise floor on top must not undo that.
     """
     run = walk_scenario("group", dt_s=0.5, seed=1)
     tracker = ByteTrackTracker(n_init=2)
@@ -170,7 +171,7 @@ def test_honest_tracker_scores_perfectly_on_perfect_input() -> None:
     """The scorer's own easy case: no corruption, no ambiguity, one walker.
 
     If this does not read exactly IDSW=0 FRAG=0 MERGE=0 NEVER=0/1 MT=1.00, the bug is
-    in the harness, not the tracker (task-8-brief.md Step 5).
+    in the harness, not the tracker.
     """
     run = walk_scenario("single", dt_s=0.2, seed=1)
     tracker = ByteTrackTracker(n_init=2)

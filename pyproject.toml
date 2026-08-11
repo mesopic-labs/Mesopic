@@ -102,9 +102,10 @@ module = ["av.*", "cv2.*", "onnxruntime.*", "paho.*"]
 ignore_missing_imports = true
 
 # scipy.optimize.linear_sum_assignment is the tracker's Hungarian solver (ADR-0014).
-# scipy.stats.ttest_rel is the ADR-0014 Task 9 sweep's significance test (test_sweep.py,
-# Fix round 1, Important 3). scipy (1.18.0, this workspace) ships no py.typed marker, so
-# mypy has no inline types to fall back on and wants the separate scipy-stubs package.
+# scipy.stats.ttest_rel is the ADR-0014 association benchmark's significance test
+# (tests/association/test_sweep.py). scipy (1.18.0, this workspace) ships no py.typed
+# marker, so mypy has no inline types to fall back on and wants the separate
+# scipy-stubs package.
 [[tool.mypy.overrides]]
 module = ["scipy.optimize", "scipy.stats"]
 ignore_missing_imports = true

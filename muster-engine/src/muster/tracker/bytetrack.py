@@ -92,49 +92,30 @@ class ByteTrackTracker:
         # kappa (ADR-0014 Decision #1): "accept iff cost < max_cost + kappa * dt_s". The
         # gate must widen with the sampling gap because displacement grows with it -- a
         # newly-born track has no velocity estimate yet and predicts "it didn't move",
-        # so a flat gate refuses exactly the step that matters most. Pre-Task-9 history,
-        # kept because it explains why kappa was never trusted as "just a constant": 1.0
-        # measured to REFUSE a brisk 2.0 m/s walker (kalman.py's _MAX_WALK_SPEED_MS) at
-        # 2 and 3 fps; 1.5 (fix round 1) still refused it at 3 fps once the pixel scale
-        # was computed honestly; 2.0 (fix round 2) cleared 1/2/3/5 fps -- all of this
-        # against the THEN-default `giou_cost`.
+        # so a flat gate refuses exactly the step that matters most.
         #
-        # Task 9's sweep (task-9-report.md) is what actually settled it, per-candidate
-        # (Constraint 1: one gate cannot serve costs with different ranges, so each of
-        # `giou_cost`, `iou_cost`, `centre_distance_cost`, `expansion_iou_cost` got its
-        # own tuned `(max_cost, kappa)`, both additive and saturating gate forms). Winner
-        # across fps in {1,2,3,5} x n_init in {1,2,3} x all four scenarios x FORTY seeds
-        # (raised from five in Fix round 1 once the original seed count turned out not
-        # to separate the top two candidates at statistical significance -- see below),
-        # under detection corruption: `centre_distance_cost`, with the LOWEST combined
-        # ID-switch + merge total of every candidate (including the `iou_cost` control),
-        # confirmed significant by a paired t-test against every rival (p<=0.014, worst
-        # case `giou_cost`'s saturating form; p<0.005 against `giou_cost` additive, the
-        # closest competitor on the primary metric). `max_cost=0.4, kappa=1.5` is
-        # `centre_distance_cost`'s own Phase A operating point, not a scaled-down guess
-        # from GIoU's numbers -- its cost is on a different scale entirely (normalized
-        # centre distance plus a scale-agreement penalty, not `1 - similarity`).
-        # `gate_form="additive"` because the saturating alternative (Constraint 4) lost
-        # to it even once correctly evaluated (Fix round 1, Critical 2:
-        # `centre_distance_cost` was wrongly entered as unbounded in the first pass,
-        # which meant the saturating form had never actually been swept for it at all --
-        # `cost.py`'s `COST_CEILING` now correctly gives it a `2.0` ceiling, the same as
-        # `giou_cost`, and the saturating form scores WORSE once swept: 27.16 vs 21.09
-        # combined switches+merges over the full grid). `n_init=2` unchanged:
-        # `n_init=1` reduces never-confirmed by ~0.02 events over the whole grid (noise)
-        # at nearly double the id-switch + merge cost -- not the "clear win" ADR-0014
-        # decision #4 requires to justify moving off 2.
+        # `cost=centre_distance_cost, max_cost=0.4, kappa=1.5, gate_form="additive"` is
+        # this cost's own measured operating point, not a scaled-down guess from GIoU's
+        # numbers -- its cost is on a different scale entirely (normalized centre
+        # distance plus a scale-agreement penalty, not `1 - similarity`). ADR-0014
+        # records the full benchmark this came from: every candidate cost tuned at its
+        # own operating point, both gate forms, swept across the product's fps/n_init/
+        # scenario grid under detection corruption. `centre_distance_cost` won on
+        # identity stability, by a margin the ADR confirms is statistically significant,
+        # and its additive gate form beat the saturating alternative once both were
+        # correctly evaluated. `n_init=2` is unchanged from the pre-benchmark default --
+        # `n_init=1` was measured and was not a clear enough win to justify moving off it
+        # (ADR-0014 Decision #4's own standard).
         #
-        # HONEST CAVEAT, not smoothed over (Fix round 1, Critical 1): at 1 fps
-        # specifically -- the product's documented floor, and where the adaptive
-        # controller lands under load -- plain `iou_cost` beats `centre_distance_cost`
-        # on the primary metric (7.53 vs 9.81 combined switches+merges, summed over all
-        # three n_init, corrupted, 40 seeds). `centre_distance_cost`'s advantage is real
-        # and decisive in aggregate (it wins at 2/3/5 fps by a wide and growing margin as
-        # fps rises), but 1 fps is not one of those cells, and the ADR must say so.
+        # HONEST CAVEAT, recorded in ADR-0014 and not smoothed over here:
+        # `centre_distance_cost`'s advantage is not uniform across fps. At the product's
+        # 1 fps floor specifically, plain `iou_cost` scores better on the primary
+        # identity-stability metric; `centre_distance_cost` wins decisively at 2/3/5 fps
+        # and in aggregate over the full grid, but 1 fps is a real exception, not a
+        # rounding error, and the ADR says so rather than claiming a universal win.
         self._gate_widening_per_second = gate_widening_per_second
-        # Gate FORM (ADR-0014 Task 9, Constraint 4): see `_gate`'s docstring for what
-        # "additive" vs "saturating" mean and why the latter needs a cost ceiling.
+        # Gate FORM (ADR-0014): see `_gate`'s docstring for what "additive" vs
+        # "saturating" mean and why the latter needs a cost ceiling.
         self._gate_form = gate_form
         self._ceiling = self._resolve_ceiling(gate_form, cost)
         self._tracks: list[TrackRecord] = []
@@ -147,10 +128,8 @@ class ByteTrackTracker:
 
         Resolved eagerly so a misconfiguration (a saturating gate paired with an
         unbounded cost) fails at construction, not on the first call to `update`. Every
-        cost `cost.py`'s `COSTS` currently registers has a finite ceiling -- including
-        `centre_distance_cost`, wrongly entered as unbounded in the first pass at this
-        (task-9-report.md's "Fix round 1", Critical 2) -- so this guard is not reachable
-        today, but stays here for whatever candidate joins `COSTS` next.
+        cost `cost.py`'s `COSTS` currently registers has a finite ceiling, so this guard
+        is not reachable today, but stays here for whatever candidate joins `COSTS` next.
         """
         if gate_form != "saturating":
             return None
@@ -244,17 +223,16 @@ class ByteTrackTracker:
     ) -> NDArray[np.float64]:
         """Pairwise cost, `(len(tracks), len(det_boxes))`.
 
-        KNOWN LIMITATION (fix round 2, item 6): `dt_s` here is the TICK's interval,
-        while `_gate` widens by each track's own OBSERVED gap -- the two diverge only
-        for a coasted track (a fresh match has gap == dt_s by definition). Harmless for
-        `giou_cost`, which ignores `dt_s` entirely, but `expansion_iou_cost` (a Task 9
-        sweep candidate) inflates boxes by a dt_s-scaled margin, so for a reacquired
-        track it will under-inflate relative to the gap the gate actually bridges.
-        Bounded: within one sweep cell fps is fixed, so only coasted tracks (not the
-        common case) diverge. Not fixed here on purpose -- doing it properly makes the
-        expansion per-pair rather than per-box, a real `cost.py` redesign that is not
-        landing unreviewed against the M0 date. Task 9 must carry this caveat into the
-        ADR if `expansion_iou_cost` is the sweep's chosen candidate.
+        KNOWN LIMITATION: `dt_s` here is the TICK's interval, while `_gate` widens by
+        each track's own OBSERVED gap -- the two diverge only for a coasted track (a
+        fresh match has gap == dt_s by definition). Harmless for `giou_cost`, which
+        ignores `dt_s` entirely, but `expansion_iou_cost` inflates boxes by a
+        dt_s-scaled margin, so for a reacquired track it will under-inflate relative to
+        the gap the gate actually bridges. Bounded: within one fps regime fps is fixed,
+        so only coasted tracks (not the common case) diverge. Not fixed here on purpose
+        -- doing it properly makes the expansion per-pair rather than per-box, a real
+        `cost.py` redesign that is not landing unreviewed against the M0 date. ADR-0014
+        records this as an open caveat on `expansion_iou_cost`'s benchmark standing.
         """
         return self.cost(np.array([t.box for t in tracks]), det_boxes, dt_s)
 
@@ -266,7 +244,7 @@ class ByteTrackTracker:
         missed frame (ADR-0014 Decision #1: dt is the gap being bridged, not the tick
         interval).
 
-        Two forms (`gate_form`, ADR-0014 Task 9 Constraint 4):
+        Two forms (`gate_form`, ADR-0014's gate-form decision):
 
         * `additive`: `max_cost + kappa * gap`. ADR-0014 Decision #1's own formula.
           Unbounded, so past some gap it exceeds a bounded cost's ceiling and refuses

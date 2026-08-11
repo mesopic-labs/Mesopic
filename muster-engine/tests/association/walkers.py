@@ -7,10 +7,10 @@ this module never allocates an image, so the privacy invariant is untouched.
 Camera model: 3 m mount, 30 degrees down-tilt, 1080p, ~70 degrees horizontal FOV.
 A person is a 1.7 m x 0.5 m cylinder walking at 1.5 m/s (algorithms.md §3.3.1's
 reference walker). Box size therefore falls off with distance the way real footage
-does, which matters because centre-distance costs are scale-sensitive. Verified by
-hand (task-8-report.md): a 6 m walker projects to ~348 px tall, well inside a plausible
-150-350 px band for a 1.7 m adult on this rig, and height falls monotonically with
-depth (568 px at 3 m, 348 px at 6 m, 251 px at 9 m, 196 px at 12 m).
+does, which matters because centre-distance costs are scale-sensitive. Reproducible
+directly from `_project`: a 6 m walker projects to ~348 px tall, well inside a
+plausible 150-350 px band for a 1.7 m adult on this rig, and height falls monotonically
+with depth (568 px at 3 m, 348 px at 6 m, 251 px at 9 m, 196 px at 12 m).
 
 `_project` is a simplified pinhole, not a rigid rotation -- `height_m` enters the
 image-vertical term unrotated and is left out of `depth`, an approximation good to
@@ -27,13 +27,12 @@ is not evidence for ranking them: the walkers move at exact constant velocity wi
 zero process noise, so `BoxKalmanFilter`'s constant-velocity prediction is already
 correct every tick, leaving nothing for any cost function to disambiguate. The costs
 only diverge once detection corruption (`recall < 1.0` and/or `box_sigma > 0.0`) makes
-the prediction genuinely uncertain -- confirmed by hand (task-8-report.md, fix round
-1): plain `iou_cost` swaps and merges identities on a corrupted `crossing` run where
-`giou_cost`, `centre_distance_cost` and `expansion_iou_cost` do not. **Task 9's
-decision numbers must come from corrupted runs.** Clean-input `crossing` stays in the
-sweep as a sanity check -- an all-tie result there proves the harness is not
-fabricating discrimination it has no basis for -- but a clean-input tie is not a
-finding about which cost to prefer.
+the prediction genuinely uncertain: plain `iou_cost` swaps and merges identities on a
+corrupted `crossing` run where `giou_cost`, `centre_distance_cost` and
+`expansion_iou_cost` do not. **ADR-0014's decision numbers must come from corrupted
+runs.** Clean-input `crossing` stays in the sweep as a sanity check -- an all-tie
+result there proves the harness is not fabricating discrimination it has no basis for
+-- but a clean-input tie is not a finding about which cost to prefer.
 """
 
 from __future__ import annotations
@@ -61,15 +60,15 @@ _SPEED_MS = 1.5
 SCENARIOS = ("single", "crossing", "group", "entering")
 
 _GROUP_DEPTH_SPACING_M = 0.7
-"""`group`'s three walkers' depth spacing (ADR-0014 Task 9, Constraint 3).
+"""`group`'s three walkers' depth spacing.
 
-Was `0.5`, giving a true minimum foot-point separation of **43.1 px** at closest
+A narrower `0.5` gives a true minimum foot-point separation of **43.1 px** at closest
 approach (`t≈2.67s`, between the two nearest walkers) -- half of that, 21.5 px, is the
 budget `score.py`'s match radius must stay under to tell them apart. That budget could
 not also clear the sweep's own detection jitter at its upper bound (`box_sigma=8`px):
-the noise floor there is `3 * 8 = 24` px, which exceeds 21.5 px, so `score_run` raised
-`ValueError` rather than return a `NEVER`/`MT` number that would not have meant what it
-claimed (task-8-report.md, fix round 2).
+the noise floor there is `3 * 8 = 24` px, which exceeds 21.5 px, so `score_run` raises
+`ValueError` rather than return a `NEVER`/`MT` number that would not mean what it
+claimed.
 
 The spacing had to widen, not the jitter this scenario is swept at -- `group` is the
 one scenario built to stress crowding, and capping its `box_sigma` to dodge the problem
@@ -79,9 +78,8 @@ jitter bound, hiding exactly the regime ADR-0014 cares about.
 `0.7` gives a true minimum foot-point separation of **56.1 px** (half: 28.0 px) --
 comfortably (not razor-thin: ~4 px / ~14% headroom) above the 24 px `sigma=8` noise
 floor, while still recognisably "three people close together" rather than a spacing
-chosen to make the problem disappear. Measured directly by scanning the scenario's
-ground truth at `dt=0.01s` over its full 6 s run; see `task-9-report.md` for the full
-spacing/separation table this value was chosen from.
+chosen to make the problem disappear. Reproducible directly by scanning the scenario's
+own ground truth at `dt=0.01s` over its full 6 s run (`_box_for`/`_walkers`, above).
 """
 
 # One empty frame, reused for every tick. The tracker reads ts/width/height only.
@@ -135,10 +133,10 @@ def _walkers(name: str) -> tuple[list[_Walker], float]:
         # they pass as a near miss rather than a byte-identical coincidence: two
         # people at exactly the same point produce an all-zeros 2x2 cost matrix under
         # every candidate, which every cost function scores identically and the
-        # resulting assignment is scipy's row order, not evidence about the cost
-        # (task-8-report.md, fix round 1). Not timed to land on any particular tick
-        # grid -- a scenario tuned to a sampling rate is measuring the grid, not the
-        # tracker, and this one is deliberately checked off-grid as well as on it.
+        # resulting assignment is scipy's row order, not evidence about the cost.
+        # Not timed to land on any particular tick grid -- a scenario tuned to a
+        # sampling rate is measuring the grid, not the tracker, and this one is
+        # deliberately checked off-grid as well as on it.
         return [
             _Walker(0, (-4.0, 5.7), (1.0, 0.0), 0.0),
             _Walker(1, (4.0, 6.3), (-1.0, 0.0), 0.0),

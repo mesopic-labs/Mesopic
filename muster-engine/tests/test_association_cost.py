@@ -16,6 +16,7 @@ import pytest
 from numpy.typing import NDArray
 
 from muster.tracker.cost import (
+    COST_CEILING,
     COSTS,
     CostFunction,
     centre_distance_cost,
@@ -48,6 +49,33 @@ def test_candidate_costs_keep_increasing_past_zero_overlap(cost_fn: CostFunction
     """Strictly monotone where IoU is flat -- the property that makes matching possible."""
     costs = [float(cost_fn(_box(0.0), _box(d), DT)[0, 0]) for d in SEPARATIONS]
     assert all(a < b for a, b in itertools.pairwise(costs)), costs
+
+
+def test_scale_penalty_weight_is_pinned() -> None:
+    """`_SCALE_PENALTY_WEIGHT` (cost.py) sets `centre_distance_cost`'s scale-agreement
+    term and, through it, the cost's own ceiling (`COST_CEILING`). Same-centre boxes
+    isolate the term: separation is exactly zero, so the whole cost is the scale
+    penalty alone -- which is what lets this test catch a change to the weight that no
+    other test in the suite would notice.
+    """
+    track = np.array([[0.0, 0.0, 40.0, 100.0]], dtype=np.float64)  # w=40, h=100
+    det = np.array([[-20.0, -50.0, 60.0, 150.0]], dtype=np.float64)  # same centre, w=80, h=200
+    cost = float(centre_distance_cost(track, det, DT)[0, 0])
+    # ratio = |a-b|/(a+b) for width and height: |40-80|/120 = 1/3, |100-200|/300 = 1/3.
+    # The literal 0.5 below is the shipped weight, not a re-import of the constant --
+    # re-importing it would make this test tautological under the exact mutation
+    # (0.5 -> 1.0) it exists to catch.
+    assert cost == pytest.approx(0.5 * (1.0 / 3.0 + 1.0 / 3.0), abs=1e-9)
+
+
+def test_centre_distance_ceiling_matches_its_derivation() -> None:
+    """`COST_CEILING["centre_distance"]` is computed as `1.0 + 2.0 * _SCALE_PENALTY_
+    WEIGHT` (cost.py) rather than a bare `2.0`, so the two can never silently drift
+    apart. Pinning the current shipped value here too (not just re-deriving it from the
+    same expression `cost.py` uses) means a change to that expression's shape -- not
+    only its inputs -- is still visible as a test failure.
+    """
+    assert COST_CEILING["centre_distance"] == pytest.approx(2.0)
 
 
 def test_overlapping_boxes_cost_less_than_separated_ones() -> None:

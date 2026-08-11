@@ -7,6 +7,11 @@ boundary is a frozen `muster.types.Track`; this record stays inside.
 frames, but its stated intent is that memory stay stable in wall-clock terms as fps
 flexes. Every tick already carries a UTC timestamp, so comparing timestamps directly is
 that intent with the conversion -- and its whole class of off-by-fps bugs -- removed.
+
+The lifecycle below (tentative -> confirmed -> lost -> expired, `hits`, `n_init`,
+`time_since_update`) follows the state machine common to the motion-only MOT
+literature (SORT/DeepSORT/ByteTrack all share it); the names are that field's
+conventional vocabulary, not lineage from any one implementation.
 """
 
 from __future__ import annotations
@@ -70,8 +75,17 @@ class TrackRecord:
         self.score = score
         self.hits += 1
         self.time_since_update = 0
-        self.last_observed_ts = ts
-        if self.state is TrackState.LOST or self.hits >= self._n_init:
+        # Never let an out-of-order frame (an RTSP reconnect glitch) rewind this: `_gate`
+        # and `is_expired` both read `last_observed_ts` to size a gap, and a rewind would
+        # shrink that gap -- tightening the gate exactly when a stray late frame should
+        # have no effect at all -- and could expire the track early. `bytetrack.py`'s
+        # `_elapsed` guards the tracker-wide clock the same way, for the same reason.
+        self.last_observed_ts = max(ts, self.last_observed_ts)
+        # `CONFIRMED` only ever transitions to `LOST` after `hits >= self._n_init` already
+        # held (see `mark_missed`), and `hits` only grows -- so `hits >= self._n_init` is
+        # already true on every revival from `LOST`, making a separate `state is LOST`
+        # check redundant with the counter check on the very next line.
+        if self.hits >= self._n_init:
             self.state = TrackState.CONFIRMED
 
     def mark_missed(self) -> None:

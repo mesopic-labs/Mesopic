@@ -30,23 +30,23 @@ _MATCH_FRACTION_OF_HEIGHT = 0.04
 """How close a published foot-point must be to a true one, as a fraction of the true
 walker's own box height, to count as that person -- the crowding floor.
 
-Derived from `group`, the scenario built to be the hard case: three walkers half a
-metre apart in depth produce a true minimum foot-point separation of ~43 px (measured
-by hand, task-8-report.md, between the z=6.0 and z=6.5 walkers at their closest
-approach). A match radius must sit comfortably below half that separation (~21.5 px) or
-it cannot tell two crowded walkers apart even when the tracker itself can -- the
-original flat 120 px, and an earlier 0.35-of-height draft (~122 px at the 6 m reference
-depth), were both roughly 5-6x too generous to ever discriminate that case. 0.04 gives
-~14 px at 6 m: comfortably inside the ~21.5 px budget.
+Derived from `group`, the scenario built to be the hard case: at its original (now
+superseded) spacing, three walkers half a metre apart in depth produced a true minimum
+foot-point separation of ~43 px between the two nearest walkers at their closest
+approach, reproducible directly from `walkers.py`'s own geometry. A match radius must
+sit comfortably below half that separation (~21.5 px) or it cannot tell two crowded
+walkers apart even when the tracker itself can -- a flat radius in pixel space, or one
+scaled off a fixed reference depth, is 5-6x too generous to ever discriminate that
+case. 0.04 gives ~14 px at 6 m: comfortably inside the ~21.5 px budget.
 
-This floor alone is not sufficient across the depth range, though (fix round 2): at
-12 m it gives only ~7.8 px, tighter than the sweep's own detection jitter (sigma=5-8 px,
+This floor alone is not sufficient across the depth range, though: at 12 m it gives
+only ~7.8 px, tighter than the sweep's own detection jitter (sigma=5-8 px,
 `walk_scenario`'s `box_sigma`), so a perfectly tracked far walker reads as lost purely
 because the *detection* moved, not the track. See `_JITTER_MULTIPLE` for the other
 floor the radius must also clear, and `_assert_radius_resolves_crowding` for the check
 that the two floors haven't been asked to do something impossible in a given run.
 
-`group`'s own spacing widened `0.5m -> 0.7m` in Task 9 (`walkers.py`'s
+`group`'s own spacing widened from that original `0.5m` (`walkers.py`'s
 `_GROUP_DEPTH_SPACING_M`) so the scenario resolves at the sweep's upper jitter bound
 (`box_sigma=8`); the ~43 px / ~0.5 m figures above describe the geometry this constant
 was originally derived against, not the geometry `group` runs at now. `0.04` itself is
@@ -57,13 +57,15 @@ _JITTER_MULTIPLE = 3.0
 """How many detection-jitter standard deviations the match radius must clear -- the
 noise floor.
 
-Confirmed by A/B (fix round 2): a perfectly tracked walker at 12 m (`IDSW=0` the whole
-run) scored `FRAG=1-4, MT=0.00` under the sweep's own sigma=8 px corruption at the
+A perfectly tracked walker at 12 m (`IDSW=0` the whole run) scores badly on
+fragmentation and mostly-tracked under the sweep's own sigma=8 px corruption at the
 crowding-only 0.04-of-height radius (~7.8 px there), because ordinary jitter routinely
-exceeds a radius that tight. Three standard deviations covers ~99.7% of a Gaussian's
-mass, so genuine detection noise almost never exceeds this floor by chance, while a
-radius this wide still cannot blur two walkers together unless `group`'s own crowding
-floor also fails -- see `_assert_radius_resolves_crowding`.
+exceeds a radius that tight (`tests/association/test_score.py`'s
+`test_match_radius_tolerates_sweep_jitter_at_every_depth` pins this directly). Three
+standard deviations covers ~99.7% of a Gaussian's mass, so genuine detection noise
+almost never exceeds this floor by chance, while a radius this wide still cannot blur
+two walkers together unless `group`'s own crowding floor also fails -- see
+`_assert_radius_resolves_crowding`.
 """
 
 
@@ -101,7 +103,7 @@ def _match_radius(box: PixelBox, box_sigma: float) -> float:
     minimum true separation between walkers currently present (checked separately, at
     scoring time, by `_assert_radius_resolves_crowding`) or it cannot tell two crowded
     people apart. Both floors are real and they pull in opposite directions across the
-    depth range (fix round 2) -- neither alone is sufficient.
+    depth range -- neither alone is sufficient.
     """
     _, y1, _, y2 = box
     height_floor = _MATCH_FRACTION_OF_HEIGHT * (y2 - y1)
@@ -128,7 +130,7 @@ def _assert_radius_resolves_crowding(
     reasonable. A radius wide enough to tolerate jitter but too wide to separate two
     close walkers would silently return a `never_confirmed`/`mostly_tracked` number
     that means nothing -- a merge the scorer cannot see is worse than a scorer that
-    refuses to run (fix round 2).
+    refuses to run.
     """
     ids = list(present)
     points = {w: _true_foot_point(present[w], width, height) for w in ids}
@@ -245,8 +247,8 @@ def score_run(
 
             # A merge is the same failure as a switch, seen from the track's side: one
             # published identity absorbing a second real person is a distinct, silent
-            # failure (fix round 1, Critical 3) -- invisible to id_switches, which only
-            # ever looks from the walker's side.
+            # failure -- invisible to id_switches, which only ever looks from the
+            # walker's side.
             previous_walker = track_walker.get(track_id)
             if previous_walker is not None and previous_walker != walker_id:
                 merges += 1

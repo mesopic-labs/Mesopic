@@ -1,38 +1,37 @@
-"""The ADR-0014 sweep, and the regression guard that keeps its answer honest.
+"""The ADR-0014 association benchmark, and the regression guard that keeps its answer
+honest.
 
 The sweep is marked `slow` -- it is a study, run when the decision is being made or
 revisited, not on every commit. `test_the_chosen_cost_still_beats_a_tuned_iou_baseline`
 is the part that runs always: it is what stops the measured decision from silently
 rotting when someone tunes a threshold two years from now.
 
-Structured in two phases (task-9-report.md has both tables in full):
+Structured in two phases (ADR-0014's Benchmark result section has both tables in full):
 
 * **Phase A** tunes each (cost function, gate form) pair's own `(max_cost, kappa)`.
-  Constraint 1 (task-9-brief.md's six carried-forward constraints): the candidates'
-  cost ranges do not overlap (`iou_cost`/`expansion_iou_cost` in `[0, 1]`, `giou_cost`/
-  `centre_distance_cost` in `[0, 2)`), so one fixed gate cannot serve all of them --
-  sweeping candidates against a shared gate would measure gate calibration, not cost
-  quality. Each candidate is tuned at its own best operating point instead. Tuned
-  jointly across `n_init in {1, 2, 3}` (Fix round 1, Important 6) rather than at a
-  single fixed `n_init`, which the first pass got wrong: at `n_init=2` alone every
-  `centre_distance_cost` cell tied at `never-confirmed=0`, so selection silently fell
-  through to the simplicity tiebreak (smallest kappa) on a metric that was not actually
-  discriminating -- aggregating over all three `n_init` breaks that degenerate tie
-  honestly.
+  The candidates' cost ranges do not overlap (`iou_cost`/`expansion_iou_cost` in
+  `[0, 1]`, `giou_cost`/`centre_distance_cost` in `[0, 2)`), so one fixed gate cannot
+  serve all of them -- sweeping candidates against a shared gate would measure gate
+  calibration, not cost quality. Each candidate is tuned at its own best operating
+  point instead. Tuned jointly across `n_init in {1, 2, 3}` rather than at a single
+  fixed `n_init`: at `n_init=2` alone every `centre_distance_cost` cell ties at
+  `never-confirmed=0`, so selection would silently fall through to the simplicity
+  tiebreak (smallest kappa) on a metric that is not actually discriminating --
+  aggregating over all three `n_init` breaks that degenerate tie honestly.
 * **Phase B** compares the tuned candidates across fps x n_init x scenario x seed.
 
-Both phases run under detection corruption only (Constraint 2): on clean input all four
-costs tie, because exact constant-velocity motion makes the Kalman prediction exact and
-leaves nothing for any cost to disambiguate -- an all-tie result is evidence the harness
-does not fabricate discrimination, not a ranking result. `test_clean_input_is_a_tie`
-keeps that sanity check in the suite without letting it leak into the decision.
+Both phases run under detection corruption only: on clean input all four costs tie,
+because exact constant-velocity motion makes the Kalman prediction exact and leaves
+nothing for any cost to disambiguate -- an all-tie result is evidence the harness does
+not fabricate discrimination, not a ranking result. `test_clean_input_is_a_tie` keeps
+that sanity check in the suite without letting it leak into the decision.
 
-Runtime: a single `_run` call is ~1.3ms (measured). At the seed counts below (Fix round
-1 raised these for significance -- Important 3 -- and widened Phase A's tuning to the
-full `n_init` grid -- Important 6), the full file (Phase A + Phase B +
-`test_significance_of_the_ranking` + the clean-input check) measures **180s (3 minutes),
-measured directly** (`pytest -m slow -s`, wall clock). Comfortably under the 15 minute
-budget; nothing was cut to get there.
+Runtime: a single `_run` call is ~1.3ms. At the seed counts below (raised for
+statistical significance -- see `SEEDS`'s own docstring -- with Phase A's tuning
+widened to the full `n_init` grid), the full file (Phase A + Phase B +
+`test_significance_of_the_ranking` + the clean-input check) measures roughly 180s
+(3 minutes), wall clock, under `pytest -m slow -s`. Comfortably under the suite's slow-
+test budget; nothing was cut to get there.
 """
 
 from __future__ import annotations
@@ -56,13 +55,12 @@ GateForm = Literal["additive", "saturating"]
 FPS_GRID = (5.0, 3.0, 2.0, 1.0)
 N_INIT_GRID = (1, 2, 3)
 SEEDS = tuple(range(1, 41))
-"""40, not the original 5 (Fix round 1, Important 3): at 5 seeds the full-grid ranking
-between the top two candidates was not statistically significant (paired t, p~0.20) --
-a real property of the noise floor, not a mistake, but one the report must not paper
-over with a ranking stated as fact. `test_significance_of_the_ranking` computes and
-prints the actual statistic at this seed count; see task-9-report.md's Fix round 1 for
-the count-vs-significance table that justified stopping at 40 rather than going higher
-or lower."""
+"""40: at 5 seeds the full-grid ranking between the top two candidates was not
+statistically significant (paired t, p~0.20) -- a real property of the noise floor,
+not a mistake, but one that must not be papered over with a ranking stated as fact.
+`test_significance_of_the_ranking` computes and prints the actual statistic at this
+seed count; ADR-0014's Benchmark result section records the count-vs-significance
+comparison that justified stopping at 40 rather than going higher or lower."""
 
 GUARD_SEEDS = (1, 2)
 """The regression guard runs on the fast path, so it takes a subset. If the margin it
@@ -73,10 +71,10 @@ TUNE_SEEDS = tuple(range(1, 11))
 staying well short of Phase B's full 40, so Phase B's own numbers are not just
 re-reporting what Phase A already saw with more seeds."""
 
-# The corrupted operating point every decision number in this file comes from
-# (Constraint 2). `box_sigma` is deliberately the sweep's own UPPER jitter bound, not a
-# gentler value -- Constraint 3 requires `group`, the one scenario built to stress
-# crowding, to run at that bound rather than being spared it via a lower sigma.
+# The corrupted operating point every decision number in this file comes from.
+# `box_sigma` is deliberately the sweep's own UPPER jitter bound, not a gentler value --
+# `group`, the one scenario built to stress crowding, must run at that bound rather
+# than being spared it via a lower sigma.
 RECALL = 0.85
 BOX_SIGMA = 8.0
 FALSE_POSITIVE_RATE = 0.08
@@ -86,24 +84,22 @@ CLEAN = {"recall": 1.0, "box_sigma": 0.0, "false_positive_rate": 0.0}
 # Stage 2 (low-confidence recovery) must stay STRICTER than stage 1 (bytetrack.py's own
 # invariant, pinned by test_stage_2s_gate_is_tighter_than_stage_1s) -- preserved across
 # the sweep by keeping a fixed ratio to whatever max_cost Phase A is trying, rather than
-# treating it as a second free axis the brief never asked Task 9 to tune.
+# treating it as a second free axis to tune independently.
 _MAX_COST_LOW_RATIO = 0.625  # bytetrack.py's own shipped ratio: 0.5 / 0.8
 
-# Per-(cost, gate form) coarse grids (Constraint 1: each candidate's own scale, not a
-# shared one). Ranges anchored on the cold-start costs a brisk (kalman.py's
-# `_MAX_WALK_SPEED_MS`) walker's first post-birth match produces at 1-5 fps -- measured
-# directly (task-9-report.md): iou/expansion_iou saturate at their 1.0 ceiling by 2 fps,
-# giou ranges ~1.08-1.71, centre_distance ~0.22-0.69. Kappa's saturating-form range runs
-# higher than its additive-form range because the saturating gate MULTIPLIES its
-# widening by `(ceiling - max_cost)` (see bytetrack.py's `_gate`: `ceiling - (ceiling -
-# max_cost) * exp(-kappa * gap)`), so an additive-scaled kappa would barely move it.
+# Per-(cost, gate form) coarse grids: each candidate's own scale, not a shared one --
+# the cost ranges do not overlap (module docstring), so one grid cannot serve all four.
+# Ranges anchored on the cold-start costs a brisk (kalman.py's `_MAX_WALK_SPEED_MS`)
+# walker's first post-birth match produces at 1-5 fps: iou/expansion_iou saturate at
+# their 1.0 ceiling by 2 fps, giou ranges roughly 1.08-1.71, centre_distance roughly
+# 0.22-0.69. Kappa's saturating-form range runs higher than its additive-form range
+# because the saturating gate MULTIPLIES its widening by `(ceiling - max_cost)` (see
+# bytetrack.py's `_gate`: `ceiling - (ceiling - max_cost) * exp(-kappa * gap)`), so an
+# additive-scaled kappa would barely move it.
 #
-# `centre_distance_cost` has a saturating grid too (Fix round 1, Critical 2): it was
-# wrongly treated as unbounded in the first pass -- both its terms are self-normalizing
-# and it is in fact bounded by 2.0, the same ceiling as `giou_cost` (`cost.py`'s
-# `COST_CEILING` docstring has the measurement) -- so a saturating gate is well-defined
-# for it, and the omission meant Constraint 4 was never actually checked for the
-# candidate the sweep went on to choose.
+# `centre_distance_cost` gets a saturating grid too: both its terms are
+# self-normalizing and it is in fact bounded by 2.0, the same ceiling as `giou_cost`
+# (`cost.py`'s `COST_CEILING` docstring), so a saturating gate is well-defined for it.
 GATE_FORMS_BY_COST: dict[str, tuple[GateForm, ...]] = {
     "iou": ("additive", "saturating"),
     "giou": ("additive", "saturating"),
@@ -225,17 +221,16 @@ def _tune(cost_name: str, gate_form: GateForm) -> OperatingPoint:
     Selection is lexicographic, in the ADR's own stated priority order: first the set of
     cells tied (exactly) for the lowest mean never-confirmed, then within that set the
     one with the lowest mean `id_switches + merges`, then -- among any cells still tied
-    -- the smallest kappa and max_cost (Step 3's simplicity tiebreak: a more
-    conservative gate is easier to reason about when nothing else distinguishes two
-    cells).
+    -- the smallest kappa and max_cost (a more conservative gate is easier to reason
+    about when nothing else distinguishes two cells).
 
-    Aggregated jointly across `N_INIT_GRID`, not a single fixed `n_init` (Fix round 1,
-    Important 6): tuning at `n_init=2` alone let every `centre_distance_cost` cell tie
-    at `never-confirmed=0` (2-3 confirming hits arrive well within any of the grid's
-    gates at that n_init), so selection silently fell through to the kappa tiebreak on
-    a metric that was not actually discriminating between cells. `n_init` is still a
-    Phase B axis in its own right (ADR-0014 decision #4) -- this does not tune it, it
-    just stops Phase A's OWN selection from resting on a degenerate slice of the grid.
+    Aggregated jointly across `N_INIT_GRID`, not a single fixed `n_init`: tuning at
+    `n_init=2` alone lets every `centre_distance_cost` cell tie at `never-confirmed=0`
+    (2-3 confirming hits arrive well within any of the grid's gates at that n_init), so
+    selection would silently fall through to the kappa tiebreak on a metric that is not
+    actually discriminating between cells. `n_init` is still a Phase B axis in its own
+    right (ADR-0014 Decision #4) -- this does not tune it, it just stops Phase A's OWN
+    selection from resting on a degenerate slice of the grid.
     """
     max_costs, kappas = _GRIDS[cost_name][gate_form]
     points = [
@@ -268,8 +263,8 @@ def _print_row(cost_name: str, gate_form: str, prefix: str, score: Score) -> Non
 
 @pytest.mark.slow
 def test_phase_a_tune_each_candidate() -> None:
-    """Not an assertion -- the study. Run with `-s`; the printed table is task-9-
-    report.md's Phase A, in full."""
+    """Not an assertion -- the study. Run with `-s`; the printed table is ADR-0014's
+    Benchmark result Phase A table, in full."""
     print(
         f"\n{'cost':<18}{'gate':<12}{'max_cost':>10}{'kappa':>8}{'IDSW':>8}{'NEVER':>8}{'MERGE':>8}{'MT':>8}"
     )
@@ -280,8 +275,8 @@ def test_phase_a_tune_each_candidate() -> None:
 
 @pytest.mark.slow
 def test_phase_b_compare_tuned_candidates() -> None:
-    """Not an assertion -- the study. Run with `-s`; the printed table is task-9-
-    report.md's Phase B, the table Task 10 pastes into the ADR."""
+    """Not an assertion -- the study. Run with `-s`; the printed table is the one
+    ADR-0014's Benchmark result section carries as its Phase B table."""
     print(
         f"\n{'cost':<18}{'gate':<12}{'fps':>5}{'n_init':>8}{'IDSW':>8}{'NEVER':>8}{'MERGE':>8}{'MT':>8}"
     )
@@ -306,11 +301,12 @@ def _grid_sum(candidate: Candidate, seed: int) -> float:
 
 @pytest.mark.slow
 def test_significance_of_the_ranking() -> None:
-    """Not an assertion -- the study. Fix round 1, Important 3: the first pass reported
-    a ranking (by mean full-grid ID-switches + merges) without checking whether the
-    seeds it ran actually separated the candidates. They did not, at 5 seeds (paired t,
-    p~0.20 against the runner-up) -- a real property of the noise floor at that seed
-    count, not a mistake, but the report stated the ranking as settled fact regardless.
+    """Not an assertion -- the study. A ranking by mean full-grid ID-switches + merges
+    is worthless without checking whether the seeds it ran actually separated the
+    candidates -- at 5 seeds they do not (paired t, p~0.20 against the runner-up), a
+    real property of the noise floor at that seed count, not evidence of a mistake, but
+    something a decision must not paper over by stating the ranking as settled fact
+    regardless.
 
     Runs a paired t-test (`scipy.stats.ttest_rel`, one observation per seed: that seed's
     total `id_switches + merges` across the whole fps x n_init x scenario grid) between
@@ -344,7 +340,8 @@ def test_significance_of_the_ranking() -> None:
 
 @pytest.mark.slow
 def test_clean_input_is_a_tie() -> None:
-    """Constraint 2's sanity check, kept in the suite but never used to rank.
+    """The corruption-only decision's sanity check, kept in the suite but never used to
+    rank.
 
     Every candidate's own Phase A operating point, replayed under clean (uncorrupted)
     input: an all-tie `NEVER`/`IDSW` result here is evidence the harness is not
@@ -359,23 +356,20 @@ def test_clean_input_is_a_tie() -> None:
 
 # --- The fast regression guard -------------------------------------------------------
 #
-# Frozen from Phase A's own measurement (task-9-report.md), not recomputed here: the
-# fast path must not re-run the grid search on every commit, and a hardcoded, documented
-# baseline is what makes this a REGRESSION guard rather than a second copy of the study.
+# Frozen from Phase A's own measurement, not recomputed here: the fast path must not
+# re-run the grid search on every commit, and a hardcoded, documented baseline is what
+# makes this a REGRESSION guard rather than a second copy of the study.
 _TUNED_IOU_CANDIDATE = Candidate(cost_name="iou", gate_form="additive", max_cost=0.95, kappa=0.25)
-"""`iou_cost`'s own Phase A winner (task-9-report.md, Phase A table) -- the fair
-baseline this guard holds the shipped default to. Comparing against `iou_cost` run at
-the SHIPPED DEFAULT's gate settings would measure whose gate the defaults happen to
-fit, not whether the chosen cost function is actually better once IoU gets its own fair
-tuning too.
+"""`iou_cost`'s own Phase A winner -- the fair baseline this guard holds the shipped
+default to. Comparing against `iou_cost` run at the SHIPPED DEFAULT's gate settings
+would measure whose gate the defaults happen to fit, not whether the chosen cost
+function is actually better once IoU gets its own fair tuning too.
 
-`max_cost` was wrongly frozen as `0.85` in the first pass -- transcribed from an
-intermediate run rather than the Phase A table actually printed alongside it, which
-already said `0.95` (Fix round 1, Important 7). At the wrong value the guard's own
-"real margin" was partly an artifact of an under-tuned baseline (NEVER=1.375, MT=0.042
-at 0.85 vs NEVER=0.000, MT=0.448 at the true 0.95, against this candidate's own
-GUARD_SEEDS numbers) -- a guard that flatters the shipped default by comparing it to a
-strawman is worse than no guard. Fixed to match Phase A's actual, reproducible output."""
+Frozen against Phase A's actual, reproducible output (`test_phase_a_tune_each_
+candidate`'s printed table) rather than transcribed from memory: a guard that flatters
+the shipped default by comparing it to an under-tuned baseline is worse than no guard
+at all, since it would pass regardless of whether the underlying decision still holds.
+"""
 
 
 def test_the_chosen_cost_still_beats_a_tuned_iou_baseline() -> None:

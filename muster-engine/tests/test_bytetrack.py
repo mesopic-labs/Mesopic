@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from muster.tracker.bytetrack import ByteTrackTracker
-from muster.tracker.cost import CostFunction, ceiling_for, giou_cost, iou_cost
+from muster.tracker.cost import CostFunction, ceiling_for, centre_distance_cost, giou_cost, iou_cost
 from muster.tracker.kalman import _MAX_WALK_SPEED_MS, _PERSON_HEIGHT_M
 from muster.types import CameraId, DecodedFrame, Detection, FrameTs, TrackId
 
@@ -56,15 +56,10 @@ def test_a_person_walking_through_keeps_one_track_id() -> None:
 def test_plain_iou_swaps_identities_where_the_default_cost_does_not() -> None:
     """ADR-0014's premise, end to end: same input, two costs, different identities.
 
-    Originally this walked a single person and counted unique ids -- but that
-    demonstration turns out to be structurally impossible once the gate widens enough
-    to rescue a cold-start match at Muster's fps range (fix round 1, Important 1):
-    `giou_cost` for a stationary (zero-velocity) prediction is `1 + (d-w)/(d+w)`, which
-    exceeds 1.0 -- `iou_cost`'s own ceiling -- exactly when `d > w`, i.e. exactly
-    ADR-0014's stated failure regime. Any `kappa` wide enough to admit a GIoU cold
-    start there necessarily widens the gate past 1.0 too, so `iou_cost` stops ever
-    being refused -- both costs converge to "always accepted" and the walk can no
-    longer tell them apart by id count.
+    Walking a single person and counting unique ids cannot demonstrate this: once the
+    gate widens enough to rescue a cold-start match at Muster's fps range, the same
+    widening lets `iou_cost` and the default converge to "always accepted", and the
+    walk can no longer tell them apart by id count.
 
     So this tests the actual mechanism ADR-0014 names instead: "the Hungarian solver
     is handed a matrix of identical 1.0s and matches arbitrarily" (cost.py). Two people
@@ -74,17 +69,15 @@ def test_plain_iou_swaps_identities_where_the_default_cost_does_not() -> None:
     plain IoU cannot.
 
     The gate is deliberately neutralized (`max_cost=1_000.0, gate_widening_per_second=
-    0.0`) rather than left at either cost's shipped or tuned settings: Task 9's sweep
-    (ADR-0014 Constraint 1) found that no single `(max_cost, kappa)` pair serves both
-    `iou_cost` and whatever the default happens to be, since their cost ranges do not
-    overlap -- gating this test at either cost's own tuned point would sometimes refuse
-    the very match being tested, for reasons that have nothing to do with the
-    assignment step this test exists to isolate (fix round 2's re-review hit exactly
-    this failure mode once already, when a too-tight gate coasted a leg and a silent
-    `next(...)` selector picked the wrong track and returned `True` by accident --
-    `len(tracks) == 2` below is the guard against that). A gate wide enough to never
-    refuse anything removes the gate as a variable entirely, leaving only the
-    assignment step under test.
+    0.0`) rather than left at either cost's shipped or tuned settings: ADR-0014's
+    benchmark found that no single `(max_cost, kappa)` pair serves both `iou_cost` and
+    whatever the default happens to be, since their cost ranges do not overlap --
+    gating this test at either cost's own tuned point would sometimes refuse the very
+    match being tested, for reasons that have nothing to do with the assignment step
+    this test exists to isolate. A gate wide enough to never refuse anything removes
+    the gate as a variable entirely, leaving only the assignment step under test.
+    `len(tracks) == 2` below guards against a coasted leg or a spurious birth letting
+    the id selectors silently pick the wrong track and pass for the wrong reason.
     """
 
     def run(cost: CostFunction) -> bool:
@@ -114,7 +107,7 @@ def test_plain_iou_swaps_identities_where_the_default_cost_does_not() -> None:
         )
         # A track that coasted (gate refused) or a spurious birth would otherwise let
         # the selectors below silently pick the wrong track and pass for the wrong
-        # reason -- exactly the accident the re-review found at kappa=1.0.
+        # reason -- this guard is what catches that.
         assert len(tracks) == 2, "every leg must actually match, not coast or spawn a third track"
         id_at_200 = next(t.track_id for t in tracks if t.foot_point[0] * WIDTH < 300)
         id_at_400 = next(t.track_id for t in tracks if t.foot_point[0] * WIDTH >= 300)
@@ -185,6 +178,40 @@ def test_a_track_dies_after_track_memory_seconds() -> None:
     tracker = ByteTrackTracker(n_init=1, track_memory_s=1.0)
     tracker.update(*next(_walk(1, dt=0.5)))
     assert tracker.update(_frame(3.0), []) == []
+
+
+# --- Shipped class defaults ---------------------------------------------------------
+#
+# Every test above passes n_init/track_memory_s explicitly, so none of them would
+# notice a silent change to the class defaults themselves. ADR-0014 Decision #4
+# specifically measured n_init=1 and did not take it; a revert to n_init=1 -- or a
+# drift in track_memory_s -- must not ship undetected.
+
+
+def test_default_n_init_requires_two_hits_to_confirm() -> None:
+    """The shipped default is `n_init=2` (ADR-0014 Decision #4: `n_init=1` was
+    measured and rejected). A single detection must not confirm a track under a bare
+    `ByteTrackTracker()`.
+    """
+    tracker = ByteTrackTracker()
+    box = (100, 500, 140, 700)
+    assert tracker.update(_frame(0.0), [Detection(box=box, score=0.9)]) == [], (
+        "one hit must not confirm under the shipped n_init"
+    )
+    tracks = tracker.update(_frame(0.5), [Detection(box=box, score=0.9)])
+    assert len(tracks) == 1, "the second hit must confirm under the shipped n_init"
+
+
+def test_default_track_memory_matches_the_shipped_value() -> None:
+    """`track_memory_s=2.0` is the shipped default; every other test in this file
+    passes it explicitly, so a silent change to the class default would go unnoticed
+    without a test constructing a bare `ByteTrackTracker()`.
+    """
+    tracker = ByteTrackTracker(n_init=1)
+    tracker.update(_frame(0.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
+
+    assert tracker.update(_frame(1.9), []) != [], "must still be alive just under 2.0s"
+    assert tracker.update(_frame(2.1), []) == [], "must have expired just over 2.0s"
 
 
 def test_tracks_are_published_in_normalized_coordinates() -> None:
@@ -285,17 +312,17 @@ def test_stage_2s_gate_is_tighter_than_stage_1s() -> None:
     gated at all.
 
     Swapping `max_cost_low` for `max_cost` at the stage-2 call site leaves every other
-    test in this file green (measured -- see fix round 2 in task-7-report.md), because
-    none of them place a cost strictly between the two thresholds. This one does: at
-    `gate_widening_per_second=1.5`, dt=0.5s, a detection 100px from the track predicts
-    a GIoU cost of ~1.4286 -- inside stage 1's widened gate (0.8 + 1.5*0.5 = 1.55, which
-    "would accept") but outside stage 2's (0.5 + 1.5*0.5 = 1.25, which must refuse).
+    test in this file green, because none of them place a cost strictly between the two
+    thresholds. This one does: at `gate_widening_per_second=1.5`, dt=0.5s, a detection
+    100px from the track predicts a GIoU cost of ~1.4286 -- inside stage 1's widened
+    gate (0.8 + 1.5*0.5 = 1.55, which "would accept") but outside stage 2's
+    (0.5 + 1.5*0.5 = 1.25, which must refuse).
 
-    Pinned against an EXPLICIT `cost=giou_cost` with its own historical `(max_cost,
-    max_cost_low, kappa)` rather than the class defaults (Task 9 changed those to
-    `centre_distance_cost`'s own tuned point, a different scale entirely) -- this test
-    is about the two-stage gate's relative strictness, a property of any cost/gate
-    combination, not about whichever cost currently ships.
+    Pinned against an EXPLICIT `cost=giou_cost` with its own `(max_cost, max_cost_low,
+    kappa)` rather than the class defaults (the shipped default is `centre_distance_
+    cost`'s own tuned point, a different scale entirely) -- this test is about the
+    two-stage gate's relative strictness, a property of any cost/gate combination, not
+    about whichever cost currently ships.
     """
     tracker = ByteTrackTracker(
         n_init=1, cost=giou_cost, max_cost=0.8, max_cost_low=0.5, gate_widening_per_second=1.5
@@ -315,7 +342,7 @@ def test_stage_2_uses_the_shipped_max_cost_low() -> None:
     """The two-stage design's tighter stage-2 gate, pinned against the SHIPPED default
     specifically -- `test_stage_2s_gate_is_tighter_than_stage_1s` covers the same
     property against an explicit `giou_cost`, but nothing before this touched whatever
-    `max_cost_low` actually ships (Fix round 1, Important 8).
+    `max_cost_low` actually ships.
 
     A detection 300px away at `dt=0.5s` costs `centre_distance_cost` ~1.120 (found by
     search over box sizes and offsets -- `centre_distance_cost` needs a size mismatch as
@@ -385,14 +412,12 @@ def test_identical_consecutive_timestamps_are_safe() -> None:
 
 
 def test_a_stray_frame_never_rewinds_the_elapsed_time_clock() -> None:
-    """The actual corruption fix round 1's Important 4 named.
-
-    `time_since_update` cannot catch a rewound `_last_ts`: it counts missed TICKS, a
-    quantity invariant to how large dt was computed to be, so the round 1 report's
-    claim that it would detect a rewind was wrong. This checks the tracker's own
-    notion of elapsed time directly: after a late frame, `_last_ts` must still be the
-    last WELL-ORDERED timestamp, and the next legitimate frame's gap must be the real
-    one -- not inflated by however early the stray frame arrived.
+    """`time_since_update` cannot stand in for this: it counts missed TICKS, a quantity
+    invariant to how large dt was computed to be, so it would not notice a rewound
+    `_last_ts` either way. This checks the tracker's own notion of elapsed time
+    directly: after a late frame, `_last_ts` must still be the last WELL-ORDERED
+    timestamp, and the next legitimate frame's gap must be the real one -- not
+    inflated by however early the stray frame arrived.
     """
     tracker = ByteTrackTracker(n_init=1)
     tracker.update(_frame(1.0), [Detection(box=(100, 500, 140, 700), score=0.9)])
@@ -406,58 +431,102 @@ def test_a_stray_frame_never_rewinds_the_elapsed_time_clock() -> None:
     assert next_gap == pytest.approx(0.5), "the next well-ordered gap must be the real one"
 
 
+def test_a_stray_frame_never_rewinds_a_tracks_own_last_observed_ts() -> None:
+    """`bytetrack.py`'s `_elapsed` guards the TRACKER's clock against a reordered frame
+    (see the test above), but `TrackRecord.last_observed_ts` is separate per-track
+    state, set by `mark_matched` -- a second place the same rewind can happen,
+    independently of whether `_elapsed` is guarded.
+
+    A track observed at t=0.0/0.5/1.0 (stationary, so every prediction is exact and
+    every match trivially clears the shipped gate), then an RTSP reconnect glitch
+    delivers a detection at t=0.2 -- a real match, not an empty frame, because
+    `mark_matched` (the code path this guards) only runs on a match. Without the
+    `max(ts, last_observed_ts)` guard, `last_observed_ts` would rewind 1.0 -> 0.2, so
+    the NEXT tick's gate would widen off a bogus 1.3s gap (t=1.5 - 0.2) instead of the
+    real 0.5s one (t=1.5 - 1.0): at the shipped default (`max_cost=0.4, kappa=1.5`)
+    that is 2.35 versus 1.15 -- 2.35 exceeds `centre_distance_cost`'s own 2.0 ceiling
+    (`cost.py`'s `COST_CEILING`), so the gate would refuse nothing at all, the maximum
+    possible ID-swap exposure. The same rewind makes `is_expired` treat the track as
+    0.8s staler than it actually is. Both are checked directly, not inferred from a
+    knock-on symptom.
+    """
+    tracker = ByteTrackTracker(n_init=1)
+    box = (100, 500, 140, 700)
+    tracker.update(_frame(0.0), [Detection(box=box, score=0.9)])
+    tracker.update(_frame(0.5), [Detection(box=box, score=0.9)])
+    tracker.update(_frame(1.0), [Detection(box=box, score=0.9)])
+
+    tracker.update(_frame(0.2), [Detection(box=box, score=0.9)])  # the reordered frame
+
+    track = tracker._tracks[0]
+    assert track.last_observed_ts == _frame(1.0).ts, (
+        "a stray frame must not rewind last_observed_ts"
+    )
+
+    gate = tracker._gate([track], tracker._max_cost, _frame(1.5).ts)
+    assert gate[0] == pytest.approx(1.15), "the gate must widen off the real 0.5s gap, not 1.3s"
+
+    assert not track.is_expired(_frame(1.5).ts, track_memory_s=2.0), (
+        "a track truly last observed 0.5s ago must not expire under a 2.0s memory"
+    )
+
+
 @pytest.mark.parametrize("fps", [1, 2, 3, 5])
 def test_a_brisk_walker_is_admitted_at_every_supported_frame_rate(fps: int) -> None:
     """kappa's default must actually admit kalman.py's own walking-speed envelope,
     at every fps Muster supports -- not just whichever one someone currently believes
     is tightest.
 
-    Fix round 1 claimed 3 fps was the worst case, at a +0.157 margin, computed against
-    a pixel scale that was never tied to kalman.py's own metres-to-pixels derivation --
-    that number was wrong twice over: the scale was wrong, AND 3 fps was not even the
-    tightest point once corrected (fix round 2 corrected the scale and found 3 fps
-    refused at kappa=1.5; fix round 3's re-review found 5 fps is actually tighter than
-    3 fps at the corrected kappa=2.0: margins are +0.1422 at 3 fps vs +0.1189 at 5 fps).
-    Naming a single fps "the worst case" invites exactly this kind of silent drift when
-    kappa or the cost function changes. Parametrizing over all four rates means no
-    single point can be mislabelled, and a future kappa change that shifts which rate
-    is tightest is still covered without anyone needing to notice or relabel it.
+    Which fps is tightest depends on both kappa and the shipped cost function's own
+    shape, and either can change independently. Parametrizing over all four supported
+    rates means no single point can be mislabelled "the worst case", and a future
+    change that shifts which rate is tightest is still covered without anyone needing
+    to notice or relabel it.
 
     Recomputed honestly using kalman.py's own formula
     (`scale = height_px / _PERSON_HEIGHT_M`) with this suite's box aspect ratio
-    (width = 0.2 * height, `_walk`'s own convention): the resulting cold-start GIoU
-    cost is invariant to the box's absolute size for a fixed aspect ratio (both the
-    walker's pixel displacement and the box width scale linearly with height, so their
-    ratio does not), so 200px is a concrete but arbitrary choice, not a tuned one.
-    Importing `_MAX_WALK_SPEED_MS` and `_PERSON_HEIGHT_M` directly, rather than
-    hardcoding numbers, means this test cannot silently drift from kalman.py's own
-    definition of "brisk" again.
+    (width = 0.2 * height, `_walk`'s own convention): the resulting cold-start cost is
+    invariant to the box's absolute size for a fixed aspect ratio (both the walker's
+    pixel displacement and the box width scale linearly with height, so their ratio
+    does not), so 200px is a concrete but arbitrary choice, not a tuned one. Importing
+    `_MAX_WALK_SPEED_MS` and `_PERSON_HEIGHT_M` directly, rather than hardcoding
+    numbers, means this test cannot silently drift from kalman.py's own definition of
+    "brisk" again.
+
+    The admission check alone is a weak guard: at the shipped defaults the true margin
+    runs from roughly 0.48 (5 fps, the tightest) to roughly 1.21 (1 fps), so a walker
+    several times faster than "brisk" would still be admitted, and a real regression
+    that thinned the margin substantially could still pass. Pinning the actual margin
+    against `centre_distance_cost` -- the shipped default -- against literal expected
+    values is what makes this a regression guard rather than a smoke test: if kappa,
+    max_cost, or the cost function's shape drifts, the pinned numbers catch it even
+    when the walker is still, technically, admitted.
     """
     height, width = 200, 40
     scale = height / _PERSON_HEIGHT_M  # px/m, kalman.py's own metres-to-pixels anchor
     dt = 1.0 / fps
     displacement = round(_MAX_WALK_SPEED_MS * dt * scale)
+    track_box = (100, 500, 100 + width, 500 + height)
+    det_box = (100 + displacement, 500, 100 + width + displacement, 500 + height)
 
     tracker = ByteTrackTracker(n_init=1)
-    tracker.update(_frame(0.0), [Detection(box=(100, 500, 100 + width, 500 + height), score=0.9)])
-    tracks = tracker.update(
-        _frame(dt),
-        [
-            Detection(
-                box=(
-                    100 + displacement,
-                    500,
-                    100 + width + displacement,
-                    500 + height,
-                ),
-                score=0.9,
-            )
-        ],
-    )
+    tracker.update(_frame(0.0), [Detection(box=track_box, score=0.9)])
+    tracks = tracker.update(_frame(dt), [Detection(box=det_box, score=0.9)])
 
     assert len(tracks) == 1
     assert tracks[0].time_since_update == 0, (
         f"the brisk walker's first step must be admitted at {fps} fps"
+    )
+
+    cost = float(
+        centre_distance_cost(
+            np.array([track_box], dtype=np.float64), np.array([det_box], dtype=np.float64), dt
+        )[0, 0]
+    )
+    gate = tracker._max_cost + tracker._gate_widening_per_second * dt
+    expected_margin = {1: 1.2089, 2: 0.6870, 3: 0.5641, 5: 0.4845}[fps]
+    assert (gate - cost) == pytest.approx(expected_margin, abs=1e-3), (
+        f"the shipped gate's margin at {fps} fps has drifted from its measured value"
     )
 
 
@@ -470,24 +539,16 @@ def test_the_additive_gate_has_a_crossover_fps_below_which_it_refuses_nothing() 
     consider that an additive gate can outgrow a bounded cost.
 
     Reads `max_cost`/`kappa`/the cost's ceiling live off a bare `ByteTrackTracker()`
-    (Fix round 1, Important 8: a prior round hardcoded `giou_cost`'s historical
-    `0.8`/`2.0` here, which decoupled the assertion from the actual shipped defaults and
-    turned it into an arithmetic tautology -- the stated purpose of this test, that a
-    future kappa change cannot move the dead zone without a test noticing, requires
-    reading the live values, not a frozen snapshot of some other cost's numbers).
-
-    That decoupling happened because, at the time, `centre_distance_cost` (the winning
-    candidate) was wrongly believed to have no ceiling at all -- `cost.py`'s Fix round 1
-    Critical 2 found it is in fact bounded by 2.0, the same as `giou_cost`, so the
-    shipped default DOES have a well-defined crossover, and there is no longer a reason
-    not to read it straight off the tracker.
+    rather than a frozen snapshot of some other cost's numbers: the stated purpose of
+    this test -- that a future kappa change cannot move the dead zone without a test
+    noticing -- requires reading the actual shipped defaults, since `centre_distance_
+    cost` (ADR-0014's chosen default) is bounded by a different ceiling than `giou_
+    cost` would be.
 
     The crossover this pins is TIGHT: `max_cost=0.4, kappa=1.5` gives `dt=(2.0-0.4)/1.5
-    ~= 1.067s`, i.e. **~0.9375 fps** -- just BELOW Muster's 1 fps product floor, not
-    comfortably above it the way the previous default's `~1.667 fps` was. At exactly
-    1 fps the gate (1.9) still sits under the ceiling (2.0), so it retains real
-    discriminating power there, but with only ~5% headroom, not the wide margin the
-    earlier (wrongly-tuned) operating point had.
+    ~= 1.067s`, i.e. **~0.9375 fps** -- just BELOW Muster's 1 fps product floor. At
+    exactly 1 fps the gate (1.9) still sits under the ceiling (2.0), so it retains real
+    discriminating power there, but with only ~5% headroom, not a wide margin.
     """
     reference = ByteTrackTracker()
     cost, max_cost, kappa = reference.cost, reference._max_cost, reference._gate_widening_per_second
@@ -536,8 +597,8 @@ def test_the_additive_gate_has_a_crossover_fps_below_which_it_refuses_nothing() 
 
 
 def test_a_multi_tick_occlusion_reacquires_under_gap_based_widening_only() -> None:
-    """Gap-based widening (fix round 1, folded-in finding): the gate must widen by the
-    gap since a track was last OBSERVED, not by the current tick's interval alone.
+    """Gap-based widening: the gate must widen by the gap since a track was last
+    OBSERVED, not by the current tick's interval alone.
 
     A track misses three ticks (0.5s each), then a detection appears 300px away --
     reachable only because 1.5s has actually elapsed since the last real observation.

@@ -23,9 +23,15 @@ Boxes = NDArray[np.float64]
 CostMatrix = NDArray[np.float64]
 """`(M, N)` array; lower is a better match."""
 
-# A walker covers roughly this much ground per second in a retail space (algorithms.md
-# §3.3.1's reference walker at 1.5 m/s). Expansion-IoU inflates boxes by this fraction
-# of their own width per second of gap, which is what makes the margin fps-aware.
+# `expansion_iou_cost` inflates each box by `_EXPANSION_PER_SECOND * dt_s / 2.0` of its
+# OWN width/height, on every side (see `_expand`) -- a per-second fraction of the box's
+# own size, not a physical speed in m/s despite numerically matching algorithms.md
+# §3.3.1's 1.5 m/s reference walker. Unlike every constant in `kalman.py`, this one is
+# not bridged through the metres->pixels scale (`height_px / _PERSON_HEIGHT_M`), so its
+# actual inflation rate depends on the box's own aspect ratio -- for a person-shaped box
+# it comes out to several box-widths per second, not 1.5 m/s of ground speed. See
+# ADR-0014's benchmark result for `expansion_iou_cost`'s standing (it placed last); this
+# scale question is an open caveat on that result, not one this comment resolves.
 _EXPANSION_PER_SECOND = 1.5
 
 # Weight on the width/height agreement term. Centre distance alone will happily match a
@@ -92,16 +98,16 @@ def centre_distance_cost(tracks: Boxes, dets: Boxes, dt_s: float) -> CostMatrix:
     """Normalized centre separation plus a size-agreement penalty, in `[0, 2)`.
 
     The cheapest and most interpretable candidate, and the one the OC-SORT paper itself
-    suggests. Distance is scaled by the enclosing box's diagonal so it stays comparable
-    across a frame where near people are large and far people are small -- and, because
-    both box centres always lie inside their own enclosing box, that normalized term is
-    itself bounded by 1 (the enclosing box's diagonal is the longest distance any two
-    points inside it can be apart). The scale-agreement term is a sum of two `|a-b|/
-    (a+b)` ratios, each bounded by 1, weighted by `_SCALE_PENALTY_WEIGHT=0.5`, so it too
-    contributes at most 1. Total ceiling: **2.0** -- the same supremum as `giou_cost`,
-    reached the same way (a strict bound approached in the degenerate limit, not
-    generally attained by any real box pair; see `COST_CEILING`'s docstring for the
-    measurement that caught this cost was wrongly treated as unbounded).
+    suggests (ADR-0014). Distance is scaled by the enclosing box's diagonal so it stays
+    comparable across a frame where near people are large and far people are small --
+    and, because both box centres always lie inside their own enclosing box, that
+    normalized term is itself bounded by 1 (the enclosing box's diagonal is the longest
+    distance any two points inside it can be apart). The scale-agreement term is a sum
+    of two `|a-b|/(a+b)` ratios, each bounded by 1, weighted by `_SCALE_PENALTY_WEIGHT`,
+    so it too contributes at most `2 * _SCALE_PENALTY_WEIGHT`. Total ceiling:
+    `1.0 + 2.0 * _SCALE_PENALTY_WEIGHT` -- `COST_CEILING` derives it the exact same way,
+    so the two can never silently drift apart -- a strict bound approached in the
+    degenerate limit, not generally attained by any real box pair.
     """
     del dt_s
     centres_t = (tracks[:, :2] + tracks[:, 2:]) / 2.0
@@ -155,28 +161,23 @@ COSTS: dict[str, CostFunction] = {
 COST_CEILING: dict[str, float | None] = {
     "iou": 1.0,
     "giou": 2.0,
-    "centre_distance": 2.0,
+    "centre_distance": 1.0 + 2.0 * _SCALE_PENALTY_WEIGHT,
     "expansion_iou": 1.0,
 }
-"""Each cost's supremum, or `None` if it has none (ADR-0014 Task 9, Constraint 4).
+"""Each cost's supremum, or `None` if it has none (ADR-0014's gate-form decision).
 
 The additive gate `max_cost + kappa * dt` grows without bound while every bounded cost
 saturates, so past some dt the gate exceeds the cost's own ceiling and refuses nothing
-at all (`bytetrack.py`'s `test_the_additive_gate_stops_refusing_below_about_1_7_fps`).
-A saturating gate needs to know what it must stay under.
+at all (`test_bytetrack.py`'s
+`test_the_additive_gate_has_a_crossover_fps_below_which_it_refuses_nothing`). A
+saturating gate needs to know what it must stay under.
 
-`centre_distance_cost` was originally entered here as `None` ("effectively unbounded")
-on the strength of the task-9-brief's own framing, without checking the actual
-implementation -- wrong, and caught by review (task-9-report.md's "Fix round 1",
-Critical 2). Both terms it sums are self-normalizing: separation is divided by the
-enclosing box's own diagonal (which grows with separation, capping the ratio at 1 --
-see `centre_distance_cost`'s docstring), and the scale-agreement term is a sum of two
-ratios individually bounded by 1. The cost is bounded above by 2.0, the same supremum
-as `giou_cost`, confirmed empirically (2,000,000 random box pairs spanning sizes from
-1e-6 to 2000px: max observed 1.859, consistent with a strict-but-unreached 2.0 bound,
-the same character as `giou_cost`'s own ceiling). Getting this wrong meant the
-saturating gate form was never actually swept for `centre_distance_cost` in the first
-sweep -- Constraint 4 was unsatisfied exactly where the result mattered most.
+`centre_distance_cost`'s entry is computed from `_SCALE_PENALTY_WEIGHT` rather than a
+bare numeral, so a future change to that weight cannot silently invalidate this table --
+see `centre_distance_cost`'s own docstring for why `1.0 + 2.0 * weight` is the true
+bound: both terms it sums are self-normalizing, so the cost never exceeds it (a strict
+bound, not generally attained by any real box pair), the same character as `giou_cost`'s
+own ceiling.
 """
 
 
