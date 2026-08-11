@@ -17,8 +17,10 @@ import numpy as np
 import pytest
 
 from muster.detector.model_manager import ModelManager
-from muster.detector.onnx_detector import OnnxDetector
-from muster.types import CameraId, DecodedFrame, FrameTs
+from muster.detector.onnx_detector import OnnxDetector, _open_session
+from muster.detector.runtime import RuntimeSelection
+from muster.errors import ModelError
+from muster.types import CameraId, DecodedFrame, FrameTs, Runtime
 
 INPUT_SIZE = 64
 ANCHORS = 8 * 8 + 4 * 4 + 2 * 2
@@ -138,6 +140,93 @@ def test_real_quantized_model_runs_on_a_1080p_frame(tmp_path: Path) -> None:
     # confidence gate, not an accuracy claim — that is P2.9's job against real footage.
     assert detections == []
     detector.close()
+
+
+def test_injected_session_reports_the_default_runtime() -> None:
+    """An injected session is a test double; claiming an accelerator would be fiction."""
+    detector = OnnxDetector(Path("unused.onnx"), session=FakeSession(_raw_with_person()))
+
+    assert detector.runtime is Runtime.ORT_CPU
+
+
+def test_explicit_unavailable_runtime_is_an_error_not_a_silent_downgrade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Asking for an accelerator and silently getting CPU is an undebuggable mystery.
+
+    The operator gets a box slower than the one they configured, with nothing anywhere
+    saying why. An explicit request is a promise: honour it or fail loudly.
+    """
+    monkeypatch.setattr("muster.detector.onnx_detector.is_available", lambda _runtime: False)
+
+    with pytest.raises(ModelError, match="openvino"):
+        _open_session(
+            Path("unused.onnx"),
+            intra_op_threads=None,
+            selection=RuntimeSelection(Runtime.OPENVINO, explicit=True),
+        )
+
+
+def test_automatic_unavailable_runtime_falls_back_to_cpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accelerators are pure upside (ADR-0003); their absence is never fatal."""
+    monkeypatch.setattr("muster.detector.onnx_detector.is_available", lambda _runtime: False)
+    opened: list[str] = []
+
+    def fake_cpu_session(model_path: Path, *, intra_op_threads: int | None) -> FakeSession:
+        opened.append(str(model_path))
+        assert intra_op_threads is None
+        return FakeSession(_raw_with_person())
+
+    monkeypatch.setattr("muster.detector.onnx_detector._open_ort_cpu_session", fake_cpu_session)
+
+    session, runtime = _open_session(
+        Path("unused.onnx"),
+        intra_op_threads=None,
+        selection=RuntimeSelection(Runtime.OPENVINO, explicit=False),
+    )
+
+    assert opened == ["unused.onnx"]
+    assert isinstance(session, FakeSession)
+    # The reported runtime must be the one actually executing, not the one asked for —
+    # a `/healthz` that names an accelerator the box fell back off is worse than silence.
+    assert runtime is Runtime.ORT_CPU
+
+
+def test_an_accelerator_that_fails_to_load_is_fatal_only_when_asked_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Available but unloadable is the same question as unavailable, one step later."""
+    monkeypatch.setattr("muster.detector.onnx_detector.is_available", lambda _runtime: True)
+
+    def exploding_session(model_path: Path, *, num_threads: int | None) -> None:
+        del model_path, num_threads
+        message = "compile failed"
+        raise ModelError(message)
+
+    def fake_cpu_session(model_path: Path, *, intra_op_threads: int | None) -> FakeSession:
+        del model_path, intra_op_threads
+        return FakeSession(_raw_with_person())
+
+    monkeypatch.setattr("muster.detector.onnx_detector.OpenVinoSession", exploding_session)
+    monkeypatch.setattr("muster.detector.onnx_detector._open_ort_cpu_session", fake_cpu_session)
+
+    with pytest.raises(ModelError, match="compile failed"):
+        _open_session(
+            Path("unused.onnx"),
+            intra_op_threads=None,
+            selection=RuntimeSelection(Runtime.OPENVINO, explicit=True),
+        )
+
+    fell_back, runtime = _open_session(
+        Path("unused.onnx"),
+        intra_op_threads=None,
+        selection=RuntimeSelection(Runtime.OPENVINO, explicit=False),
+    )
+
+    assert isinstance(fell_back, FakeSession)
+    assert runtime is Runtime.ORT_CPU
 
 
 def test_close_releases_the_session() -> None:

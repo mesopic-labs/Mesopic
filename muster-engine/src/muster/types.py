@@ -131,6 +131,18 @@ class CameraState(StrEnum):
     DISABLED = "disabled"
 
 
+class Runtime(StrEnum):
+    """Which native runtime executes the detector's graph (ADR-0012).
+
+    ``ORT_CPU`` is the guaranteed path: it is a hard dependency, it runs on Intel, AMD and
+    ARM, and it is what the N100 perf gate is measured against. Everything else is an
+    accelerator — selected when explicitly asked for, never required.
+    """
+
+    ORT_CPU = "ort-cpu"
+    OPENVINO = "openvino"
+
+
 # --- Pipeline payloads ------------------------------------------------------
 #
 # Every payload is frozen: nothing downstream may mutate what it was handed. Slots

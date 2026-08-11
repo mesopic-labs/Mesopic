@@ -1,7 +1,11 @@
 """Detection via ONNX Runtime, CPU execution provider by default (ADR-0012).
 
-ORT-CPU is the portable default and always works. OpenVINO (Intel), Coral, and
-CUDA/TensorRT are probed at load time and are pure upside, never a dependency (ADR-0003).
+ORT-CPU is the portable default and always works. OpenVINO is available as an explicit
+opt-in on Intel boxes and is pure upside, never a dependency (ADR-0003) — it is not
+auto-selected, because promoting an accelerator to the default is gated on a measured win
+the perf harness has yet to produce. Coral and CUDA/TensorRT are deferred by ADR-0012;
+when they arrive they arrive behind the same `InferenceSession` seam, changing nothing
+below.
 
 Performance levers that belong here and nowhere else: input size, ROI crop to the union
 of the camera's configured geometry, INT8 quantization, and thread counts.
@@ -18,9 +22,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
+from muster.detector.openvino_session import OpenVinoSession
 from muster.detector.postprocess import decode_yolox_output, letterbox
+from muster.detector.runtime import DEFAULT_RUNTIME, RuntimeSelection, is_available, resolve_runtime
 from muster.errors import ModelError
-from muster.types import DecodedFrame, Detection
+from muster.types import DecodedFrame, Detection, Runtime
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -53,15 +59,22 @@ class OnnxDetector:
         confidence: float = DEFAULT_CONFIDENCE,
         iou_threshold: float = DEFAULT_IOU_THRESHOLD,
         intra_op_threads: int | None = None,
+        runtime: Runtime | None = None,
         session: InferenceSession | None = None,
     ) -> None:
+        """`runtime` is ignored when `session` is injected — that session is already one."""
         self._confidence = confidence
         self._iou_threshold = iou_threshold
-        self._session: InferenceSession | None = (
-            session
-            if session is not None
-            else _open_session(Path(model_path), intra_op_threads=intra_op_threads)
-        )
+
+        if session is not None:
+            self._session: InferenceSession | None = session
+            self._runtime = DEFAULT_RUNTIME
+        else:
+            self._session, self._runtime = _open_session(
+                Path(model_path),
+                intra_op_threads=intra_op_threads,
+                selection=resolve_runtime(runtime),
+            )
 
         model_input = self._session.get_inputs()[0]
         self._input_name: str = model_input.name
@@ -75,6 +88,15 @@ class OnnxDetector:
         guessing it wrong is a shape error on the first frame rather than a slow path.
         """
         return self._input_size
+
+    @property
+    def runtime(self) -> Runtime:
+        """Which runtime is actually executing the graph — never merely the one requested.
+
+        What `muster doctor` and `/healthz` report, and the first answer to "why is this
+        box slower than that one".
+        """
+        return self._runtime
 
     def detect(self, frame: DecodedFrame) -> list[Detection]:
         """Return person detections in the frame's pixel space, person class only."""
@@ -101,7 +123,49 @@ class OnnxDetector:
         self._session = None
 
 
-def _open_session(model_path: Path, *, intra_op_threads: int | None) -> InferenceSession:
+def _open_session(
+    model_path: Path,
+    *,
+    intra_op_threads: int | None,
+    selection: RuntimeSelection,
+) -> tuple[InferenceSession, Runtime]:
+    """Open the graph on the selected runtime, reporting which one actually opened it.
+
+    An explicit request is a promise: if the operator named a runtime and it cannot be
+    honoured, that is an error rather than a quiet downgrade to CPU, because a box slower
+    than the one someone configured is otherwise undiagnosable. An automatic selection
+    carries no such promise and degrades to the guaranteed path (ADR-0012).
+    """
+    if selection.runtime is Runtime.ORT_CPU:
+        return _open_ort_cpu_session(model_path, intra_op_threads=intra_op_threads), Runtime.ORT_CPU
+
+    if not is_available(selection.runtime):
+        if selection.explicit:
+            message = (
+                f"runtime {selection.runtime.value!r} was requested but is not available "
+                "on this box; install the matching extra, or leave the runtime unset to "
+                "use the CPU baseline"
+            )
+            raise ModelError(message)
+        return _fall_back_to_cpu(model_path, intra_op_threads=intra_op_threads)
+
+    try:
+        return OpenVinoSession(model_path, num_threads=intra_op_threads), selection.runtime
+    except ModelError:
+        # Available but unloadable is the same question as unavailable, one step later.
+        if selection.explicit:
+            raise
+    return _fall_back_to_cpu(model_path, intra_op_threads=intra_op_threads)
+
+
+def _fall_back_to_cpu(
+    model_path: Path, *, intra_op_threads: int | None
+) -> tuple[InferenceSession, Runtime]:
+    """An accelerator is upside; upside that failed to materialise is still a working box."""
+    return _open_ort_cpu_session(model_path, intra_op_threads=intra_op_threads), Runtime.ORT_CPU
+
+
+def _open_ort_cpu_session(model_path: Path, *, intra_op_threads: int | None) -> InferenceSession:
     """Load the graph on the CPU execution provider.
 
     Imported lazily so that constructing a detector with an injected session — which is
