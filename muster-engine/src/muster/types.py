@@ -179,6 +179,14 @@ class Track:
     ts: FrameTs
     foot_point: NormPoint
     score: float
+    time_since_update: int = 0
+    """Ticks since this track last matched a real detection.
+
+    ``0`` is an observed position. ``> 0`` is dead reckoning: the track is being
+    predicted with no observation behind it. Geometry may use coasted positions for
+    path continuity but must refuse to emit an event from a segment whose endpoints
+    are *both* unobserved (algorithms.md §3.4, engine-architecture.md §8).
+    """
     is_staff: bool = False
 
 

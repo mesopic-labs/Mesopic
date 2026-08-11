@@ -98,3 +98,28 @@ def test_a_track_reports_a_normalized_foot_point() -> None:
     assert 0.0 <= x <= 1.0
     assert 0.0 <= y <= 1.0
     assert not track.is_staff, "staff is a per-track boolean, defaulted off, never an identity"
+
+
+def test_track_defaults_to_observed() -> None:
+    """A Track with no explicit status is an observed one, not a coasted one."""
+    track = Track(
+        camera_id=CameraId("cam-1"),
+        track_id=TrackId(1),
+        ts=FrameTs(datetime(2026, 8, 10, 12, 0, tzinfo=UTC)),
+        foot_point=(0.5, 0.9),
+        score=0.9,
+    )
+    assert track.time_since_update == 0
+
+
+def test_track_records_dead_reckoning_depth() -> None:
+    """Geometry needs the count, not just the fact, to refuse fabricated events."""
+    track = Track(
+        camera_id=CameraId("cam-1"),
+        track_id=TrackId(1),
+        ts=FrameTs(datetime(2026, 8, 10, 12, 0, tzinfo=UTC)),
+        foot_point=(0.5, 0.9),
+        score=0.9,
+        time_since_update=3,
+    )
+    assert track.time_since_update == 3

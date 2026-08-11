@@ -68,6 +68,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S101", "PLR2004", "ANN201", "ARG001"]   # asserts and magic numbers are the point
 "**/cli.py" = ["T20"]                                      # the CLI is allowed to print
+"**/tests/association/test_sweep.py" = ["T20"]              # the sweep's table IS its output
 "**/conftest.py" = ["ANN201"]
 # `muster.types` is named by the architecture docs.
 # Shadowing the stdlib `types` module is harmless under absolute imports.
@@ -97,7 +98,16 @@ exclude = ["build/", "dist/"]
 
 # Third-party packages without stubs. Add here with a reason, never inline.
 [[tool.mypy.overrides]]
-module = ["av.*", "cv2.*", "supervision.*", "onnxruntime.*", "paho.*"]
+module = ["av.*", "cv2.*", "onnxruntime.*", "paho.*"]
+ignore_missing_imports = true
+
+# scipy.optimize.linear_sum_assignment is the tracker's Hungarian solver (ADR-0014).
+# scipy.stats.ttest_rel is the ADR-0014 association benchmark's significance test
+# (tests/association/test_sweep.py). scipy (1.18.0, this workspace) ships no py.typed
+# marker, so mypy has no inline types to fall back on and wants the separate
+# scipy-stubs package.
+[[tool.mypy.overrides]]
+module = ["scipy.optimize", "scipy.stats"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
