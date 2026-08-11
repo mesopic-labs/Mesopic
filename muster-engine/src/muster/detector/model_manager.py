@@ -25,7 +25,9 @@ from pathlib import Path
 
 import httpx
 
+from muster.detector.runtime import DEFAULT_RUNTIME, artefact_tag
 from muster.errors import ModelError
+from muster.types import Runtime
 
 DOWNLOAD_TIMEOUT_S = 60.0
 """Explicit, always. A hung fetch on first run must fail rather than wedge the engine."""
@@ -168,7 +170,7 @@ class ModelManager:
         self._download = download if download is not None else _download_https
         self._quantize = quantize if quantize is not None else _quantize_int8
 
-    def ensure(self, model_name: str) -> ModelArtefact:
+    def ensure(self, model_name: str, *, runtime: Runtime = DEFAULT_RUNTIME) -> ModelArtefact:
         """Return a cached artefact, building it if absent. Idempotent and atomic."""
         spec = MODELS.get(model_name)
         if spec is None:
@@ -176,7 +178,7 @@ class ModelManager:
             message = f"unknown model {model_name!r}; known models: {known}"
             raise ModelError(message)
 
-        path = self._artefact_path(spec)
+        path = self._artefact_path(spec, runtime)
         if not _is_usable(path):
             self._build(spec, path)
         return ModelArtefact(
@@ -186,14 +188,20 @@ class ModelManager:
             licence=spec.licence,
         )
 
-    def _artefact_path(self, spec: ModelSpec) -> Path:
+    def _artefact_path(self, spec: ModelSpec, runtime: Runtime) -> Path:
         """Content-addressed by everything that changes the bytes.
 
         Keying on runtime and opset as well as model and quantization means switching
         runtime or upgrading the engine re-quantizes into a *new* file rather than
         clobbering one a running process may still have mapped.
+
+        Runtimes that consume identical bytes share an entry, though: ORT and OpenVINO
+        both load the same quantized ONNX graph, and separating them would buy a
+        re-download that produces the same file (ADR-0012). The tag names the artefact's
+        *format*, so a runtime that genuinely needs its own — a Coral `.tflite`, a
+        TensorRT engine — still gets one.
         """
-        return self._cache_dir / f"{spec.name}.int8.op{OPSET}.ort.onnx"
+        return self._cache_dir / f"{spec.name}.{artefact_tag(runtime)}.op{OPSET}.onnx"
 
     def _build(self, spec: ModelSpec, path: Path) -> None:
         """Download, quantize, and publish atomically.

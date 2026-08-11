@@ -19,6 +19,7 @@ import pytest
 
 from muster.detector.model_manager import MODELS, ModelManager, ModelSpec
 from muster.errors import ModelError
+from muster.types import Runtime
 
 
 def _fake_download(spec: ModelSpec, dest: Path) -> None:
@@ -158,6 +159,37 @@ def test_real_fetch_and_quantize_produces_a_loadable_int8_model(tmp_path: Path) 
     session = ort.InferenceSession(str(artefact.path), providers=["CPUExecutionProvider"])
     (model_input,) = session.get_inputs()
     assert model_input.shape == [1, 3, 416, 416]
+
+
+def test_artefact_path_carries_the_runtime_derived_tag(tmp_path: Path) -> None:
+    """The cache filename is a contract: it is what makes a warm cache a cache hit."""
+    manager = ModelManager(tmp_path, download=_fake_download, quantize=_fake_quantize)
+
+    artefact = manager.ensure("yolox-nano")
+
+    assert artefact.path.name == "yolox-nano.int8.op12.onnx"
+
+
+def test_switching_runtime_reuses_the_cached_artefact(tmp_path: Path) -> None:
+    """The quantized graph is the same bytes whichever runtime loads it (ADR-0012).
+
+    Re-fetching it on a runtime switch would spend a first-run download on a metered
+    connection to produce a byte-identical file.
+    """
+    downloads = 0
+
+    def counting_download(spec: ModelSpec, dest: Path) -> None:
+        nonlocal downloads
+        downloads += 1
+        _fake_download(spec, dest)
+
+    manager = ModelManager(tmp_path, download=counting_download, quantize=_fake_quantize)
+
+    on_cpu = manager.ensure("yolox-nano", runtime=Runtime.ORT_CPU)
+    on_openvino = manager.ensure("yolox-nano", runtime=Runtime.OPENVINO)
+
+    assert on_cpu.path == on_openvino.path
+    assert downloads == 1
 
 
 def test_every_registered_model_is_permissively_licensed() -> None:
