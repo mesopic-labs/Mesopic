@@ -7,8 +7,8 @@ that looks exactly like ordinary detector recall loss, which is why it needs its
 metric rather than being folded into IDF1.
 
 Matching is a single global one-to-one assignment per tick -- Hungarian, gated by a
-radius, exactly the way `ByteTrackTracker` itself associates tracks to detections (fix
-round 1). Matching each ground-truth walker to its independently-nearest track instead
+radius, exactly the way `ByteTrackTracker` itself associates tracks to detections.
+Matching each ground-truth walker to its independently-nearest track instead
 lets two walkers claim the same track when they are close together, which is precisely
 the `crossing` scenario's whole premise -- that independent-nearest bug manufactured
 phantom ID switches out of a tie-break, not a real tracker mistake, and it would have
