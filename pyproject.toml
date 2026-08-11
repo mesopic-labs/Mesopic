@@ -97,8 +97,10 @@ explicit_package_bases = true
 exclude = ["build/", "dist/"]
 
 # Third-party packages without stubs. Add here with a reason, never inline.
+# `openvino` is additionally an opt-in extra (ADR-0012): it is absent from the default
+# dev environment by design, so mypy has no implementation to resolve either.
 [[tool.mypy.overrides]]
-module = ["av.*", "cv2.*", "onnxruntime.*", "paho.*"]
+module = ["av.*", "cv2.*", "onnxruntime.*", "openvino.*", "paho.*"]
 ignore_missing_imports = true
 
 # scipy.optimize.linear_sum_assignment is the tracker's Hungarian solver (ADR-0014).
