@@ -37,13 +37,18 @@ RUNTIME_ENV_VAR: Final = "MUSTER_DETECTOR_RUNTIME"
 """Operator-facing override. P2.1 will route `muster.yaml` to the same resolution."""
 
 _ARTEFACT_TAGS: Final[dict[Runtime, str]] = {
-    # Both runtimes load the same quantized ONNX graph, so they share a cache entry.
-    # Keying them apart would force a re-download and re-quantize to produce identical
-    # bytes. A runtime needing its own artefact — a Coral `.tflite`, a TensorRT engine —
-    # returns a different tag here and gets its own file, which is the collision
-    # ADR-0012's content-addressing exists to prevent.
-    Runtime.ORT_CPU: "int8",
-    Runtime.OPENVINO: "int8",
+    # Both runtimes load the same ONNX graph, so they share a cache entry. Keying them
+    # apart would force a re-download to produce identical bytes. A runtime needing its
+    # own artefact — a Coral `.tflite`, a TensorRT engine — returns a different tag here
+    # and gets its own file, which is the collision ADR-0012's content-addressing exists
+    # to prevent.
+    #
+    # `fp32`, not `int8`: dynamic INT8 quantization destroyed this graph's accuracy (see
+    # model_manager._DYNAMIC_QUANTIZATION_NOTE). The tag names what the bytes *are*, so
+    # changing it also strands every poisoned `int8` cache entry already on disk instead
+    # of silently loading one.
+    Runtime.ORT_CPU: "fp32",
+    Runtime.OPENVINO: "fp32",
 }
 
 

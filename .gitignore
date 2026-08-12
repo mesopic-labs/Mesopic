@@ -77,3 +77,8 @@ node_modules/
 playwright-report/
 test-results/
 .aider*
+
+# --- Bench artefacts (P1.7) ---
+# Run outputs are machine-specific evidence, not source. The numbers that matter get
+# copied into the test-strategy perf table by hand, with their provenance.
+bench/

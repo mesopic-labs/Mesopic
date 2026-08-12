@@ -1,16 +1,19 @@
-"""Fetch, export, quantize, and cache the model artefact.
+"""Fetch and cache the model artefact.
 
 The engine ships **without bundled weights**. A model is a swappable, separately
 licensed asset fetched at runtime — which is exactly what keeps the model's licence
 separable from the MIT engine code (ADR-0008, ADR-0013).
 
-The lifecycle: download -> export to ONNX -> INT8 post-training quantization -> cache,
-content-addressed by `(model, quant, opset, runtime)`. Writes are **atomic**: killed
-mid-quantize must leave no half-file, because the appliance cannot be SSH'd into to clean
-up. The weight's licence is recorded in cache metadata and surfaced by `muster doctor`
-and `/healthz`.
+The lifecycle: download -> verify digest -> transform -> cache, content-addressed by
+`(model, format, opset, runtime)`. Writes are **atomic**: a killed build must leave no
+half-file, because the appliance cannot be SSH'd into to clean up. The weight's licence
+is recorded in cache metadata and surfaced by `muster doctor` and `/healthz`.
 
-The default path is AGPL-free end to end: Apache-2.0 weights, MIT quantization tools.
+The transform step is currently the identity: the artefact is the downloaded FP32 graph.
+`_DYNAMIC_QUANTIZATION_NOTE` records why the INT8 step that used to live here was
+removed, and what a correct replacement needs.
+
+The default path is AGPL-free end to end: Apache-2.0 weights, MIT runtime.
 
 Implements P1.4.
 """
@@ -80,8 +83,39 @@ MODELS: dict[str, ModelSpec] = {
 Downloader = Callable[[ModelSpec, Path], None]
 """Fetch a model's FP32 ONNX to ``dest``. Injected so the cache is testable offline."""
 
-Quantizer = Callable[[Path, Path], None]
-"""INT8-quantize ``src`` into ``dest``."""
+Transform = Callable[[Path, Path], None]
+"""Turn the downloaded FP32 graph at ``src`` into the artefact published at ``dest``.
+
+A seam rather than a straight copy because a *correct* INT8 step belongs here when one
+exists (see ``_DYNAMIC_QUANTIZATION_NOTE``), and because the atomicity tests need a
+step that can be made to fail partway.
+"""
+
+_DYNAMIC_QUANTIZATION_NOTE = """
+Why this pipeline publishes FP32 and does not quantize.
+
+Until 2026-08-12 this step ran `quantize_dynamic(..., QuantType.QUInt8)`. It was chosen
+because dynamic quantization needs no calibration set, which kept first run offline and
+avoided shipping representative imagery we would have to license and store.
+
+It does not work on this graph. Dynamic quantization quantizes weights for MatMul-shaped
+ops and leaves convolution activations uncalibrated, so a conv-heavy detector comes out
+producing noise: on a 1080p frame containing one clearly visible person, the INT8
+artefact's best person score was 0.0023 against the FP32 graph's 0.725 — no detection at
+any threshold. The engine had therefore never detected anything, and nothing caught it
+because the detector tests use fakes and the only stream available locally was a
+synthetic pattern with no people in it.
+
+Correct INT8 here means *static* quantization, which needs calibration frames. The
+options, none free: ship licensed imagery (the problem dynamic quantization was chosen
+to dodge), or calibrate on the box's own camera at first run — representative by
+construction and licence-free, but it makes the artefact box-specific and breaks the
+content-addressed cache, so it is an ADR-level decision rather than a code change.
+
+FP32 is ~3.5 MB against ~1 MB and, measured locally, was *faster* than the broken INT8
+path, which paid dequantize overhead on every convolution. Revisit against P1.7's N100
+table, not against intuition.
+"""
 
 
 def _download_https(spec: ModelSpec, dest: Path) -> None:
@@ -120,20 +154,14 @@ def _download_https(spec: ModelSpec, dest: Path) -> None:
         raise ModelError(message)
 
 
-def _quantize_int8(src: Path, dest: Path) -> None:
-    """Post-training dynamic INT8 quantization.
+def _publish_unchanged(src: Path, dest: Path) -> None:
+    """Publish the downloaded FP32 graph as the artefact, byte for byte.
 
-    Dynamic rather than static: it needs no calibration set, which keeps first run fully
-    offline after the weight download and avoids shipping representative imagery we
-    would then have to license and store (ADR-0004 — the appliance has no operator).
+    The engine ships the weights exactly as the pinned release asset provides them, whose
+    digest `_download_https` has already verified. See `_DYNAMIC_QUANTIZATION_NOTE` for
+    why there is no quantization step here and what a correct one would require.
     """
-    # Imported here, not at module scope, because quantization only ever runs on a cache
-    # miss. A box with a warm cache — which is every box after first run, and every
-    # appliance shipped with the cache pre-warmed — should not pay to import the
-    # quantization toolchain (and its `onnx` dependency) just to load a model.
-    from onnxruntime.quantization import QuantType, quantize_dynamic  # noqa: PLC0415
-
-    quantize_dynamic(str(src), str(dest), weight_type=QuantType.QUInt8)
+    src.replace(dest)
 
 
 def _is_usable(path: Path) -> bool:
@@ -164,11 +192,11 @@ class ModelManager:
         cache_dir: Path,
         *,
         download: Downloader | None = None,
-        quantize: Quantizer | None = None,
+        transform: Transform | None = None,
     ) -> None:
         self._cache_dir = cache_dir
         self._download = download if download is not None else _download_https
-        self._quantize = quantize if quantize is not None else _quantize_int8
+        self._transform = transform if transform is not None else _publish_unchanged
 
     def ensure(self, model_name: str, *, runtime: Runtime = DEFAULT_RUNTIME) -> ModelArtefact:
         """Return a cached artefact, building it if absent. Idempotent and atomic."""
@@ -184,7 +212,7 @@ class ModelManager:
         return ModelArtefact(
             path=path,
             model_name=spec.name,
-            quantization="int8",
+            quantization="fp32",
             licence=spec.licence,
         )
 
@@ -204,7 +232,7 @@ class ModelManager:
         return self._cache_dir / f"{spec.name}.{artefact_tag(runtime)}.op{OPSET}.onnx"
 
     def _build(self, spec: ModelSpec, path: Path) -> None:
-        """Download, quantize, and publish atomically.
+        """Download, transform, and publish atomically.
 
         Everything happens in a scratch directory alongside the cache; only the final
         ``os.replace`` is visible. A process killed at any point before that leaves the
@@ -214,8 +242,8 @@ class ModelManager:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=self._cache_dir, prefix=".build-") as scratch:
             scratch_dir = Path(scratch)
-            fp32 = scratch_dir / "fp32.onnx"
-            int8 = scratch_dir / "int8.onnx"
-            self._download(spec, fp32)
-            self._quantize(fp32, int8)
-            int8.replace(path)
+            downloaded = scratch_dir / "downloaded.onnx"
+            artefact = scratch_dir / "artefact.onnx"
+            self._download(spec, downloaded)
+            self._transform(downloaded, artefact)
+            artefact.replace(path)

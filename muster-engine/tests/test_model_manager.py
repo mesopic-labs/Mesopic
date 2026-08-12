@@ -1,17 +1,24 @@
 """The model cache: content-addressed, atomic, and licence-recording.
 
-These tests never touch the network. The download and quantize steps are injected, so
+These tests never touch the network. The download and transform steps are injected, so
 what is under test here is the *lifecycle* — cache hit/miss, atomicity, content
 addressing, licence metadata — rather than any particular model's arithmetic. The real
-fetch-and-quantize path is exercised by a `slow` test that does hit the network.
+fetch path is exercised by `slow` tests that do hit the network.
 
 Atomicity is the criterion that matters most (P1.4): the appliance cannot be SSH'd into
-to clean up a half-written model, so a process killed mid-quantize must leave the cache
-either empty or complete, never partial.
+to clean up a half-written model, so a killed build must leave the cache either empty or
+complete, never partial.
+
+One `slow` test here guards a different failure entirely: that the published artefact
+still *behaves* like the weights that were downloaded. The pipeline used to apply dynamic
+INT8 quantization, which silently reduced this graph to noise and shipped a detector that
+found nobody. Every test above passed throughout, because a fake transform and a loadable
+file both looked fine.
 """
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import onnxruntime as ort
@@ -21,13 +28,16 @@ from muster.detector.model_manager import MODELS, ModelManager, ModelSpec
 from muster.errors import ModelError
 from muster.types import Runtime
 
+_PINNED_FP32_BYTES = 3_659_407
+"""Size of the pinned yolox-nano release asset, as published unchanged."""
+
 
 def _fake_download(spec: ModelSpec, dest: Path) -> None:
     dest.write_bytes(b"fp32:" + spec.name.encode())
 
 
-def _fake_quantize(src: Path, dest: Path) -> None:
-    dest.write_bytes(src.read_bytes().replace(b"fp32:", b"int8:"))
+def _fake_transform(src: Path, dest: Path) -> None:
+    dest.write_bytes(src.read_bytes().replace(b"fp32:", b"built:"))
 
 
 def test_ensure_builds_and_caches_when_absent(tmp_path: Path) -> None:
@@ -37,14 +47,14 @@ def test_ensure_builds_and_caches_when_absent(tmp_path: Path) -> None:
         downloaded.append(spec.name)
         _fake_download(spec, dest)
 
-    manager = ModelManager(tmp_path, download=counting_download, quantize=_fake_quantize)
+    manager = ModelManager(tmp_path, download=counting_download, transform=_fake_transform)
 
     artefact = manager.ensure("yolox-nano")
 
     assert artefact.path.exists()
-    assert artefact.path.read_bytes() == b"int8:yolox-nano"
+    assert artefact.path.read_bytes() == b"built:yolox-nano"
     assert artefact.model_name == "yolox-nano"
-    assert artefact.quantization == "int8"
+    assert artefact.quantization == "fp32"
     assert artefact.licence == "Apache-2.0"
     assert downloaded == ["yolox-nano"]
 
@@ -57,7 +67,7 @@ def test_ensure_is_idempotent_and_does_not_refetch(tmp_path: Path) -> None:
         downloads += 1
         _fake_download(spec, dest)
 
-    manager = ModelManager(tmp_path, download=counting_download, quantize=_fake_quantize)
+    manager = ModelManager(tmp_path, download=counting_download, transform=_fake_transform)
 
     first = manager.ensure("yolox-nano")
     second = manager.ensure("yolox-nano")
@@ -67,18 +77,18 @@ def test_ensure_is_idempotent_and_does_not_refetch(tmp_path: Path) -> None:
 
 
 def test_failed_build_leaves_no_artefact_and_no_scratch(tmp_path: Path) -> None:
-    """Killed mid-quantize must leave the cache empty, never partial.
+    """A killed build must leave the cache empty, never partial.
 
     The appliance has no operator to clear a half-written model by hand, so a partial
     artefact is not a transient annoyance — it is a box that never detects again.
     """
 
-    def exploding_quantize(src: Path, dest: Path) -> None:
+    def exploding_transform(src: Path, dest: Path) -> None:
         dest.write_bytes(b"half-written")
-        message = "killed mid-quantize"
+        message = "killed mid-build"
         raise RuntimeError(message)
 
-    manager = ModelManager(tmp_path, download=_fake_download, quantize=exploding_quantize)
+    manager = ModelManager(tmp_path, download=_fake_download, transform=exploding_transform)
 
     with pytest.raises(RuntimeError):
         manager.ensure("yolox-nano")
@@ -92,17 +102,17 @@ def test_truncated_cache_entry_is_rebuilt(tmp_path: Path) -> None:
     ``exists()`` is not the same question as ``is usable``, and returning a truncated
     model hands the inference runtime a file it will fail to load on every frame.
     """
-    manager = ModelManager(tmp_path, download=_fake_download, quantize=_fake_quantize)
+    manager = ModelManager(tmp_path, download=_fake_download, transform=_fake_transform)
     artefact = manager.ensure("yolox-nano")
     artefact.path.write_bytes(b"")
 
     rebuilt = manager.ensure("yolox-nano")
 
-    assert rebuilt.path.read_bytes() == b"int8:yolox-nano"
+    assert rebuilt.path.read_bytes() == b"built:yolox-nano"
 
 
 def test_unknown_model_is_rejected_by_name(tmp_path: Path) -> None:
-    manager = ModelManager(tmp_path, download=_fake_download, quantize=_fake_quantize)
+    manager = ModelManager(tmp_path, download=_fake_download, transform=_fake_transform)
 
     with pytest.raises(ModelError, match="unknown model"):
         manager.ensure("definitely-not-a-model")
@@ -121,7 +131,7 @@ def test_model_without_verified_checksum_refuses_to_download(
         "unpinned",
         ModelSpec(name="unpinned", url="", sha256="", licence="Apache-2.0", input_size=416),
     )
-    manager = ModelManager(tmp_path, quantize=_fake_quantize)
+    manager = ModelManager(tmp_path, transform=_fake_transform)
 
     with pytest.raises(ModelError, match="no verified download URL or checksum"):
         manager.ensure("unpinned")
@@ -141,37 +151,60 @@ def test_registered_models_are_pinned_to_a_verified_artefact() -> None:
 
 
 @pytest.mark.slow
-def test_real_fetch_and_quantize_produces_a_loadable_int8_model(tmp_path: Path) -> None:
-    """The unfaked path: download the pinned weight, quantize it, load it.
+def test_real_fetch_produces_a_loadable_graph(tmp_path: Path) -> None:
+    """The unfaked path: download the pinned weight and load it.
 
-    Everything above injects the download and quantize steps, which proves the cache
+    Everything above injects the download and transform steps, which proves the cache
     lifecycle but not that either real step works. This one does the actual thing, so a
-    broken URL, a stale digest, or a quantizer that emits an unloadable graph is caught
+    broken URL, a stale digest, or a transform that emits an unloadable graph is caught
     here rather than on a user's first run.
     """
     manager = ModelManager(tmp_path)
     artefact = manager.ensure("yolox-nano")
 
-    assert artefact.path.stat().st_size > 0
-    # Quantization must actually shrink it; INT8 weights are ~a quarter of FP32.
-    assert artefact.path.stat().st_size < 3_659_407
+    assert artefact.path.stat().st_size == _PINNED_FP32_BYTES
 
     session = ort.InferenceSession(str(artefact.path), providers=["CPUExecutionProvider"])
     (model_input,) = session.get_inputs()
     assert model_input.shape == [1, 3, 416, 416]
 
 
+@pytest.mark.slow
+def test_published_artefact_is_the_bytes_whose_digest_was_verified(tmp_path: Path) -> None:
+    """What we publish must be what we verified — the guard this cache did not have.
+
+    The pipeline used to quantize the downloaded graph before publishing it, and that
+    step reduced the detector to noise while every other test stayed green: the file
+    existed, loaded, and had the right input shape. Nothing compared the artefact to the
+    weights it came from.
+
+    So this asserts the artefact's digest *is* the pinned digest. While the transform is
+    the identity that is exactly the contract; the moment someone reintroduces a
+    transform this test fails and makes them prove the new artefact's behaviour on real
+    imagery rather than assuming it, which is the forcing function that was missing.
+    """
+    manager = ModelManager(tmp_path)
+    artefact = manager.ensure("yolox-nano")
+
+    digest = hashlib.sha256(artefact.path.read_bytes()).hexdigest()
+    assert digest == MODELS["yolox-nano"].sha256
+
+
 def test_artefact_path_carries_the_runtime_derived_tag(tmp_path: Path) -> None:
-    """The cache filename is a contract: it is what makes a warm cache a cache hit."""
-    manager = ModelManager(tmp_path, download=_fake_download, quantize=_fake_quantize)
+    """The cache filename is a contract: it is what makes a warm cache a cache hit.
+
+    It also strands the poisoned `int8` entries the old pipeline left on disk, instead
+    of loading one and detecting nothing.
+    """
+    manager = ModelManager(tmp_path, download=_fake_download, transform=_fake_transform)
 
     artefact = manager.ensure("yolox-nano")
 
-    assert artefact.path.name == "yolox-nano.int8.op12.onnx"
+    assert artefact.path.name == "yolox-nano.fp32.op12.onnx"
 
 
 def test_switching_runtime_reuses_the_cached_artefact(tmp_path: Path) -> None:
-    """The quantized graph is the same bytes whichever runtime loads it (ADR-0012).
+    """The graph is the same bytes whichever runtime loads it (ADR-0012).
 
     Re-fetching it on a runtime switch would spend a first-run download on a metered
     connection to produce a byte-identical file.
@@ -183,7 +216,7 @@ def test_switching_runtime_reuses_the_cached_artefact(tmp_path: Path) -> None:
         downloads += 1
         _fake_download(spec, dest)
 
-    manager = ModelManager(tmp_path, download=counting_download, quantize=_fake_quantize)
+    manager = ModelManager(tmp_path, download=counting_download, transform=_fake_transform)
 
     on_cpu = manager.ensure("yolox-nano", runtime=Runtime.ORT_CPU)
     on_openvino = manager.ensure("yolox-nano", runtime=Runtime.OPENVINO)
