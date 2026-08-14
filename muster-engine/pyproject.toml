@@ -50,7 +50,7 @@ openvino = ["openvino>=2024.4"]
 # ⚠ AGPL-3.0. Deliberately NOT a default dependency: the default install carries no
 # AGPL anywhere (ADR-0013). Installing this extra is the user's own act, and the CLI
 # prints the licence consequence on first use.
-ultralytics = ["ultralytics>=8.3"]
+ultralytics = ["ultralytics>=8.4.117"]
 
 # [project.urls] is intentionally absent until the repository is public — a wheel
 # carrying links to a 404 is worse than a wheel carrying none.
