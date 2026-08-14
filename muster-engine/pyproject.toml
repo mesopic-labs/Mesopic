@@ -26,7 +26,7 @@ classifiers = [
 # silently across platforms — they are pinned hardest in the lockfile.
 dependencies = [
   "av>=13.1",                       # PyAV / FFmpeg — RTSP decode
-  "numpy>=2.1",
+  "numpy>=2.5.2",
   "opencv-python-headless>=4.10",   # headless: no GUI/X11 on a server box
   "onnxruntime>=1.20",              # default CPU execution provider (ADR-0012)
   "onnx>=1.17",                     # graph IR — onnxruntime.quantization imports it (P1.4)
