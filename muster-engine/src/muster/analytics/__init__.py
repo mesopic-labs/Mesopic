@@ -11,6 +11,6 @@ enforced by an import-linter contract, not by convention.
 
 from __future__ import annotations
 
-from muster.analytics.site_geometry import SiteGeometry
+from muster.analytics.site_geometry import PreparedLine, PreparedZone, SiteGeometry
 
-__all__ = ["SiteGeometry"]
+__all__ = ["PreparedLine", "PreparedZone", "SiteGeometry"]
