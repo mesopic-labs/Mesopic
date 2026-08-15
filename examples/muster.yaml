@@ -24,6 +24,9 @@ cameras:
       # Prefer the camera's SUB-stream: 640x480–1280x720 is cheaper to decode and plenty
       # for foot-point detection. Muster does not need your 4K main stream.
       url: "rtsp://user:pass@192.168.1.40:554/Streaming/Channels/102"
+      # An RTSP URL carries the camera's credentials. Inline `url` keeps this example
+      # readable; a real deployment should use `url_env: MUSTER_FRONT_DOOR_RTSP` instead
+      # and keep the URL out of a file it might commit. Set one of the two, never both.
       transport: tcp                # TCP: UDP loss on a cheap LAN reads as detector noise
     reference_resolution: [1920, 1080]
     stall_timeout_s: 5              # no frame for this long == treat as a drop

@@ -1,15 +1,8 @@
-"""Failing tests for `muster.yaml` validation — red-first for P2.1.
+"""What `muster.yaml` validation must reject, and what it must accept.
 
-`MusterConfig` has no fields yet and `load_config` raises `NotImplementedError`
-unconditionally (`muster.config.schema`, `muster.config.loader`). These tests describe
-the validated shape P2.1 must produce: they are red now and must go green when P2.1
-lands, not before.
-
-Every test in this module is `xfail(strict=True)`: `make test` / CI run the whole fast
-suite unfiltered, so an un-marked red file would leave `main` failing from the moment
-this merges until P2.1 lands. `strict=True` keeps the red-first intent honest the other
-way too — the first test P2.1 makes pass turns into a loud XPASS failure, which is
-exactly the signal to delete that test's marker rather than leaving it stale.
+Written red-first as MK.3, against a `MusterConfig` that had no fields and a
+`load_config` that raised `NotImplementedError`; P2.1 turned them green and removed the
+`xfail(strict=True)` markers that kept `main` honest in between.
 
 Fixtures build on the worked example (`examples/muster.yaml`) rather than inventing a
 second schema by hand, so this file cannot drift from `test_documented_config.py`'s
@@ -28,13 +21,8 @@ import pytest
 import yaml
 
 from muster.config.loader import load_config
+from muster.config.schema import RtspSource
 from muster.errors import ConfigError
-
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    reason="P2.1 not implemented yet (MK.3 red-first tests) — remove this marker, "
-    "test by test, as P2.1 lands.",
-)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_CONFIG = REPO_ROOT / "examples" / "muster.yaml"
@@ -69,11 +57,7 @@ def test_the_worked_example_loads_cleanly(valid_config: dict[str, Any], tmp_path
 
     config = load_config(path)
 
-    # P2.1 hasn't added MusterConfig's `site` sub-model yet, so this line is also
-    # a mypy failure today. Once P2.1 adds `site`, `warn_unused_ignores = true`
-    # turns *that* into a different failure ("unused ignore") — expected; delete
-    # the ignore comment then, not this assertion.
-    assert config.site.site_id == "acme-camden"  # type: ignore[attr-defined]
+    assert config.site.site_id == "acme-camden"
 
 
 def test_dangling_camera_id_on_a_line_is_rejected(
@@ -189,6 +173,49 @@ def test_unparseable_yaml_raises_config_error(tmp_path: Path) -> None:
         load_config(path)
 
 
+def test_camera_url_may_be_an_env_reference(valid_config: dict[str, Any], tmp_path: Path) -> None:
+    """The RTSP URL carries the camera's credentials, so it gets the `*_env` form too.
+
+    The worked example inlines it — with a `user:pass` placeholder — because a config
+    has to be readable to be a worked example. A real deployment should not have to
+    write a live credential into a file it will `git add`.
+    """
+    source = _by_id(valid_config["cameras"], "camera_id", "front-door")["source"]
+    del source["url"]
+    source["url_env"] = "MUSTER_FRONT_DOOR_RTSP"
+    path = _write(tmp_path, valid_config)
+
+    config = load_config(path)
+
+    source = next(c for c in config.cameras if c.camera_id == "front-door").source
+    assert isinstance(source, RtspSource)
+    assert source.url_env == "MUSTER_FRONT_DOOR_RTSP"
+    assert source.url is None
+
+
+def test_camera_with_neither_url_nor_url_env_is_rejected(
+    valid_config: dict[str, Any], tmp_path: Path
+) -> None:
+    source = _by_id(valid_config["cameras"], "camera_id", "front-door")["source"]
+    del source["url"]
+    path = _write(tmp_path, valid_config)
+
+    with pytest.raises(ConfigError, match="url"):
+        load_config(path)
+
+
+def test_camera_with_both_url_and_url_env_is_rejected(
+    valid_config: dict[str, Any], tmp_path: Path
+) -> None:
+    """Two sources of truth for one credential is a silent "which one won?" bug."""
+    source = _by_id(valid_config["cameras"], "camera_id", "front-door")["source"]
+    source["url_env"] = "MUSTER_FRONT_DOOR_RTSP"
+    path = _write(tmp_path, valid_config)
+
+    with pytest.raises(ConfigError, match="url"):
+        load_config(path)
+
+
 @pytest.mark.privacy
 def test_error_never_echoes_the_rtsp_url(valid_config: dict[str, Any], tmp_path: Path) -> None:
     """A validation failure inside the camera block must not leak its credentials.
@@ -209,4 +236,34 @@ def test_error_never_echoes_the_rtsp_url(valid_config: dict[str, Any], tmp_path:
         load_config(path)
 
     rendered = "".join(traceback.format_exception(exc_info.value))
+    assert "user:pass@" not in rendered
+
+
+@pytest.mark.privacy
+def test_no_validation_error_is_chained_into_the_traceback(
+    valid_config: dict[str, Any], tmp_path: Path
+) -> None:
+    """No pydantic rendering of the input may reach the traceback at all.
+
+    The test above searches for the credential itself, and that is not sufficient here
+    for the same reason a taint pattern does not survive JPEG encoding in
+    `test_frame_lifetime.py`: **pydantic elides the middle of a long `input_value=`
+    repr**, which is exactly where `user:pass@` sits in the worked example's URL. So a
+    loader that chains `from error` passes the taint check by luck, and stops passing
+    the day someone shortens a URL.
+
+    A failure on a key *next to* `source` is the shape that carries the whole camera
+    block — URL included — into `input_value=`. Asserting that no such rendering exists
+    is the structural version of the rule, and it does not depend on where a repr
+    happens to be truncated.
+    """
+    camera = _by_id(valid_config["cameras"], "camera_id", "front-door")
+    del camera["reference_resolution"]
+    path = _write(tmp_path, valid_config)
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(path)
+
+    rendered = "".join(traceback.format_exception(exc_info.value))
+    assert "input_value=" not in rendered, "the loader chained pydantic's input rendering"
     assert "user:pass@" not in rendered
