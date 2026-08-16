@@ -5,11 +5,15 @@ the second. Both are prose from the code's point of view, so they drift silently
 gets renamed in the schema, and the documented example keeps saying the old name until
 someone files an issue saying "your quickstart doesn't work".
 
-These tests make that drift a build failure instead. They deliberately check *names* —
-top-level sections, identity keys, and the metric vocabulary — rather than trying to
-re-implement validation, which is `muster.config`'s job (P2.1). When the loader exists,
-the right move is to replace the key comparisons here with a real `load_config()` call on
-both documents.
+These tests make that drift a build failure instead. Until P2.1 there was no loader to
+check them against, so they compared *names* — sections, identity keys, the metric
+vocabulary — and said in this docstring that the right move, once `load_config` existed,
+was to run both documents through it for real. That is what they now do: every document
+we publish is validated by the same code path a user's file takes, so a renamed key, an
+out-of-range coordinate or an invented metric name fails here first.
+
+What is left alongside that is only what validation cannot see: that the two documents
+describe the same schema as each other, and that neither of them inlines a secret.
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ from typing import Any
 import pytest
 import yaml
 
-from muster.types import MetricName
+from muster.config import load_config
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 README = REPO_ROOT / "README.md"
@@ -49,15 +53,23 @@ def example() -> dict[str, Any]:
     return parsed
 
 
-def test_readme_example_is_valid_yaml(documented: dict[str, Any]) -> None:
-    """It parses at all — and parses with `safe_load`, which is what the loader uses."""
-    assert documented
+@pytest.mark.parametrize("document", ["readme", "example"])
+def test_every_documented_config_validates(
+    document: str, documented: dict[str, Any], example: dict[str, Any], tmp_path: Path
+) -> None:
+    """The documents we publish go through the loader a user's file goes through.
 
+    This is the check the earlier name comparisons were standing in for: `exports` for
+    `exporters`, a coordinate outside `[0, 1]`, `dwell_time` for `dwell_seconds` — each
+    is now rejected by the schema itself rather than by a test re-implementing it.
+    """
+    config = documented if document == "readme" else example
+    path = tmp_path / "muster.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 
-@pytest.mark.parametrize("section", ["site", "cameras", "lines", "zones", "exporters"])
-def test_readme_uses_the_real_top_level_sections(documented: dict[str, Any], section: str) -> None:
-    """`exports` vs `exporters` and `cloud` vs `cloud_sync` are exactly the silent drift."""
-    assert section in documented, f"README example is missing the `{section}` section"
+    loaded = load_config(path)
+
+    assert loaded.cameras, f"{document} describes a site with no cameras"
 
 
 def test_readme_and_example_agree_on_structure(
@@ -73,43 +85,19 @@ def test_readme_and_example_agree_on_structure(
 
 
 @pytest.mark.parametrize("document", ["readme", "example"])
-def test_documented_metric_names_exist(
+def test_every_documented_config_shows_some_geometry(
     document: str, documented: dict[str, Any], example: dict[str, Any]
 ) -> None:
-    """Every metric named in a document is one the engine actually produces.
+    """Validation accepts a site with no lines or zones; a *worked example* must not be one.
 
-    `dwell_time` and `queue_length` read naturally and are not real; the vocabulary is
-    `dwell_seconds` and `queue_len`, and it is a shared contract with the cloud.
+    The engine counts nothing without geometry, so a document that shows none is not
+    showing the reader how to use it — which is a documentation bug the schema cannot
+    have an opinion about.
     """
     config = documented if document == "readme" else example
-    valid = {metric.value for metric in MetricName}
 
-    named: set[str] = set()
-    for section in ("lines", "zones"):
-        for entry in config.get(section, []):
-            named.update(entry.get("metrics", []))
-
-    assert named, f"{document} names no metrics at all"
-    assert named <= valid, f"{document} names metrics that do not exist: {sorted(named - valid)}"
-
-
-@pytest.mark.parametrize("document", ["readme", "example"])
-def test_documented_geometry_is_normalized(
-    document: str, documented: dict[str, Any], example: dict[str, Any]
-) -> None:
-    """Coordinates are `[0, 1]` so geometry survives a resolution change (engine arch §3)."""
-    config = documented if document == "readme" else example
-
-    points: list[list[float]] = []
-    for line in config.get("lines", []):
-        points += [line["a"], line["b"]]
-    for zone in config.get("zones", []):
-        points += zone["polygon"]
-
-    assert points, f"{document} defines no geometry"
-    for x, y in points:
-        assert 0.0 <= x <= 1.0, f"{document} has an out-of-range x: {x}"
-        assert 0.0 <= y <= 1.0, f"{document} has an out-of-range y: {y}"
+    assert config.get("lines"), f"{document} defines no lines"
+    assert config.get("zones"), f"{document} defines no zones"
 
 
 @pytest.mark.privacy
