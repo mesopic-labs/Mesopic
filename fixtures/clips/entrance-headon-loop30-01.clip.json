@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "clip_id": "entrance-headon-loop30-01",
+  "sha256": "e6e74b3361a8b7f041085baf506f9a8c0fa7998391152d97425549cb47f0db73",
+  "duration_s": 1807.12,
+  "width": 1280,
+  "height": 720,
+  "fps": 25.0,
+  "provenance": {
+    "kind": "stock",
+    "licence": "Pexels Licence - free to use, no attribution required, no model release warranted",
+    "licence_verified_utc": "2026-08-16",
+    "url": null
+  },
+  "consent": {
+    "model_release": "unknown",
+    "note": "Pexels declines to warrant that releases exist for identifiable people"
+  },
+  "scene": {
+    "reference": "typical",
+    "mount_height_m": null,
+    "mount_angle_deg": null,
+    "lighting": "overcast_daylight"
+  }
+}

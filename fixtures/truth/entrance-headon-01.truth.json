@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "clip_id": "entrance-headon-01",
+  "labelled_by": "draft-unverified",
+  "labelled_at_utc": "2026-08-16T13:25:00Z",
+  "duration_s": 18.44,
+  "crossings": [
+    { "t_s": 9.2, "line_id": "entrance", "direction": "in" }
+  ]
+}

@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Muster clicker — ground-truth labelling</title>
+<!--
+  One file, no server, no build step, no dependency.
+
+  Open it from the filesystem, pick a local video, mark crossings, save a .truth.json.
+  The video is read with URL.createObjectURL and never leaves the tab: there is no
+  network code in this page, and a test in the engine suite fails if any appears.
+
+  That is not incidental. This tool is handed footage of real people, and "footage never
+  leaves the building" has to be true of our own tooling before it means anything in a
+  sales deck.
+
+  Output is a schema_version 1 truth file. Times are media time — seconds from the start
+  of the clip, never a wall-clock instant.
+-->
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #14161a;
+    --panel: #1c1f26;
+    --line: #2c313b;
+    --ink: #e6e9ef;
+    --muted: #98a1b3;
+    --in: #4ade80;
+    --out: #fbbf24;
+    --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 16px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 16px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  video { width: 100%; background: #000; border-radius: 6px; display: block; }
+  label { display: block; color: var(--muted); font-size: 12px; margin: 10px 0 3px; }
+  input {
+    width: 100%; padding: 6px 8px; background: #10131a; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 5px; font: inherit;
+  }
+  input:invalid { border-color: var(--bad); }
+  button {
+    padding: 7px 12px; background: #2a2f3a; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 5px; font: inherit; cursor: pointer;
+  }
+  button:hover { background: #333a47; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  .clock { font-variant-numeric: tabular-nums; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .dir-in { color: var(--in); }
+  .dir-out { color: var(--out); }
+  .marks { max-height: 260px; overflow-y: auto; }
+  kbd {
+    background: #10131a; border: 1px solid var(--line); border-bottom-width: 2px;
+    border-radius: 4px; padding: 1px 5px; font: 12px ui-monospace, monospace;
+  }
+  .keys td:first-child { width: 70px; }
+  .keys { margin-top: 4px; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 12px; }
+  .error { color: var(--bad); font-size: 12px; margin-top: 8px; min-height: 18px; }
+  .count { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .count span { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>Muster clicker</h1>
+<p class="sub">Mark every crossing. The video stays in this tab — nothing is uploaded, because there is nothing here that could upload it.</p>
+
+<div class="layout">
+  <div class="panel">
+    <input type="file" id="file" accept="video/*">
+    <video id="video" preload="metadata"></video>
+    <div class="row">
+      <button id="play">Play / pause</button>
+      <button id="mark-in">Mark in <kbd>f</kbd></button>
+      <button id="mark-out">Mark out <kbd>j</kbd></button>
+      <button id="undo">Undo <kbd>u</kbd></button>
+      <span class="clock" id="clock">0.000 s / 0.000 s</span>
+    </div>
+    <table class="keys">
+      <tr><td><kbd>space</kbd></td><td>play / pause</td></tr>
+      <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>step one frame</td></tr>
+      <tr><td><kbd>f</kbd> / <kbd>j</kbd></td><td>mark a crossing in / out</td></tr>
+      <tr><td><kbd>u</kbd> / <kbd>s</kbd></td><td>undo the last mark / save the truth file</td></tr>
+    </table>
+  </div>
+
+  <div class="panel">
+    <label for="clip-id">Clip id (must match the manifest)</label>
+    <input id="clip-id" pattern="[a-z0-9]+(-[a-z0-9]+)*" placeholder="doorway-daylight-01" required>
+
+    <label for="labelled-by">Labelled by</label>
+    <input id="labelled-by" placeholder="your name" required>
+
+    <label for="line-id">Line id</label>
+    <input id="line-id" value="entrance" required>
+
+    <label for="fps">Frame rate (for stepping)</label>
+    <input id="fps" type="number" min="1" max="240" step="0.01" value="25">
+
+    <div class="row">
+      <div class="count" id="tally">0 in / 0 out <span>marked</span></div>
+    </div>
+    <div class="row">
+      <button id="save" disabled>Save .truth.json <kbd>s</kbd></button>
+    </div>
+    <div class="error" id="error"></div>
+
+    <div class="marks">
+      <table>
+        <thead><tr><th>#</th><th>t (s)</th><th>direction</th></tr></thead>
+        <tbody id="marks"></tbody>
+      </table>
+    </div>
+
+    <p class="note">Times are media time: seconds from the start of the clip. Scoring converts to UTC at one boundary, so a truth file stays valid however many times the clip is replayed.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var video = document.getElementById("video");
+  var marks = [];
+
+  var el = {
+    file: document.getElementById("file"),
+    play: document.getElementById("play"),
+    markIn: document.getElementById("mark-in"),
+    markOut: document.getElementById("mark-out"),
+    undo: document.getElementById("undo"),
+    save: document.getElementById("save"),
+    clock: document.getElementById("clock"),
+    marksBody: document.getElementById("marks"),
+    tally: document.getElementById("tally"),
+    error: document.getElementById("error"),
+    clipId: document.getElementById("clip-id"),
+    labelledBy: document.getElementById("labelled-by"),
+    lineId: document.getElementById("line-id"),
+    fps: document.getElementById("fps")
+  };
+
+  var objectUrl = null;
+
+  el.file.addEventListener("change", function () {
+    var chosen = el.file.files && el.file.files[0];
+    if (!chosen) { return; }
+    if (objectUrl) { URL.revokeObjectURL(objectUrl); }
+    // The one line that matters: a local blob URL. The bytes never go anywhere.
+    objectUrl = URL.createObjectURL(chosen);
+    video.src = objectUrl;
+    marks = [];
+    render();
+    // A filename is the best guess we have at a clip id, and it is only a guess.
+    if (!el.clipId.value) {
+      var guess = chosen.name.replace(/\.[^.]+$/, "").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      el.clipId.value = guess.replace(/^-+|-+$/g, "");
+    }
+  });
+
+  function duration() {
+    return isFinite(video.duration) ? video.duration : 0;
+  }
+
+  function frameStep() {
+    var fps = parseFloat(el.fps.value);
+    return fps > 0 ? 1 / fps : 0.04;
+  }
+
+  function seekBy(delta) {
+    if (!video.src) { return; }
+    video.pause();
+    video.currentTime = Math.min(Math.max(0, video.currentTime + delta), duration());
+  }
+
+  function togglePlay() {
+    if (!video.src) { return; }
+    if (video.paused) { video.play(); } else { video.pause(); }
+  }
+
+  function mark(direction) {
+    if (!video.src) { return; }
+    // Rounded to the millisecond: a labeller's reaction time does not resolve finer, and
+    // a shorter number is easier to read in a diff.
+    var t = Math.round(video.currentTime * 1000) / 1000;
+    marks.push({ t_s: Math.min(t, duration()), direction: direction });
+    render();
+  }
+
+  function undo() {
+    marks.pop();
+    render();
+  }
+
+  function render() {
+    el.clock.textContent = video.currentTime.toFixed(3) + " s / " + duration().toFixed(3) + " s";
+
+    var rows = "";
+    var ins = 0;
+    var outs = 0;
+    for (var i = 0; i < marks.length; i++) {
+      var m = marks[i];
+      if (m.direction === "in") { ins++; } else { outs++; }
+      rows += "<tr><td>" + (i + 1) + "</td><td>" + m.t_s.toFixed(3) +
+              "</td><td class=\"dir-" + m.direction + "\">" + m.direction + "</td></tr>";
+    }
+    el.marksBody.innerHTML = rows;
+    el.tally.innerHTML = ins + " in / " + outs + " out <span>marked</span>";
+    el.save.disabled = !video.src;
+  }
+
+  function truthFile() {
+    var clipId = el.clipId.value.trim();
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(clipId)) {
+      throw new Error("clip id must be a lowercase slug, e.g. doorway-daylight-01");
+    }
+    if (!el.labelledBy.value.trim()) {
+      throw new Error("who labelled this? inter-rater agreement needs a name");
+    }
+    var lineId = el.lineId.value.trim();
+    if (!lineId) {
+      throw new Error("line id is required");
+    }
+    if (!duration()) {
+      throw new Error("the video has no readable duration yet");
+    }
+
+    // Non-decreasing is a schema rule, and marks arrive in playback order only if the
+    // labeller never scrubbed backwards. They always scrub backwards.
+    var ordered = marks.slice().sort(function (a, b) { return a.t_s - b.t_s; });
+
+    return {
+      schema_version: 1,
+      clip_id: clipId,
+      labelled_by: el.labelledBy.value.trim(),
+      labelled_at_utc: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+      duration_s: Math.round(duration() * 1000) / 1000,
+      crossings: ordered.map(function (m) {
+        return { t_s: m.t_s, line_id: lineId, direction: m.direction };
+      })
+    };
+  }
+
+  function save() {
+    el.error.textContent = "";
+    var payload;
+    try {
+      payload = truthFile();
+    } catch (err) {
+      el.error.textContent = err.message;
+      return;
+    }
+    var blob = new Blob([JSON.stringify(payload, null, 2) + "\n"], { type: "application/json" });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = payload.clip_id + ".truth.json";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  el.play.addEventListener("click", togglePlay);
+  el.markIn.addEventListener("click", function () { mark("in"); });
+  el.markOut.addEventListener("click", function () { mark("out"); });
+  el.undo.addEventListener("click", undo);
+  el.save.addEventListener("click", save);
+  video.addEventListener("timeupdate", render);
+  video.addEventListener("loadedmetadata", render);
+  video.addEventListener("seeked", render);
+
+  document.addEventListener("keydown", function (event) {
+    // Typing a clip id should not scrub the video.
+    if (event.target && event.target.tagName === "INPUT") { return; }
+    if (event.ctrlKey || event.metaKey || event.altKey) { return; }
+
+    var handled = true;
+    switch (event.key) {
+      case " ": togglePlay(); break;
+      case "ArrowLeft": seekBy(-frameStep()); break;
+      case "ArrowRight": seekBy(frameStep()); break;
+      case "f": mark("in"); break;
+      case "j": mark("out"); break;
+      case "u": undo(); break;
+      case "s": save(); break;
+      default: handled = false;
+    }
+    if (handled) { event.preventDefault(); }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
