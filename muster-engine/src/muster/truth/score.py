@@ -45,6 +45,15 @@ class Score:
     """Mean absolute percentage error across minute buckets. Harsher than the total: it
     catches an engine that is right overall by being wrong in both directions."""
 
+    stray_minutes: int
+    """Minutes the engine attributed footfall to that the clip does not span.
+
+    Counted separately from `minutes` because the clip's length is a fact and this is a
+    symptom: a non-zero value means the run emitted counts outside the footage, which is
+    either a teardown flush or a misaligned `stream_start`. The error percentages already
+    include the stray counts; this says where to look for them.
+    """
+
 
 def footfall_per_minute(truth: TruthFile) -> dict[int, int]:
     """Reduce labelled crossings to a per-minute footfall series, in media time.
@@ -107,8 +116,16 @@ def score(
 
     expected = footfall_per_minute(truth)
     predicted = _predicted_per_minute(metrics, stream_start)
+
+    # Every minute the engine spoke about is a window it can be wrong in, including the
+    # ones outside the clip. Reading only the truth's minutes would score a run that
+    # invented a hundred crossings after the footage ended as flawless — an over-count
+    # the gate cannot see is worse than no gate, because it reads as a pass.
+    stray = sorted(set(predicted) - set(expected))
+    windows = {**expected, **dict.fromkeys(stray, 0)}
+
     truth_total = sum(expected.values())
-    predicted_total = sum(predicted.get(minute, 0.0) for minute in expected)
+    predicted_total = sum(predicted.values())
 
     return Score(
         clip_id=truth.clip_id,
@@ -117,7 +134,8 @@ def score(
         truth_total=truth_total,
         predicted_total=predicted_total,
         total_error_pct=100.0 * abs(predicted_total - truth_total) / max(truth_total, 1),
-        mape_pct=mape(predicted, expected),
+        mape_pct=mape(predicted, windows),
+        stray_minutes=len(stray),
     )
 
 
@@ -135,10 +153,30 @@ def _predicted_per_minute(
         message = "stream_start must fall on a minute boundary for media time to align"
         raise TruthError(message)
 
+    footfall = [row for row in metrics if row.metric is MetricName.FOOTFALL]
+    _refuse_mixed_scopes(footfall)
+
     predicted: dict[int, float] = {}
-    for row in metrics:
-        if row.metric is not MetricName.FOOTFALL:
-            continue
+    for row in footfall:
         minute = int((row.bucket - stream_start).total_seconds() // SECONDS_PER_MINUTE)
         predicted[minute] = predicted.get(minute, 0.0) + row.value
     return predicted
+
+
+def _refuse_mixed_scopes(footfall: list[MetricRow]) -> None:
+    """One footfall series per run, and the caller says which.
+
+    Rows scoped to different lines sum correctly — two doors on one camera are two rows
+    and one visit count. A camera-wide row is that same quantity counted a second way, so
+    summing it alongside the scoped rows doubles it. Whether P2.4 emits per-line rows, a
+    camera-wide row, or both is P2.4's decision; what must not happen is a mix being
+    scored and the doubling being reported as an engine accuracy failure.
+    """
+    scoped = any(row.scope_id is not None for row in footfall)
+    camera_wide = any(row.scope_id is None for row in footfall)
+    if scoped and camera_wide:
+        message = (
+            "footfall rows mix per-scope and camera-wide totals; these are the same count "
+            "measured twice, so scoring both would double it — pass one series"
+        )
+        raise TruthError(message)

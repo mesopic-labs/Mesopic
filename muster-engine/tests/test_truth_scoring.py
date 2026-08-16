@@ -19,7 +19,7 @@ import pytest
 
 from muster.errors import TruthError
 from muster.truth import ClipManifest, TruthFile, footfall_per_minute, mape, score
-from muster.types import CameraId, MetricName, MetricRow, MinuteBucket
+from muster.types import CameraId, MetricName, MetricRow, MinuteBucket, ScopeId
 
 CAMERA = CameraId("front-door")
 STREAM_START = MinuteBucket(datetime(2026, 8, 16, 9, 30, 0, tzinfo=UTC))
@@ -265,5 +265,104 @@ def test_scoring_refuses_a_naive_stream_start() -> None:
             _manifest(),
             [_row(0, 1.0)],
             stream_start=MinuteBucket(datetime(2026, 8, 16, 9, 30, 0)),  # noqa: DTZ001 - the point
+            gating=False,
+        )
+
+
+# --- Predictions the clip cannot account for --------------------------------
+#
+# Added on review: the fold originally read only the minutes the truth spans, so footfall
+# attributed outside the clip was invisible. A gate number that cannot see an over-count
+# is worse than no gate number, because it reads as a pass.
+
+
+def _scoped_row(minute: int, value: float, scope: str | None) -> MetricRow:
+    return MetricRow(
+        camera_id=CAMERA,
+        bucket=MinuteBucket(STREAM_START + timedelta(minutes=minute)),
+        metric=MetricName.FOOTFALL,
+        scope_id=ScopeId(scope) if scope is not None else None,
+        value=value,
+    )
+
+
+def test_footfall_attributed_past_the_end_of_the_clip_is_counted_as_error() -> None:
+    """A teardown flush emitting one last bucket must not score as a perfect run."""
+    truth = _truth((30.0, "in"))
+
+    result = score(
+        truth, _manifest(), [_row(0, 1.0), _row(30, 99.0)], stream_start=STREAM_START, gating=False
+    )
+
+    assert result.predicted_total == 100.0
+    assert result.total_error_pct > 0.0
+
+
+def test_a_stray_minute_is_reported_so_the_number_can_be_explained() -> None:
+    """`total_error_pct` says the run was wrong; `stray_minutes` says where to look."""
+    truth = _truth((30.0, "in"))
+
+    result = score(
+        truth, _manifest(), [_row(0, 1.0), _row(7, 2.0)], stream_start=STREAM_START, gating=False
+    )
+
+    assert result.stray_minutes == 1
+    assert result.minutes == 3, "the clip's own length is a fact; a stray minute is not part of it"
+
+
+def test_a_clean_run_reports_no_stray_minutes() -> None:
+    truth = _truth((30.0, "in"))
+
+    result = score(truth, _manifest(), [_row(0, 1.0)], stream_start=STREAM_START, gating=False)
+
+    assert result.stray_minutes == 0
+    assert result.total_error_pct == 0.0
+
+
+def test_a_stray_minute_is_not_a_free_window_in_the_mape() -> None:
+    """Averaging over the truth's windows alone would dilute a phantom minute to nothing."""
+    truth = _truth((30.0, "in"))
+
+    clean = score(truth, _manifest(), [_row(0, 1.0)], stream_start=STREAM_START, gating=False)
+    strayed = score(
+        truth, _manifest(), [_row(0, 1.0), _row(9, 5.0)], stream_start=STREAM_START, gating=False
+    )
+
+    assert strayed.mape_pct > clean.mape_pct
+
+
+# --- Which footfall series is being scored ----------------------------------
+
+
+def test_footfall_scoped_to_several_lines_sums() -> None:
+    """Two doors on one camera are two rows and one visit count."""
+    truth = _truth((10.0, "in"), (20.0, "in"))
+
+    result = score(
+        truth,
+        _manifest(),
+        [_scoped_row(0, 1.0, "front"), _scoped_row(0, 1.0, "side")],
+        stream_start=STREAM_START,
+        gating=False,
+    )
+
+    assert result.predicted_total == 2.0
+    assert result.total_error_pct == 0.0
+
+
+def test_mixing_scoped_and_camera_wide_footfall_is_refused() -> None:
+    """The two are the same quantity counted twice, and summing them doubles it.
+
+    Which of the two P2.4 emits is P2.4's decision. What must not happen is scoring a mix
+    of both and reporting the resulting doubling as an engine accuracy failure.
+    """
+    truth = _truth((10.0, "in"))
+
+    with pytest.raises(TruthError, match="camera-wide"):
+        score(
+            truth,
+            _manifest(),
+            [_scoped_row(0, 1.0, "front"), _scoped_row(0, 1.0, None)],
+            stream_start=STREAM_START,
             gating=False,
         )
