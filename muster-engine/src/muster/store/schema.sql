@@ -6,10 +6,10 @@
 -- test asserts this, so adding such a column fails CI rather than review.
 --
 -- Migrations are forward-only and live in ./migrations/. This file is the current shape.
-
-PRAGMA journal_mode = WAL;      -- many readers, one writer
-PRAGMA foreign_keys = ON;
-PRAGMA synchronous = NORMAL;    -- WAL + NORMAL is durable enough for a metrics store
+--
+-- Pure DDL, deliberately: `foreign_keys` and `synchronous` are PER-CONNECTION pragmas,
+-- so setting them here would arm them once, on the connection that created the schema,
+-- and never again. store.py sets them on every connect instead.
 
 -- One row per configured camera on this site. Mirror of config; config wins on conflict.
 CREATE TABLE IF NOT EXISTS cameras (
@@ -27,10 +27,12 @@ CREATE TABLE IF NOT EXISTS cameras (
 CREATE TABLE IF NOT EXISTS zones (
     zone_id       TEXT PRIMARY KEY,          -- ZoneId
     camera_id     TEXT NOT NULL REFERENCES cameras(camera_id) ON DELETE CASCADE,
-    name          TEXT NOT NULL,
+    -- Nullable because config has no display name for a zone (§13.1) and these tables
+    -- are config's compiled form. The visual editor (P3.3) is what will fill it.
+    name          TEXT,
     role          TEXT NOT NULL DEFAULT 'area'
                     CHECK (role IN ('area','queue','staff')),
-    polygon       TEXT NOT NULL,             -- JSON: [[x,y],...] normalized [0,1], closed
+    polygon       TEXT NOT NULL,             -- JSON: [[x,y],...] normalized [0,1], ring implicit
     updated_at    TEXT NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS idx_zones_camera ON zones(camera_id);
@@ -39,7 +41,7 @@ CREATE INDEX IF NOT EXISTS idx_zones_camera ON zones(camera_id);
 CREATE TABLE IF NOT EXISTS lines (
     line_id       TEXT PRIMARY KEY,          -- LineId
     camera_id     TEXT NOT NULL REFERENCES cameras(camera_id) ON DELETE CASCADE,
-    name          TEXT NOT NULL,
+    name          TEXT,                      -- nullable, for the reason zones.name is
     ax REAL NOT NULL, ay REAL NOT NULL,      -- segment endpoint A (normalized)
     bx REAL NOT NULL, by REAL NOT NULL,      -- segment endpoint B (normalized)
     positive_dir  TEXT NOT NULL DEFAULT 'in'
@@ -68,7 +70,12 @@ CREATE TABLE IF NOT EXISTS metrics_minute (
     camera_id     TEXT NOT NULL REFERENCES cameras(camera_id) ON DELETE CASCADE,
     bucket        TEXT NOT NULL,             -- MinuteBucket, ISO-8601 UTC, floor-to-minute
     metric        TEXT NOT NULL,             -- see muster.types.MetricName
-    scope_id      TEXT,                      -- zone_id / line_id, nullable for camera-wide
+    -- zone_id / line_id, or '' for a camera-wide metric. NOT NULL and empty-string rather
+    -- than NULL for two reasons that both bite silently: a STRICT table's PRIMARY KEY
+    -- columns are implicitly NOT NULL, and NULL never equals NULL in an ON CONFLICT key —
+    -- so a NULL here would defeat the idempotent upsert below and double-count occupancy
+    -- on every restart. store.py maps '' <-> None at the boundary.
+    scope_id      TEXT NOT NULL DEFAULT '',
     value         REAL NOT NULL,
     staff_value   REAL,                      -- staff sub-count, nullable
     sample_count  INTEGER NOT NULL DEFAULT 0,-- contributing frames: confidence + gap detection
