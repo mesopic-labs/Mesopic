@@ -180,3 +180,12 @@ name = "The sync client reads metrics, never frames (ADR-0005)"
 type = "forbidden"
 source_modules = ["muster.sync"]
 forbidden_modules = ["muster.ingest", "muster.detector", "av", "cv2"]
+
+[[tool.importlinter.contracts]]
+name = "Ground truth handles labels, never pixels (ADR-0015)"
+type = "forbidden"
+source_modules = ["muster.truth"]
+# The truth set is crossing timestamps and directions — numbers a human wrote down. A
+# decoder reachable from here is how "we label footage" quietly becomes "we process
+# footage", and how this suite would stop being runnable in CI with no clips on disk.
+forbidden_modules = ["muster.ingest", "muster.detector", "av", "cv2"]

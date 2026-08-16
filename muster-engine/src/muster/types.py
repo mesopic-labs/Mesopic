@@ -46,6 +46,10 @@ SiteId = NewType("SiteId", str)
 ScopeId = NewType("ScopeId", str)
 """The zone or line a metric is scoped to. ``None`` for camera-wide metrics."""
 
+ClipId = NewType("ClipId", str)
+"""A ground-truth clip. Names a manifest in the repository, never the footage itself —
+the bytes live outside it and are resolved at run time (MK.2)."""
+
 # --- Time -------------------------------------------------------------------
 
 FrameTs = NewType("FrameTs", datetime)

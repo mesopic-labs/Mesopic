@@ -22,6 +22,8 @@ snapshots/
 *.mp4
 *.mkv
 *.avi
+*.mov
+*.webm
 *.h264
 *.jpg
 *.jpeg

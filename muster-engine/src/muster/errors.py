@@ -38,3 +38,13 @@ class ExportError(MusterError):
 
 class SyncError(MusterError):
     """The metrics-sync client could not ship a batch. Rows stay unsynced and retry (§14)."""
+
+
+class TruthError(MusterError):
+    """A ground-truth artefact is unusable: malformed, inconsistent, or ineligible.
+
+    Covers both halves of MK.2 — a truth file or clip manifest that fails validation, and
+    the refusal to gate a release on footage whose provenance or consent does not permit
+    it. Both are loud by design: a quietly-accepted bad label produces an accuracy number
+    that looks fine and is wrong.
+    """

@@ -9,6 +9,7 @@ Commands are typed Python functions; Typer derives the interface from the annota
     muster doctor                                  # box, accelerators, model licence
     muster spike      --rtsp <url>                 # P1: the hard-coded perf spike
     muster bench      --rtsp <url> --duration 1800 # P1.7: the M0 gate's soak
+    muster truth validate fixtures/clips/*.json    # MK.2: check a label or a manifest
 """
 
 from __future__ import annotations
@@ -32,13 +33,14 @@ from muster.bench import (
 from muster.detector.detector import Detector
 from muster.detector.model_manager import ModelManager
 from muster.detector.onnx_detector import OnnxDetector
-from muster.errors import MusterError
+from muster.errors import MusterError, TruthError
 from muster.ingest.rtsp import RtspFrameSource
 from muster.ingest.source import FrameSource
 from muster.sampler.sampler import FrameSampler
 from muster.spike import run_spike
 from muster.tracker.bytetrack import ByteTrackTracker
 from muster.tracker.tracker import Tracker
+from muster.truth import gate_eligible, load_manifest, load_truth
 from muster.types import CameraId
 
 DEFAULT_MODEL = "yolox-nano"
@@ -285,6 +287,80 @@ def bench(  # noqa: PLR0917 - each argument is one documented gate threshold (§
     typer.echo(artefact)
 
     if result.verdicts and not result.passed:
+        raise typer.Exit(code=1)
+
+
+truth_app = typer.Typer(
+    name="truth",
+    help="Ground-truth clip sets: validate the labels an accuracy number is measured against.",
+    no_args_is_help=True,
+)
+app.add_typer(truth_app, name="truth")
+
+MANIFEST_SUFFIX = ".clip.json"
+TRUTH_SUFFIX = ".truth.json"
+
+
+def _describe_manifest(path: Path) -> str:
+    """Summarise a clip manifest, leading with the answer that matters.
+
+    Gate-eligibility is printed for every manifest, in words, because the failure this
+    command exists to catch is footage being committed under a provenance nobody checked.
+    A reviewer should be able to see "no" without knowing the rule.
+    """
+    manifest = load_manifest(path)
+    verdict = "yes" if gate_eligible(manifest) else "no"
+    return (
+        f"ok  {manifest.clip_id}  {manifest.duration_s:g}s  "
+        f"{manifest.width}x{manifest.height}@{manifest.fps:g}  "
+        f"{manifest.provenance.kind}/{manifest.consent.model_release}  "
+        f"gate-eligible: {verdict}"
+    )
+
+
+def _describe_truth(path: Path) -> str:
+    truth = load_truth(path)
+    count = len(truth.crossings)
+    plural = "" if count == 1 else "s"
+    return (
+        f"ok  {truth.clip_id}  {truth.duration_s:g}s  "
+        f"{count} crossing{plural}  by {truth.labelled_by}"
+    )
+
+
+def _describe(path: Path) -> str:
+    """Dispatch on the filename, because the two documents are not interchangeable."""
+    if path.name.endswith(MANIFEST_SUFFIX):
+        return _describe_manifest(path)
+    if path.name.endswith(TRUTH_SUFFIX):
+        return _describe_truth(path)
+    message = f"unrecognised name: expected *{MANIFEST_SUFFIX} or *{TRUTH_SUFFIX}"
+    raise TruthError(message)
+
+
+@truth_app.command("validate")
+def truth_validate(
+    paths: Annotated[
+        list[Path],
+        typer.Argument(help="Clip manifests (*.clip.json) or truth files (*.truth.json)."),
+    ],
+) -> None:
+    """Check ground-truth documents, and say whether each clip may back a released claim.
+
+    Every file is checked before anything exits, so one broken label does not hide the
+    next: a labelling session is fixed in one pass, not one error at a time.
+    """
+    failed = False
+    for path in paths:
+        try:
+            print(f"{path.name}: {_describe(path)}")
+        except TruthError as error:
+            # The detail is the point here: it names the field that failed in a file the
+            # user wrote, and carries nothing sensitive.
+            print(f"{path.name}: FAILED  {error}")
+            failed = True
+
+    if failed:
         raise typer.Exit(code=1)
 
 

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "clip_id": "storefront-oblique-01",
+  "sha256": "fba35b0f5bd6eb46ca9fe799ff56ff5739081b2b179c0e104e5c1336b1393a14",
+  "duration_s": 19.8,
+  "width": 1280,
+  "height": 720,
+  "fps": 25.0,
+  "provenance": {
+    "kind": "stock",
+    "licence": "Pexels Licence - free to use, no attribution required, no model release warranted",
+    "licence_verified_utc": "2026-08-16",
+    "url": null
+  },
+  "consent": {
+    "model_release": "unknown",
+    "note": "Pexels declines to warrant that releases exist for identifiable people"
+  },
+  "scene": {
+    "reference": "hard",
+    "mount_height_m": null,
+    "mount_angle_deg": null,
+    "lighting": "overcast_daylight"
+  }
+}

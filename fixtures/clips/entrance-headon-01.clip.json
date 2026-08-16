@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "clip_id": "entrance-headon-01",
+  "sha256": "dd20378cdfc234a5905b215d050b731d06ce370d2ad8f75657f1c47a797f278c",
+  "duration_s": 18.44,
+  "width": 1280,
+  "height": 720,
+  "fps": 25.0,
+  "provenance": {
+    "kind": "stock",
+    "licence": "Pexels Licence - free to use, no attribution required, no model release warranted",
+    "licence_verified_utc": "2026-08-16",
+    "url": null
+  },
+  "consent": {
+    "model_release": "unknown",
+    "note": "Pexels declines to warrant that releases exist for identifiable people"
+  },
+  "scene": {
+    "reference": "typical",
+    "mount_height_m": null,
+    "mount_angle_deg": null,
+    "lighting": "overcast_daylight"
+  }
+}
