@@ -100,11 +100,23 @@ class Direction(StrEnum):
 
 
 class EventKind(StrEnum):
-    """The raw events analytics emits (engine-architecture.md §8)."""
+    """The raw events analytics emits (engine-architecture.md §8).
+
+    Most are *transitions* — something changed, here is what. Two are not, and the
+    difference is worth knowing before adding a third (ADR-0016):
+
+    * ``OCCUPANCY_SAMPLE`` is a *state*, emitted per zone per tick whether or not
+      anything changed. It is the only dense kind, and it exists because a reducer that
+      sees transitions alone cannot report a minute in which nobody moved.
+    * ``ZONE_CONFIRMED`` is sparse but derived: the moment a residency passes
+      ``dwell_min_s``, which the sample's bare count cannot attribute to a track.
+    """
 
     LINE_CROSS = "line_cross"
     ZONE_ENTER = "zone_enter"
     ZONE_EXIT = "zone_exit"
+    ZONE_CONFIRMED = "zone_confirmed"
+    OCCUPANCY_SAMPLE = "occupancy_sample"
     DWELL_SAMPLE = "dwell_sample"
     HEATMAP_HIT = "heatmap_hit"
 
@@ -114,11 +126,21 @@ class MetricName(StrEnum):
 
     The core six plus the two cheap adjacencies. Anything not on this list does not
     exist in v1 — scope is locked (engine-architecture.md §1).
+
+    Occupancy is three series rather than one (algorithms.md §6.1) and queue length
+    follows the same split: the confirmed series lags by ``dwell_min_s``, which is
+    harmless for a mean and wrong for a peak, because peaks form in exactly the
+    fast-turnover moments the confirmation rule suppresses. So ``OCCUPANCY`` carries the
+    mean and ``OCCUPANCY_RAW`` the peak. The third, ``net_occupancy``, is deliberately
+    absent — it is opt-in, it is the only metric in the set that accumulates drift, and
+    whether it should exist in v1 at all is still open (ADR-0016).
     """
 
     FOOTFALL = "footfall"
     OCCUPANCY = "occupancy"
+    OCCUPANCY_RAW = "occupancy_raw"
     QUEUE_LEN = "queue_len"
+    QUEUE_LEN_RAW = "queue_len_raw"
     DWELL_SECONDS = "dwell_seconds"
     LINE_CROSS = "line_cross"
     CONVERSION = "conversion"
@@ -217,19 +239,38 @@ class RawEvent:
     camera_id: CameraId
     ts: FrameTs
     kind: EventKind
-    track_id: TrackId
+    track_id: TrackId | None
+    """The track the event is about. ``None`` for ``OCCUPANCY_SAMPLE``, which is a count
+    of a zone rather than a fact about anyone in it."""
     zone_id: ZoneId | None = None
     line_id: LineId | None = None
     direction: int | None = None
     """``+1`` / ``-1`` for line crossings, matching the line's ``positive_dir``."""
     value: float | None = None
-    """The magnitude carried by the kinds that have one — today only ``DWELL_SAMPLE``,
-    whose value is a completed dwell in seconds (algorithms.md §7).
+    """The magnitude carried by the kinds that have one: a completed dwell in seconds for
+    ``DWELL_SAMPLE`` (algorithms.md §7), and the number of tracks inside the zone for
+    ``OCCUPANCY_SAMPLE``.
 
     ``None`` everywhere else, because most events *are* the fact: a crossing has a
     direction and a zone entry has neither size nor duration. Note the ``events`` table
     has no matching column — dwell samples are derived inside the aggregator and reduced
     there, never appended to the raw log — so persisting one would need a migration.
+    """
+    confirmed_value: float | None = None
+    """The confirmed half of a count that has two halves.
+
+    Set on ``OCCUPANCY_SAMPLE`` alongside ``value``: how many of the tracks inside the
+    zone have been there for at least ``dwell_min_s``. Both travel on one event because
+    algorithms.md §6.1 needs both — the peak reads the raw count, the mean reads this one
+    — and two events could disagree about the same instant.
+    """
+    dt_s: float | None = None
+    """The wall-clock interval this sample represents, in seconds — the gap since the
+    previous sampled frame on the same camera.
+
+    Set on ``OCCUPANCY_SAMPLE`` and nowhere else. It is what makes a state metric
+    honest: the adaptive sampler slows down when the scene is busy, so an estimator that
+    averages over *samples* systematically under-weights the rush (algorithms.md §0.6).
     """
     is_staff: bool = False
 

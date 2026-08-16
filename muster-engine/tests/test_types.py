@@ -45,7 +45,9 @@ def test_metric_vocabulary_is_locked() -> None:
     assert {metric.value for metric in MetricName} == {
         "footfall",
         "occupancy",
+        "occupancy_raw",
         "queue_len",
+        "queue_len_raw",
         "dwell_seconds",
         "line_cross",
         "conversion",
@@ -75,7 +77,9 @@ def test_a_raw_event_carries_no_pixels() -> None:
 
     An exact set, not a subset: growing `RawEvent` should cost a line in this test and a
     moment's thought about whether the new field could carry image data. `value` was
-    added for P2.6's completed dwell durations and earned that moment.
+    added for P2.6's completed dwell durations and earned that moment; `dt_s` was added
+    for P2.4's occupancy samples and is a duration in seconds, which cannot encode a
+    frame however it is abused.
     """
     assert {field.name for field in dataclasses.fields(RawEvent)} == {
         "camera_id",
@@ -86,6 +90,8 @@ def test_a_raw_event_carries_no_pixels() -> None:
         "line_id",
         "direction",
         "value",
+        "confirmed_value",
+        "dt_s",
         "is_staff",
     }
 
