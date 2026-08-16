@@ -45,6 +45,13 @@ Someone stepping behind a pillar should be one dwell, not two. Expert-level in t
 parameter table, so it is a constructor argument rather than a `muster.yaml` key.
 """
 
+_DWELL_KINDS = frozenset({EventKind.ZONE_ENTER, EventKind.ZONE_EXIT})
+"""The only kinds that move the dwell state machine.
+
+Named rather than implied, because the zone events are no longer the only ones carrying a
+`zone_id`: an occupancy sample names a zone and no track at all (ADR-0016).
+"""
+
 _DwellKey = tuple[CameraId, ZoneId, TrackId]
 
 
@@ -106,7 +113,7 @@ class Aggregator:
 
     def _track_dwell(self, event: RawEvent) -> None:
         """algorithms.md §7's state machine, kept in memory and lost on restart (§10)."""
-        if event.zone_id is None:
+        if event.kind not in _DWELL_KINDS or event.zone_id is None or event.track_id is None:
             return
         key = (event.camera_id, event.zone_id, event.track_id)
         state = self._open.get(key)
