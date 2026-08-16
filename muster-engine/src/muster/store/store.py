@@ -277,26 +277,21 @@ class Store:
     # --- Events -------------------------------------------------------------
 
     def append_events(self, events: Sequence[RawEvent]) -> None:
-        """Write to the short-retention raw event log. Never synced."""
+        """Write to the short-retention raw event log. Never synced.
+
+        Every row is a fact about one track, which `events.track_id NOT NULL` enforces.
+        A trackless event — an occupancy sample, which counts a zone rather than anyone
+        in it — is refused rather than coerced, because the table has no column for what
+        it actually carries and there is one of them per zone per tick (ADR-0016).
+        """
+        rows = [_event_row(event) for event in events]
         try:
             with self._transaction() as connection:
                 connection.executemany(
                     """INSERT INTO events
                            (camera_id, ts, kind, track_id, line_id, zone_id, direction, is_staff)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    [
-                        (
-                            event.camera_id,
-                            event.ts.isoformat(),
-                            event.kind.value,
-                            int(event.track_id),
-                            event.line_id,
-                            event.zone_id,
-                            event.direction,
-                            int(event.is_staff),
-                        )
-                        for event in events
-                    ],
+                    rows,
                 )
         except sqlite3.Error:
             msg = "cannot append to the event log"
@@ -386,6 +381,31 @@ class Store:
         adds along with the job that reads it (implementation-plan.md P2.8, MK.4).
         """
         raise NotImplementedError
+
+
+_EventRow = tuple[str, str, str, int, str | None, str | None, int | None, int]
+
+
+def _event_row(event: RawEvent) -> _EventRow:
+    """One raw event as the `events` table wants it, or a refusal.
+
+    The guard lives here rather than in a loop of its own so the narrowing is the same
+    expression as the write — a check that can drift away from the thing it protects is
+    the check that eventually does.
+    """
+    if event.track_id is None:
+        msg = f"event kind {event.kind.value!r} belongs to no track and cannot be logged"
+        raise StoreError(msg)
+    return (
+        event.camera_id,
+        event.ts.isoformat(),
+        event.kind.value,
+        int(event.track_id),
+        event.line_id,
+        event.zone_id,
+        event.direction,
+        int(event.is_staff),
+    )
 
 
 def _row_from(record: tuple[str, str, str, str, float, float | None, int]) -> MetricRow:
