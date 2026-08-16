@@ -218,6 +218,15 @@ class RawEvent:
     line_id: LineId | None = None
     direction: int | None = None
     """``+1`` / ``-1`` for line crossings, matching the line's ``positive_dir``."""
+    value: float | None = None
+    """The magnitude carried by the kinds that have one — today only ``DWELL_SAMPLE``,
+    whose value is a completed dwell in seconds (algorithms.md §7).
+
+    ``None`` everywhere else, because most events *are* the fact: a crossing has a
+    direction and a zone entry has neither size nor duration. Note the ``events`` table
+    has no matching column — dwell samples are derived inside the aggregator and reduced
+    there, never appended to the raw log — so persisting one would need a migration.
+    """
     is_staff: bool = False
 
 

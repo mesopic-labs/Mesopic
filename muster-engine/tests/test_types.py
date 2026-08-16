@@ -71,7 +71,12 @@ def test_a_metric_row_carries_its_full_natural_key() -> None:
 
 
 def test_a_raw_event_carries_no_pixels() -> None:
-    """What crosses the worker/supervisor boundary is small and pixel-free (ADR-0005)."""
+    """What crosses the worker/supervisor boundary is small and pixel-free (ADR-0005).
+
+    An exact set, not a subset: growing `RawEvent` should cost a line in this test and a
+    moment's thought about whether the new field could carry image data. `value` was
+    added for P2.6's completed dwell durations and earned that moment.
+    """
     assert {field.name for field in dataclasses.fields(RawEvent)} == {
         "camera_id",
         "ts",
@@ -80,6 +85,7 @@ def test_a_raw_event_carries_no_pixels() -> None:
         "zone_id",
         "line_id",
         "direction",
+        "value",
         "is_staff",
     }
 
