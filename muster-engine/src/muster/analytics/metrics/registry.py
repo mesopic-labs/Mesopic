@@ -54,6 +54,10 @@ class MetricRegistry:
         self._plugins.append(plugin)
         self._claimed.update(dict.fromkeys(plugin.names, plugin))
 
+    def metrics(self) -> frozenset[MetricName]:
+        """Every metric this registry can produce. The site's declared vocabulary."""
+        return frozenset(self._claimed)
+
     def reduce_all(self, events: list[RawEvent], bucket: MinuteBucket) -> list[MetricRow]:
         """Run every registered plugin over one bucket's events.
 
