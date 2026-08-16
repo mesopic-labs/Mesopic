@@ -286,9 +286,16 @@ def _drain_a_spike_run(frames: list[DecodedFrame]) -> list[str]:
 def test_a_spike_run_writes_nothing_to_disk(disk_writes: DiskWriteRecorder) -> None:
     """A frame is a local variable in the worker loop. The loop touches no file.
 
-    When P2.5 lands a store this assertion has to name the store's file as the one
-    legitimate write, not be deleted — the day it is deleted is the day a frame dump
-    stops being noticed.
+    P2.5 landed a `Store` but did not join it to this pipeline, so a spike run still
+    writes nothing at all and this stays an equality against the empty list. When the
+    pipeline does start persisting — P2.6's aggregator, P2.7's supervisor — the fix is to
+    name the store's file as the one legitimate write, not to delete the assertion. The
+    day it is deleted is the day a frame dump stops being noticed.
+
+    (`DiskWriteRecorder` patches `io.open`/`builtins.open`, which SQLite goes around
+    entirely: it writes from C. So this cannot police the store's own file either way —
+    what does that job is the schema audit in `test_store.py`, which proves no column can
+    hold a pixel in the first place.)
     """
     lines = _drain_a_spike_run([_tainted_frame(i / 10.0) for i in range(20)])
 
