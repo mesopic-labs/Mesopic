@@ -42,8 +42,12 @@ repos:
       - id: shellcheck
 
   # --- Lint + format (one tool) ---------------------------------------------
+  # KEEP THIS REV EQUAL TO THE `ruff` VERSION IN `uv.lock`. CI runs `uv run ruff` off the
+  # lock and this hook runs its own pinned build; when the two drift they are two
+  # different formatters over one file, and the hook re-writes what CI just accepted.
+  # Dependabot's uv ecosystem cannot see this file, so the pairing is manual.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.2
+    rev: v0.16.1
     hooks:
       - id: ruff-check
         args: [--fix]

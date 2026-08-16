@@ -20,6 +20,11 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     open-pull-requests-limit: 5
+    # Update the lockfile, never the constraint. `pyproject.toml` states the floor a
+    # self-hoster must satisfy and `uv.lock` states what we tested — the default strategy
+    # raises both, so a numpy patch release would quietly narrow the installs a user is
+    # allowed to have. Floors move when a real minimum changes, in a PR that says why.
+    versioning-strategy: lockfile-only
     groups:
       # Routine bumps are batched and reviewed together. Security patches jump the queue
       # on their own (tech-stack.md §7), so they are deliberately not grouped.
