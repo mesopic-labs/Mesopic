@@ -17,6 +17,7 @@ Implements P2.2.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from muster.config.schema import LineConfig, MusterConfig, ZoneConfig
@@ -72,13 +73,18 @@ class PreparedLine:
         answer and callers must treat it as one: algorithms.md §5c holds the sticky side
         on a zero rather than folding it into a direction.
         """
+        return side_of(self.a, self.b, point)
+
+    def distance_to(self, point: NormPoint) -> float:
+        """Unsigned normalized distance from `point` to the infinite line `a -> b`.
+
+        The hysteresis band of algorithms.md §5(d) is expressed in these units, so the
+        cross product has to be divided by `|AB|` rather than used raw — otherwise the
+        band would silently scale with the length of the line the user happened to draw.
+        """
         (ax, ay), (bx, by), (px, py) = self.a, self.b, point
         cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax)
-        if cross > 0.0:
-            return 1
-        if cross < 0.0:
-            return -1
-        return 0
+        return abs(cross) / math.hypot(bx - ax, by - ay)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -157,6 +163,23 @@ def _prepare_line(line: LineConfig) -> PreparedLine:
         positive_dir=line.positive_dir,
         metrics=tuple(line.metrics),
     )
+
+
+def side_of(a: NormPoint, b: NormPoint, point: NormPoint) -> int:
+    """The sign of the 2-D cross product of `AB` and `AP` (algorithms.md §5).
+
+    Module-level and shared on purpose. The segment-intersection test in `geometry` needs
+    the orientation of a line's endpoints about a *track's* segment as well as the other
+    way round, and §5(b) warns that the two must never disagree about which side a zero
+    belongs to. One implementation is the only way to keep that true.
+    """
+    (ax, ay), (bx, by), (px, py) = a, b, point
+    cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+    if cross > 0.0:
+        return 1
+    if cross < 0.0:
+        return -1
+    return 0
 
 
 def _bounding_box(polygon: tuple[NormPoint, ...]) -> Bounds:
