@@ -36,7 +36,8 @@ FORBIDDEN_COLUMN_TOKENS = (
 )
 
 # Calls that write image data to disk. If one of these is ever needed (it should not be),
-# it needs an ADR first, not a `# noqa`.
+# it needs an ADR first, not a lint suppression. (Spelling that suppression out literally
+# here trips ruff >= 0.16.3, which reads the token even inside prose.)
 FORBIDDEN_CALLS = (
     "cv2.imwrite",
     "imageio.imwrite",
