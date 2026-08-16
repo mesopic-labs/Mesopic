@@ -23,3 +23,7 @@ what it does and does not store about people.
 - **A rule that can be enforced mechanically** goes in the linter, the type checker, or
   an import-linter contract — not in a document someone has to remember. `make check` is
   the source of truth for what "correct" means here.
+- **The design behind a substantial change**, written before the code and kept afterwards
+  as the reasoning trail, goes in [`specs/`](specs/), dated. A spec records what was
+  decided and what was rejected; an ADR records the one decision that outlives the change.
+  Specs are not part of the published site.
