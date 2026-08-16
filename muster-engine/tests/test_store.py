@@ -325,6 +325,29 @@ def test_an_event_for_an_unknown_camera_is_refused(store: Store) -> None:
         store.append_events([orphan])
 
 
+def test_an_event_belonging_to_no_track_is_refused(store: Store) -> None:
+    """The raw log is a log of per-track facts; `events.track_id` is `NOT NULL`.
+
+    An occupancy sample names a zone and nobody in it, and the table has no column for
+    the count or the interval it carries — so appending one would write a row that says
+    only "something happened in this zone", once per zone per tick, forever. Refuse
+    loudly: the supervisor has to choose what it logs rather than discover the gap in a
+    disk-usage graph (ADR-0016).
+    """
+    sample = RawEvent(
+        camera_id=CameraId("front-door"),
+        ts=FrameTs(datetime(2026, 8, 16, 9, 30, tzinfo=UTC)),
+        kind=EventKind.OCCUPANCY_SAMPLE,
+        track_id=None,
+        zone_id=ZoneId("shop-floor"),
+        value=3.0,
+        dt_s=0.4,
+    )
+
+    with pytest.raises(StoreError, match="occupancy_sample"):
+        store.append_events([sample])
+
+
 # --- Forward-only migrations ------------------------------------------------
 
 

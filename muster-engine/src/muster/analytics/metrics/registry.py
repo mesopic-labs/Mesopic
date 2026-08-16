@@ -14,8 +14,14 @@ class MetricPlugin(Protocol):
     """Reduces a bucket's raw events into metric rows."""
 
     @property
-    def name(self) -> MetricName:
-        """The metric this plugin produces."""
+    def names(self) -> frozenset[MetricName]:
+        """Every metric this plugin produces.
+
+        Plural because a metric concept is not always one series: occupancy is a peak
+        taken from the raw count and a mean taken from the confirmed one (algorithms.md
+        §6.1), and both come from one fold over one sample stream. Splitting them across
+        two plugins would read the same events twice and let the pair drift apart.
+        """
         ...
 
     def reduce(self, events: list[RawEvent], bucket: MinuteBucket) -> list[MetricRow]:
@@ -31,19 +37,22 @@ class MetricRegistry:
     """
 
     def __init__(self) -> None:
-        self._plugins: dict[MetricName, MetricPlugin] = {}
+        self._plugins: list[MetricPlugin] = []
+        self._claimed: dict[MetricName, MetricPlugin] = {}
 
     def register(self, plugin: MetricPlugin) -> None:
-        """Add a plugin. Registering the same metric twice is an error.
+        """Add a plugin. Claiming a metric another plugin already claims is an error.
 
         Two reducers writing one metric name would collide on the natural key
         `(camera_id, metric, scope_id, bucket)` — the later upsert silently replacing the
         earlier one, per bucket, forever.
         """
-        if plugin.name in self._plugins:
-            msg = f"a plugin for metric {plugin.name.value!r} is already registered"
-            raise ValueError(msg)
-        self._plugins[plugin.name] = plugin
+        for name in sorted(plugin.names):
+            if name in self._claimed:
+                msg = f"a plugin for metric {name.value!r} is already registered"
+                raise ValueError(msg)
+        self._plugins.append(plugin)
+        self._claimed.update(dict.fromkeys(plugin.names, plugin))
 
     def reduce_all(self, events: list[RawEvent], bucket: MinuteBucket) -> list[MetricRow]:
         """Run every registered plugin over one bucket's events.
@@ -53,6 +62,6 @@ class MetricRegistry:
         crossings *and* confirmed zone entries, algorithms.md §7).
         """
         rows: list[MetricRow] = []
-        for plugin in self._plugins.values():
+        for plugin in self._plugins:
             rows += plugin.reduce(events, bucket)
         return rows

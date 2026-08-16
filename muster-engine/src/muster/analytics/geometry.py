@@ -46,6 +46,15 @@ a person loitering on the threshold; the timer below is the backstop."""
 CROSSING_DEBOUNCE_S = 1.0
 """How long the same track is ignored on the same line after crossing it (§5(d))."""
 
+DWELL_MIN_S = 3.0
+"""How long a track must be *continuously* inside a zone before it counts (§6, §7).
+
+The same threshold the dwell state machine uses, applied to the live count — one rule,
+two consumers. Confirmation here is deliberately not the aggregator's dwell machine: it
+has no re-entry grace, because §6 asks for continuous residency and a round trip out of
+the zone genuinely restarts it.
+"""
+
 
 @dataclass(slots=True)
 class _LineState:
@@ -56,6 +65,14 @@ class _LineState:
     back becomes two half-crossings (§5c)."""
 
     debounced_until: datetime | None = None
+
+
+@dataclass(slots=True)
+class _Residency:
+    """Per `(zone, track)`: when this stay started, and whether it has been confirmed."""
+
+    entered_at: FrameTs
+    confirmed: bool = False
 
 
 @dataclass(slots=True)
@@ -80,16 +97,26 @@ class GeometryAnalytics:
         *,
         hysteresis_delta: float = HYSTERESIS_DELTA,
         crossing_debounce_s: float = CROSSING_DEBOUNCE_S,
+        dwell_min_s: float = DWELL_MIN_S,
     ) -> None:
         self._geometry = geometry
         self._hysteresis_delta = hysteresis_delta
         self._crossing_debounce_s = crossing_debounce_s
+        self._dwell_min_s = timedelta(seconds=dwell_min_s)
         self._tracks: dict[tuple[CameraId, TrackId], _TrackState] = {}
-        self._inside: dict[ZoneId, set[TrackId]] = {}
+        self._inside: dict[ZoneId, dict[TrackId, _Residency]] = {}
         self._last_ts: dict[CameraId, datetime] = {}
 
-    def on_tracks(self, camera_id: CameraId, tracks: Sequence[Track]) -> list[RawEvent]:
-        """Derive this tick's events for one camera. No I/O, no persistence."""
+    def on_tracks(
+        self, camera_id: CameraId, tracks: Sequence[Track], *, ts: FrameTs | None = None
+    ) -> list[RawEvent]:
+        """Derive this tick's events for one camera. No I/O, no persistence.
+
+        `ts` is the sampled frame's capture time. It is optional only because a tick that
+        carries tracks can take its timestamp from the newest of them — but a tick with
+        *no* tracks cannot, and an empty camera still has to report that its zones held
+        nobody. Pass it wherever the caller knows it, which is everywhere real.
+        """
         for track in tracks:
             if track.camera_id != camera_id:
                 msg = (
@@ -98,20 +125,26 @@ class GeometryAnalytics:
                 )
                 raise ValueError(msg)
 
-        tick_ts = self._tick_ts(camera_id, tracks)
+        previous_ts = self._last_ts.get(camera_id)
+        tick_ts = self._tick_ts(camera_id, tracks, ts)
         events = self._line_events(camera_id, tracks)
         events += self._zone_events(camera_id, tracks, tick_ts)
+        events += self._occupancy_samples(camera_id, tick_ts, previous_ts)
         self._forget_dead_tracks(camera_id, tracks)
         return events
 
-    def _tick_ts(self, camera_id: CameraId, tracks: Sequence[Track]) -> datetime | None:
-        """This tick's capture time — the newest track, or the last one we saw.
+    def _tick_ts(
+        self, camera_id: CameraId, tracks: Sequence[Track], ts: FrameTs | None
+    ) -> datetime | None:
+        """This tick's capture time — the caller's, the newest track's, or the last seen.
 
         A tick with no tracks still has to stamp the exits it produces, and this module
         has no clock by design. The last capture time is the honest answer: it is when
         the departing track was last actually seen.
         """
-        if tracks:
+        if ts is not None:
+            self._last_ts[camera_id] = ts
+        elif tracks:
             self._last_ts[camera_id] = max(track.ts for track in tracks)
         return self._last_ts.get(camera_id)
 
@@ -192,7 +225,8 @@ class GeometryAnalytics:
         by_id = {track.track_id: track for track in tracks}
 
         for zone in self._geometry.zones_for(camera_id):
-            was_inside = self._inside.setdefault(zone.zone_id, set())
+            residents = self._inside.setdefault(zone.zone_id, {})
+            was_inside = set(residents)
             now_inside = {
                 track.track_id
                 for track in tracks
@@ -214,8 +248,100 @@ class GeometryAnalytics:
                 )
                 for track_id in sorted(was_inside - now_inside)
             ]
-            self._inside[zone.zone_id] = now_inside
+            self._inside[zone.zone_id] = self._residents_after(
+                residents, now_inside, by_id, tick_ts
+            )
+            events += self._confirmations(camera_id, zone.zone_id, tick_ts)
         return events
+
+    @staticmethod
+    def _residents_after(
+        residents: dict[TrackId, _Residency],
+        now_inside: set[TrackId],
+        by_id: dict[TrackId, Track],
+        tick_ts: datetime | None,
+    ) -> dict[TrackId, _Residency]:
+        """Carry the residency of everyone who stayed; start a clock for everyone new.
+
+        A track that left is simply dropped, which is what restarts its confirmation
+        clock on a re-entry — §6 asks for *continuous* residency, and a round trip out of
+        the zone is not continuous however brief it was.
+        """
+        kept: dict[TrackId, _Residency] = {}
+        for track_id in now_inside:
+            existing = residents.get(track_id)
+            if existing is not None:
+                kept[track_id] = existing
+                continue
+            track = by_id.get(track_id)
+            entered_at = track.ts if track is not None else tick_ts
+            if entered_at is not None:
+                kept[track_id] = _Residency(entered_at=FrameTs(entered_at))
+        return kept
+
+    def _confirmations(
+        self, camera_id: CameraId, zone_id: ZoneId, tick_ts: datetime | None
+    ) -> list[RawEvent]:
+        """Announce, once, that a stay has outlasted `dwell_min_s`.
+
+        The occupancy sample carries how many tracks are confirmed but not *which*, and
+        zone-derived footfall counts distinct confirmed entries (§7) — so the identity
+        has to arrive as its own event or not at all.
+        """
+        if tick_ts is None:
+            return []
+        events = []
+        for track_id, residency in sorted(self._inside[zone_id].items()):
+            if residency.confirmed or tick_ts - residency.entered_at < self._dwell_min_s:
+                continue
+            residency.confirmed = True
+            events.append(
+                RawEvent(
+                    camera_id=camera_id,
+                    ts=FrameTs(tick_ts),
+                    kind=EventKind.ZONE_CONFIRMED,
+                    track_id=track_id,
+                    zone_id=zone_id,
+                )
+            )
+        return events
+
+    # --- Sampled state ------------------------------------------------------
+
+    def _occupancy_samples(
+        self, camera_id: CameraId, tick_ts: datetime | None, previous_ts: datetime | None
+    ) -> list[RawEvent]:
+        """One count per zone per tick, carrying the interval it stands for.
+
+        Emitted whether or not anything changed, because that is the entire point: a
+        reducer fed only transitions reports nothing for a minute in which nobody moved,
+        and "nobody moved" is not the same fact as "the camera was down".
+
+        Nothing is emitted for a tick that did not advance the clock — the first tick of
+        a run, or a repeated timestamp. A zero-width interval weights nothing and would
+        only inflate `sample_count` into false confidence (algorithms.md §6.2).
+        """
+        if tick_ts is None or previous_ts is None or tick_ts <= previous_ts:
+            return []
+        dt_s = (tick_ts - previous_ts).total_seconds()
+        samples = []
+        for zone in self._geometry.zones_for(camera_id):
+            residents = self._inside.get(zone.zone_id, {})
+            samples.append(
+                RawEvent(
+                    camera_id=camera_id,
+                    ts=FrameTs(tick_ts),
+                    kind=EventKind.OCCUPANCY_SAMPLE,
+                    track_id=None,
+                    zone_id=zone.zone_id,
+                    value=float(len(residents)),
+                    confirmed_value=float(
+                        sum(1 for residency in residents.values() if residency.confirmed)
+                    ),
+                    dt_s=dt_s,
+                )
+            )
+        return samples
 
     # --- Bookkeeping --------------------------------------------------------
 

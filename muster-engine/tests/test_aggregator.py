@@ -89,7 +89,7 @@ class _CountingPlugin:
     which is the thing under test — not to be a plausible metric.
     """
 
-    name: MetricName = MetricName.LINE_CROSS
+    names: frozenset[MetricName] = field(default_factory=lambda: frozenset({MetricName.LINE_CROSS}))
     kinds: frozenset[EventKind] = field(default_factory=lambda: frozenset({EventKind.LINE_CROSS}))
     seen: list[tuple[MinuteBucket, int]] = field(default_factory=list)
 
@@ -102,7 +102,7 @@ class _CountingPlugin:
             MetricRow(
                 camera_id=relevant[0].camera_id,
                 bucket=bucket,
-                metric=self.name,
+                metric=next(iter(sorted(self.names))),
                 scope_id=ScopeId(str(relevant[0].line_id or relevant[0].zone_id)),
                 value=float(len(relevant)),
                 sample_count=len(relevant),
@@ -114,7 +114,9 @@ class _CountingPlugin:
 class _DwellPlugin(_CountingPlugin):
     """Reports the durations it was given, so bucket attribution is visible."""
 
-    name: MetricName = MetricName.DWELL_SECONDS
+    names: frozenset[MetricName] = field(
+        default_factory=lambda: frozenset({MetricName.DWELL_SECONDS})
+    )
     kinds: frozenset[EventKind] = field(default_factory=lambda: frozenset({EventKind.DWELL_SAMPLE}))
 
     def reduce(self, events: list[RawEvent], bucket: MinuteBucket) -> list[MetricRow]:
@@ -273,6 +275,40 @@ def test_registering_the_same_metric_twice_is_an_error() -> None:
 
     with pytest.raises(ValueError, match="line_cross"):
         registry.register(_CountingPlugin())
+
+
+def test_a_plugin_may_declare_more_than_one_metric() -> None:
+    """Occupancy is peak *and* mean, from one fold over one sample stream (§6.1).
+
+    Splitting that across two plugins would make them read the same events twice and
+    leave the raw/confirmed pair free to drift apart.
+    """
+    registry = MetricRegistry()
+    both = frozenset({MetricName.OCCUPANCY, MetricName.OCCUPANCY_RAW})
+
+    registry.register(_CountingPlugin(names=both))
+
+    with pytest.raises(ValueError, match="occupancy_raw"):
+        registry.register(_CountingPlugin(names=frozenset({MetricName.OCCUPANCY_RAW})))
+
+
+def test_an_occupancy_sample_does_not_open_a_dwell() -> None:
+    """A sample names a zone but no track, and the dwell machine is keyed by track."""
+    aggregator = _aggregator()
+
+    aggregator.ingest(
+        RawEvent(
+            camera_id=CAMERA,
+            ts=_at(1.0),
+            kind=EventKind.OCCUPANCY_SAMPLE,
+            track_id=None,
+            zone_id=FLOOR,
+            value=3.0,
+            dt_s=0.5,
+        )
+    )
+
+    assert aggregator.open_dwells() == 0
 
 
 # --- Dwell: the state machine algorithms.md §7 specifies ---------------------

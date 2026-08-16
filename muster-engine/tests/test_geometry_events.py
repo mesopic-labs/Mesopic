@@ -132,7 +132,17 @@ def _walk(analytics: GeometryAnalytics, *steps: Track) -> list[RawEvent]:
 
 
 def _kinds(events: list[RawEvent]) -> list[EventKind]:
-    return [event.kind for event in events]
+    return [event.kind for event in _transitions(events)]
+
+
+def _transitions(events: list[RawEvent]) -> list[RawEvent]:
+    """Everything except the per-tick occupancy sample.
+
+    The sample is a *level*, emitted every tick whether or not anything changed, and this
+    file is about *edges*. Keeping it out of these assertions is what lets them stay
+    exact lists; the sample stream has its own file (test_occupancy_samples.py).
+    """
+    return [event for event in events if event.kind is not EventKind.OCCUPANCY_SAMPLE]
 
 
 # --- Line crossing: what must be counted ------------------------------------
@@ -318,7 +328,8 @@ def test_two_tracks_debounce_independently() -> None:
         [_track((0.5, 0.8), second=1, track_id=1), _track((0.6, 0.8), second=1, track_id=2)],
     )
 
-    assert sorted(event.track_id for event in events) == [TrackId(1), TrackId(2)]
+    crossed = [event.track_id for event in _transitions(events) if event.track_id is not None]
+    assert sorted(crossed) == [TrackId(1), TrackId(2)]
 
 
 # --- The coasted-track policy (algorithms.md §3.4) ---------------------------
@@ -374,7 +385,7 @@ def test_entering_a_zone_emits_one_enter_event() -> None:
     )
 
     assert _kinds(events) == [EventKind.ZONE_ENTER]
-    assert events[0].zone_id == FLOOR
+    assert _transitions(events)[0].zone_id == FLOOR
 
 
 def test_staying_inside_a_zone_emits_nothing_further() -> None:
@@ -447,7 +458,7 @@ def test_overlapping_zones_each_get_their_own_event() -> None:
         _track((0.5, 0.5), second=1),
     )
 
-    assert [event.zone_id for event in events] == [ZoneId("floor"), ZoneId("queue")]
+    assert [event.zone_id for event in _transitions(events)] == [ZoneId("floor"), ZoneId("queue")]
 
 
 # --- Scoping ----------------------------------------------------------------
