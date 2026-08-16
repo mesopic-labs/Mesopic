@@ -228,3 +228,79 @@ def test_every_committed_truth_file_pairs_with_its_manifest() -> None:
         truth = load_truth(path)
         manifest = load_manifest(FIXTURE_CLIPS / f"{truth.clip_id}.clip.json")
         check_pairing(truth, manifest)
+
+
+# --- What a rejection message may contain -----------------------------------
+#
+# Added on review. `config/loader.py` already suppresses pydantic's `input` rendering for
+# exactly this reason (P2.1); the truth loader was passing only `include_url=False`, which
+# leaves it in. Today these documents carry no credential, but `provenance.url` is free
+# text a labeller pastes into and `labelled_by` is a person's name.
+
+
+@pytest.mark.privacy
+def test_a_rejection_names_the_field_and_not_the_document(tmp_path: Path) -> None:
+    """A model-level validator failure is the shape that carries the WHOLE payload.
+
+    Pydantic attaches the offending value as `input`, and for a validator that runs on
+    the assembled model that value is every field at once. The message a labeller needs
+    is which rule failed and where — never the document read back at them.
+    """
+    path = tmp_path / "sprawling.truth.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "clip_id": "doorway-daylight-01",
+                "labelled_by": "a-person-who-did-not-consent-to-being-logged",
+                "labelled_at_utc": "2026-08-16T00:00:00Z",
+                "duration_s": 10.0,
+                "crossings": [{"t_s": 99.0, "line_id": "entrance", "direction": "in"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TruthError) as caught:
+        load_truth(path)
+
+    message = str(caught.value)
+    assert "past the end" in message, "the rule that failed must still be reported"
+    assert "labelled_by" not in message, "the document was echoed back into the error"
+    assert "a-person-who-did-not-consent-to-being-logged" not in message
+
+
+@pytest.mark.privacy
+def test_a_rejected_manifest_does_not_echo_its_own_fields(tmp_path: Path) -> None:
+    """`provenance.url` is free text. Whatever a labeller pasted there stays out of logs."""
+    path = tmp_path / "sprawling.clip.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "clip_id": "doorway-daylight-01",
+                "sha256": "a" * 64,
+                "duration_s": 1.0,
+                "width": 1280,
+                "height": 720,
+                "fps": 25.0,
+                "provenance": {
+                    "kind": "stock",
+                    "licence": "L",
+                    "licence_verified_utc": "2026-08-16",
+                    "url": "https://internal.example.invalid/not-for-a-log",
+                },
+                "consent": {"model_release": "unknown", "note": None},
+                "scene": {"reference": "typical", "lighting": "day", "mount_angle_deg": 999},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TruthError) as caught:
+        load_manifest(path)
+
+    message = str(caught.value)
+    assert "mount_angle_deg" in message, "the field that failed must still be named"
+    assert "not-for-a-log" not in message
+    assert "'input'" not in message, "pydantic's input rendering must be suppressed entirely"

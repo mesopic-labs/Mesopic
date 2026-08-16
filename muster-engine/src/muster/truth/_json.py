@@ -44,11 +44,23 @@ def read_json(path: Path, max_bytes: int) -> Any:
 def parse[T: BaseModel](model: type[T], payload: Any, path: Path) -> T:
     """Validate a parsed document, reporting the field that failed and not the document.
 
-    Pydantic's message names the offending field and its constraint, which is what a
-    labeller needs to fix it; it does not echo the whole payload back into a log.
+    ``include_input=False`` is the load-bearing argument, and matches `config.loader`'s
+    handling of the same problem: pydantic attaches the offending value as ``input``, and
+    for a validator that runs on the *assembled model* that value is every field at once.
+    A truth file holds a rater's name and a manifest's ``provenance.url`` is free text
+    somebody pasted into, so a rejection that quotes the document back is a rejection that
+    writes both into whatever caught it. The field path and the rule are what a labeller
+    needs; the payload is what they already have on disk.
     """
     try:
         return model.model_validate(payload)
     except ValidationError as error:
-        message = f"{path.name} is not a valid {model.__name__}: {error.errors(include_url=False)}"
+        problems = error.errors(include_url=False, include_context=False, include_input=False)
+        detail = "; ".join(f"{_location(problem['loc'])}: {problem['msg']}" for problem in problems)
+        message = f"{path.name} is not a valid {model.__name__}: {detail}"
         raise TruthError(message) from None
+
+
+def _location(loc: tuple[int | str, ...]) -> str:
+    """``crossings.3.direction`` — the key path a human edits, not a pydantic repr."""
+    return ".".join(str(part) for part in loc) or "<document>"
