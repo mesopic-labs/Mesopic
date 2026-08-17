@@ -27,7 +27,13 @@ from typing import Any
 
 import pytest
 import yaml
-from scripted_worker import emit_occupancy_sample, emit_then_die, emit_then_exit, line_of
+from scripted_worker import (
+    emit_occupancy_sample,
+    emit_then_die,
+    emit_then_exit,
+    line_of,
+    run_until_stopped,
+)
 
 from muster.aggregator.aggregator import EXIT_GRACE_S
 from muster.config.schema import MusterConfig
@@ -43,16 +49,27 @@ BUCKET_START = datetime(2026, 8, 16, 9, 30, tzinfo=UTC)
 
 
 class FakeClock:
-    """A wall clock the test winds forward by hand."""
+    """Both clocks the supervisor reads, wound forward together by hand.
+
+    Two of them because the supervisor deliberately uses two: wall time decides which
+    events have expired, monotonic time decides how often work is allowed to repeat. A
+    test that faked only the wall clock would silently never re-run the interval-gated
+    retention job, and would report that as the job not working.
+    """
 
     def __init__(self, start: datetime) -> None:
         self.now = start
+        self.elapsed = 0.0
 
     def __call__(self) -> datetime:
         return self.now
 
+    def monotonic(self) -> float:
+        return self.elapsed
+
     def advance(self, seconds: float) -> None:
         self.now += timedelta(seconds=seconds)
+        self.elapsed += seconds
 
 
 @pytest.fixture
@@ -100,7 +117,7 @@ def clock() -> FakeClock:
 def _supervisor(
     config: MusterConfig, store: Store, clock: FakeClock, entry: WorkerEntry
 ) -> Supervisor:
-    return Supervisor(config, store=store, entry=entry, now=clock)
+    return Supervisor(config, store=store, entry=entry, now=clock, monotonic=clock.monotonic)
 
 
 def _footfall(store: Store) -> list[float]:
@@ -362,3 +379,100 @@ async def test_an_event_for_a_forgotten_bucket_is_dropped_and_counted(
 
     assert supervisor.late_events == 3 * cameras
     assert _footfall(store) == [3.0] * cameras
+
+
+# --- The retention job (MK.4) -----------------------------------------------
+
+
+async def test_the_tick_trims_events_past_the_retention_window(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """Nothing called `Store.trim` before this; the window was enforced by nobody."""
+    supervisor = _supervisor(config, store, clock, partial(emit_then_exit, crossings=2))
+
+    await supervisor.start()
+    await supervisor.drain_once(timeout=5.0, expected=2 * len(config.cameras))
+    logged = _logged_events(store)
+    clock.advance(config.storage.event_retention_hours * 3600 + 60)
+    await supervisor.tick()
+    await supervisor.stop()
+
+    assert logged == 2 * len(config.cameras), "precondition: the events were logged at all"
+    assert _logged_events(store) == 0
+    assert supervisor.trimmed_events == logged
+
+
+async def test_events_inside_the_window_are_kept(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """An hour into a 72-hour window, nothing is expired."""
+    supervisor = _supervisor(config, store, clock, partial(emit_then_exit, crossings=2))
+
+    await supervisor.start()
+    await supervisor.drain_once(timeout=5.0, expected=2 * len(config.cameras))
+    clock.advance(3600)
+    await supervisor.tick()
+    await supervisor.stop()
+
+    assert _logged_events(store) == 2 * len(config.cameras)
+    assert supervisor.trimmed_events == 0
+
+
+async def test_the_window_is_read_in_hours(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """A window read as minutes or days puts these two on the same side of the cutoff."""
+    supervisor = _supervisor(config, store, clock, partial(emit_then_exit, crossings=1))
+    hours = config.storage.event_retention_hours
+
+    await supervisor.start()
+    await supervisor.drain_once(timeout=5.0, expected=len(config.cameras))
+    clock.advance((hours - 1) * 3600)
+    await supervisor.tick()
+    kept = _logged_events(store)
+    clock.advance(2 * 3600)
+    await supervisor.tick()
+    await supervisor.stop()
+
+    assert kept == len(config.cameras), "one hour inside the window is not expired"
+    assert _logged_events(store) == 0, "one hour past the window is expired"
+
+
+async def test_trimming_does_not_run_on_every_tick(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """A DELETE per one-second tick is pure waste; the window is hours wide."""
+    supervisor = _supervisor(config, store, clock, partial(emit_then_exit, crossings=1))
+
+    await supervisor.start()
+    await supervisor.drain_once(timeout=5.0, expected=len(config.cameras))
+    await supervisor.tick()
+    first = supervisor.trim_runs
+    for _ in range(5):
+        clock.advance(1)
+        await supervisor.tick()
+    await supervisor.stop()
+
+    assert first == 1, "the first tick trims, so a long-dead engine expires on startup"
+    assert supervisor.trim_runs == 1, "five more ticks a second apart must not re-trim"
+
+
+async def test_a_drain_that_never_gets_its_events_still_returns(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """The drain deadline must hold even when the injected clock is frozen.
+
+    Regression: the bound read the *injected* monotonic clock, which these tests freeze,
+    so a worker that never delivered spun this loop forever. It hung CI rather than
+    failing it, which is strictly worse — a hang has no error message and no line number.
+    """
+    supervisor = _supervisor(config, store, clock, run_until_stopped)
+
+    await supervisor.start()
+    started = time.monotonic()
+    received = await supervisor.drain_once(timeout=0.2, expected=99)
+    elapsed = time.monotonic() - started
+    await supervisor.stop()
+
+    assert received == []
+    assert 0.2 <= elapsed < 5.0, f"the deadline did not bound the drain ({elapsed:.2f}s)"

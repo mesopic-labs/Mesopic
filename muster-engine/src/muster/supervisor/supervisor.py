@@ -51,6 +51,12 @@ TICK_S = 1.0
 DRAIN_LIMIT = 512
 """Events taken from one worker per drain, so a busy camera cannot starve the others."""
 
+TRIM_INTERVAL_S = 3600.0
+"""How often the raw event log is trimmed. A constant rather than a config key: the
+retention *window* is what a self-hoster tunes (`storage.event_retention_hours`), and
+this only decides how promptly expiry is enforced. A DELETE on every one-second tick
+would be pure waste against a window measured in hours."""
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -89,6 +95,10 @@ class Supervisor:
         self.late_events = 0
         """Events for a bucket already closed and forgotten. Dropped, never re-folded."""
         self.restarts = 0
+        self.trimmed_events = 0
+        """Raw events deleted by the retention job. Visible, like every other loss here."""
+        self.trim_runs = 0
+        self._last_trim_at: float | None = None
 
     # --- Lifecycle ----------------------------------------------------------
 
@@ -139,6 +149,7 @@ class Supervisor:
         # left resolves here or not at all.
         self._aggregator.flush(FrameTs(now))
         await self._close(self._due_buckets(now))
+        self._trim(now, self._monotonic())
 
     async def drain_once(
         self,
@@ -156,13 +167,19 @@ class Supervisor:
         would leave the underlying `get_nowait` loop running regardless.
         """
         received: list[RawEvent] = []
-        deadline = self._monotonic() + timeout
+        # A REAL clock, not the injected one. This deadline is a safety bound on polling
+        # real queues for events a real process may never send; the injected clock is for
+        # policy (how often work repeats) and a test is entitled to freeze it. Reading it
+        # here made the bound unreachable under a frozen clock, so a worker that failed to
+        # deliver spun this loop forever instead of timing out -- which is exactly how it
+        # hung CI rather than failing it.
+        deadline = time.monotonic() + timeout
         while True:
             batch = [event for handle in self._handles for event in handle.drain(DRAIN_LIMIT)]
             received.extend(batch)
             if expected is not None and len(received) >= expected:
                 break
-            if not batch and self._monotonic() >= deadline:
+            if time.monotonic() >= deadline:
                 break
             if not batch and timeout > 0.0:
                 await asyncio.sleep(0.01)
@@ -208,6 +225,25 @@ class Supervisor:
                 self._store.upsert_metrics(rows)
             self._closed_through = bucket
             self._aggregator.forget_before(MinuteBucket(bucket + timedelta(seconds=BUCKET_S)))
+
+    # --- Retention ----------------------------------------------------------
+
+    def _trim(self, now: datetime, monotonic: float) -> None:
+        """Enforce `storage.event_retention_hours`, at most once an interval.
+
+        Two clocks, deliberately: the *cutoff* is wall-clock, because that is what an
+        event's timestamp is measured against, while *how often* is monotonic, because a
+        wall clock that steps backwards over an NTP correction would stop trimming.
+
+        The first tick always trims, so an engine that was off for a week expires its
+        backlog on startup rather than an hour into the run.
+        """
+        if self._last_trim_at is not None and monotonic - self._last_trim_at < TRIM_INTERVAL_S:
+            return
+        self._last_trim_at = monotonic
+        self.trim_runs += 1
+        window = timedelta(hours=self._config.storage.event_retention_hours)
+        self.trimmed_events += self._store.trim(before=now - window)
 
     # --- Keeping workers alive ----------------------------------------------
 

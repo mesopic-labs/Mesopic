@@ -448,6 +448,23 @@ def test_a_database_written_by_a_newer_engine_is_refused(tmp_path: Path) -> None
 
 
 @pytest.mark.privacy
+def _table_flags(store: Store) -> dict[str, tuple[bool, bool]]:
+    """Per table: is it `WITHOUT ROWID`, and is it `STRICT`, as SQLite itself reports.
+
+    `PRAGMA table_list` rather than a substring search of `sqlite_master.sql`, which was
+    the first attempt and was WRONG: SQLite stores the original CREATE text comments
+    included, so a table whose comment merely mentions "strict" passed a text check while
+    having no STRICT clause at all. Verified by mutation — the text version did not fire.
+    """
+    return {
+        name: (bool(without_rowid), bool(strict))
+        for _schema, name, kind, _ncol, without_rowid, strict in store._connection.execute(
+            "PRAGMA table_list"
+        ).fetchall()
+        if kind == "table" and not name.startswith("sqlite_")
+    }
+
+
 def test_no_column_in_the_live_schema_can_hold_a_pixel(store: Store) -> None:
     """Asserted against the database as built, so a migration cannot slip one past.
 
@@ -468,3 +485,57 @@ def test_no_column_in_the_live_schema_can_hold_a_pixel(store: Store) -> None:
             )
             if declared_type == "BLOB":
                 assert (table, name) in allowed_blobs, f"{table}.{name} is an unaudited BLOB column"
+
+
+def test_every_table_in_the_live_schema_is_strict(store: Store) -> None:
+    """Every table, not just the one an INSERT happens to exercise.
+
+    `test_the_tables_are_strict_about_types` above proves the *semantics* are real, by
+    watching `events` refuse a string in an integer column. This proves the *coverage*:
+    read off the built schema, so a migration that adds a lax table fails here even
+    though no test inserts into it yet. Without STRICT, SQLite stores the string and the
+    bug surfaces weeks later as a metric that reads wrong.
+    """
+    lax = [table for table, (_wr, strict) in _table_flags(store).items() if not strict]
+
+    assert lax == [], f"not STRICT: {', '.join(lax)}"
+
+
+def test_the_composite_key_time_series_tables_are_without_rowid(store: Store) -> None:
+    """`WITHOUT ROWID` clusters storage by the natural key these tables range-scan by.
+
+    Named explicitly rather than inferred: these two are the hot time series, and a
+    migration that rebuilds one without the clause would shrink no file and slow every
+    bucket read, silently.
+    """
+    clustered = {"metrics_minute", "heatmap_minute"}
+    flags = _table_flags(store)
+
+    unclustered = [table for table in sorted(clustered) if not flags[table][0]]
+
+    assert unclustered == [], f"lost WITHOUT ROWID: {', '.join(unclustered)}"
+
+
+def test_the_metrics_table_columns_are_frozen(store: Store) -> None:
+    """A column added here without updating this list is a column nothing audited.
+
+    `metrics_minute` is the durable, syncable series: its shape is the edge half of the
+    sync contract (ADR-0010), so a column appearing on one side and not the other is a
+    wire-format break rather than a local detail. Deliberately a change-detector.
+    """
+    expected = {
+        "camera_id",
+        "bucket",
+        "metric",
+        "scope_id",
+        "value",
+        "staff_value",
+        "sample_count",
+        "synced_at",
+    }
+
+    columns = {
+        row[1] for row in store._connection.execute("PRAGMA table_info(metrics_minute)").fetchall()
+    }
+
+    assert columns == expected
