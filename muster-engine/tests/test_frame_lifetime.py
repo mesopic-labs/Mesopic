@@ -37,6 +37,8 @@ import pytest
 from muster.errors import StreamDropped
 from muster.sampler.sampler import FrameSampler
 from muster.spike import run_spike
+from muster.supervisor.control import SnapshotReply
+from muster.supervisor.snapshot import encode_snapshot
 from muster.tracker.bytetrack import ByteTrackTracker
 from muster.types import CameraId, DecodedFrame, Detection, FrameTs
 
@@ -438,3 +440,34 @@ def test_the_recorder_ignores_reads(disk_writes: DiskWriteRecorder, tmp_path: Pa
 
     assert source.read_bytes() == TAINT
     assert disk_writes.attempts == []
+
+
+# --- The calibration snapshot (P3.8) ----------------------------------------
+
+
+def test_encoding_a_snapshot_writes_nothing_to_disk(disk_writes: DiskWriteRecorder) -> None:
+    """The calibration snapshot is engine-architecture.md §13's *single* exception to
+    "frames never hit disk", and it is an exception to persistence, not to the rule.
+
+    The zero-write assertion is the one that counts here, exactly as P1.8 found: a taint
+    pattern does not survive JPEG encoding, so payload matching would sail past a
+    `cv2.imwrite` of the encoded frame while reporting clean.
+    """
+    encode_snapshot(_tainted_frame(0.0, size=64))
+
+    assert disk_writes.attempts == []
+
+
+def test_a_snapshot_reply_carries_no_raw_pixels(disk_writes: DiskWriteRecorder) -> None:
+    """What crosses the process boundary is encoded bytes, never the buffer.
+
+    A `SnapshotReply` holding the array would put a frame in the supervisor's address
+    space and one pickle away from anywhere — the thing the boundary exists to prevent.
+    """
+    del disk_writes
+    frame = _tainted_frame(0.0, size=64)
+
+    reply = SnapshotReply(request_id="abc", jpeg=encode_snapshot(frame))
+
+    assert reply.jpeg is not None
+    assert TAINT not in reply.jpeg

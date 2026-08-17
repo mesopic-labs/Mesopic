@@ -19,9 +19,8 @@ from datetime import UTC, datetime
 from multiprocessing.queues import Queue
 
 from muster.config.schema import MusterConfig
+from muster.supervisor.control import ControlMessage, SnapshotReply, Stop
 from muster.types import CameraId, EventKind, FrameTs, LineId, RawEvent, TrackId, ZoneId
-
-CONTROL_STOP = "stop"
 
 
 def line_of(camera_id: CameraId) -> LineId:
@@ -48,7 +47,8 @@ def emit_then_exit(
     camera_id: CameraId,
     config: MusterConfig,  # the entry-point contract
     events_out: Queue[RawEvent],
-    control_in: Queue[str],
+    control_in: Queue[ControlMessage],
+    snapshots_out: Queue[SnapshotReply] | None = None,
     *,
     crossings: int = 1,
 ) -> None:
@@ -63,7 +63,8 @@ def emit_then_die(
     camera_id: CameraId,
     config: MusterConfig,
     events_out: Queue[RawEvent],
-    control_in: Queue[str],
+    control_in: Queue[ControlMessage],
+    snapshots_out: Queue[SnapshotReply] | None = None,
     *,
     crossings: int = 1,
 ) -> None:
@@ -79,7 +80,8 @@ def emit_occupancy_sample(
     camera_id: CameraId,
     config: MusterConfig,
     events_out: Queue[RawEvent],
-    control_in: Queue[str],
+    control_in: Queue[ControlMessage],
+    snapshots_out: Queue[SnapshotReply] | None = None,
 ) -> None:
     """One trackless occupancy sample — the kind the raw event log cannot hold."""
     events_out.put(
@@ -101,10 +103,11 @@ def run_until_stopped(
     camera_id: CameraId,
     config: MusterConfig,
     events_out: Queue[RawEvent],
-    control_in: Queue[str],
+    control_in: Queue[ControlMessage],
+    snapshots_out: Queue[SnapshotReply] | None = None,
 ) -> None:
     """Idle until told to stop — the shape a real worker has."""
-    while control_in.get() != CONTROL_STOP:
+    while not isinstance(control_in.get(), Stop):
         time.sleep(0.01)
     events_out.close()
     events_out.join_thread()

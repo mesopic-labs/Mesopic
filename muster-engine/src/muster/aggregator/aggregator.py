@@ -162,6 +162,16 @@ class Aggregator:
             return []
         return self._registry.reduce_all(list(events), bucket)
 
+    def retarget(self, registry: MetricRegistry) -> None:
+        """Adopt plugins built from edited geometry (P3.8).
+
+        Open buckets keep their events and are reduced by the new registry when they
+        close. That is the honest reading: a zone the operator has just drawn should
+        count the people already standing in it, and one they deleted should stop
+        counting mid-minute rather than emit a final partial value nobody asked for.
+        """
+        self._registry = registry
+
     def pending_buckets(self) -> list[MinuteBucket]:
         """Buckets holding events, oldest first. The supervisor's closing cursor."""
         return sorted(bucket for bucket, events in self._buckets.items() if events)
