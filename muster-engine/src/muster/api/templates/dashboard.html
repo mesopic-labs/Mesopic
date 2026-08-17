@@ -5,14 +5,16 @@
   rendered inline here on first load and then replaces itself every 30 seconds.
 
   The chart shells are here rather than in the fragment on purpose — see the note there.
+  The first plate is the lead: it is the metric the operator configured first, given the
+  height to be read from across the counter rather than leaned into.
 #}
 
 {% block content %}
 {% include "_board.html" %}
 
-<section class="charts">
+<section class="plates" aria-label="History">
   {% for chart in charts %}
-  <figure class="chart" data-metric="{{ chart.metric }}">
+  <figure class="plate{% if loop.first %} is-lead{% endif %}" data-metric="{{ chart.metric }}">
     <figcaption>{{ chart.metric.replace("_", " ") }}</figcaption>
     <div class="plot"></div>
   </figure>

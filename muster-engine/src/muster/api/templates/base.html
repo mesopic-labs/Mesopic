@@ -3,9 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{% block title %}Muster{% endblock %}</title>
+    <title>{% block title %}{{ site_id }} — Muster{% endblock %}</title>
     {# Every asset is served from this box. A CDN font or script would turn a dashboard
        load into an off-box request and break the airgapped installs this is built for.
+       It is also why the type is a system stack: there is no webfont to fetch.
 
        Root-relative rather than `url_for`, which renders an absolute URL and so bakes
        the request's host into the page — wrong the moment the dashboard is reached
@@ -19,10 +20,13 @@
     <script src="/static/board.js" defer></script>
   </head>
   <body>
-    <div class="wrap">
-      <header class="stack-tight">
-        <p class="eyebrow">Muster<span class="sig">.</span> {{ site_id }}</p>
-        <h1>{% block heading %}Dashboard{% endblock %}</h1>
+    <div class="frame">
+      <header class="masthead">
+        <p class="mark">Muster</p>
+        <h1>{% block heading %}{{ site_id }}{% endblock %}</h1>
+        <p class="subtitle">
+          Your cameras, counted. No frame is written to disk, and none appears on this page.
+        </p>
       </header>
       {% block content %}{% endblock %}
     </div>

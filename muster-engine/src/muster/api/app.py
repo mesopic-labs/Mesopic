@@ -52,6 +52,9 @@ from muster.api.board import (
     BoardWindow,
     as_series,
     charts_of,
+    exposure_of,
+    human_duration,
+    scope_slots,
     tiles_for,
 )
 from muster.api.health import (
@@ -186,11 +189,19 @@ def create_app(
             "site_id": config.site.site_id,
             "window": window,
             "windows": list(BoardWindow),
+            # The exposure strip's axis. UTC on the page because UTC is what is stored —
+            # a dashboard that silently localises one clock and not the other is worse
+            # than one that is consistently in a timezone you have to know.
+            "since": end - window.span,
+            "now": end,
             "tiles": tiles_for(config, rows=rows),
             "charts": charts_of(config, rows=rows),
+            "slots": scope_slots(config),
+            "exposure": exposure_of(rows, end=end, window=window),
             "health": _health(
                 config, store, reports=camera_reports(), uptime_s=monotonic() - started_at
             ),
+            "uptime": human_duration(monotonic() - started_at),
         }
 
     @app.get("/")
