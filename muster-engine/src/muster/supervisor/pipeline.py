@@ -64,13 +64,10 @@ def build_pipeline(config: MusterConfig, camera_id: CameraId) -> CameraPipeline:
             ModelManager(cache_dir).ensure(model).path,
             confidence=config.thresholds.detection_confidence,
         ),
-        # `thresholds.match_thresh` is deliberately NOT wired. It is specified against an
-        # IoU cost (algorithms.md §3.3), and this tracker's default cost is centre
-        # distance, whose `max_cost=0.4` is that cost's own measured operating point on a
-        # different scale entirely (ADR-0014). Passing 0.8 through would not be a
-        # translation, it would be a guess that breaks association silently.
         tracker=ByteTrackTracker(
             track_thresh=config.thresholds.track_thresh,
+            max_cost=config.thresholds.max_cost,
+            max_cost_low=config.thresholds.max_cost_low,
             track_memory_s=config.thresholds.track_memory_s,
         ),
         analytics=GeometryAnalytics(
