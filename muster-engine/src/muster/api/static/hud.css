@@ -335,3 +335,122 @@ p {
 .scroll-x {
   overflow-x: auto;
 }
+
+/* ---------- range controls (P3.2) ---------- */
+
+.windows {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.window {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  padding: 0.3rem 0.7rem;
+}
+
+.window.is-current {
+  color: var(--signal);
+  border-color: var(--signal);
+}
+
+/* ---------- live tiles (P3.2) ---------- */
+
+.tiles {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+
+.tile {
+  background: var(--panel);
+  padding: 0.85rem 1rem;
+}
+
+.tile p {
+  margin: 0;
+}
+
+.tile-scope {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tile-metric {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.tile-qualifier {
+  opacity: 0.7;
+}
+
+.tile-value {
+  font-family: var(--mono);
+  font-size: 1.7rem;
+  color: var(--signal);
+  transition: color 200ms ease;
+}
+
+/* An em dash is not a reading, so it is not painted like one: no data reads as absent
+   rather than as a number that happens to be small. */
+.tile-value.is-absent {
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+/* ---------- charts (P3.2) ---------- */
+
+.charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: 1.25rem;
+  margin-top: 1.5rem;
+}
+
+.chart {
+  margin: 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 0.85rem 1rem 0.5rem;
+}
+
+.chart figcaption {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+/* uPlot draws its own chrome; these keep it speaking the HUD's language. */
+.chart .u-legend {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.chart .u-title,
+.chart .u-select {
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile-value {
+    transition: none;
+  }
+}

@@ -1,52 +1,21 @@
 {% extends "base.html" %}
 
 {#
-  Deliberately skeletal. P3.1 proves the app serves, the HUD tokens land and the health of
-  each camera is visible; the live occupancy tiles and the core-six uPlot charts are
-  P3.2's, and adding placeholder versions of them here would only be something to delete.
+  The page frame. Everything that changes with a poll is in `_board.html`, which is
+  rendered inline here on first load and then replaces itself every 30 seconds.
+
+  The chart shells are here rather than in the fragment on purpose — see the note there.
 #}
 
 {% block content %}
-<section class="hud-panel">
-  <span class="hud-corner tl"></span>
-  <span class="hud-corner tr"></span>
-  <span class="hud-corner bl"></span>
-  <span class="hud-corner br"></span>
+{% include "_board.html" %}
 
-  <p class="hud-live">
-    <span class="dot-live{% if health.status.value != 'ok' %} is-{{ health.status.value }}{% endif %}"></span>
-    engine {{ health.status.value }}
-  </p>
-
-  <dl class="readout">
-    <div>
-      <dt>Cameras</dt>
-      <dd>{{ health.cameras | length }}</dd>
-    </div>
-    <div>
-      <dt>Uptime</dt>
-      <dd>{{ health.uptime_s }}s</dd>
-    </div>
-    <div>
-      <dt>Unsynced</dt>
-      <dd>{{ health.sync.unsynced_rows }}</dd>
-    </div>
-    <div>
-      <dt>Disk free</dt>
-      <dd>{{ health.disk.free_pct }}%</dd>
-    </div>
-  </dl>
-</section>
-
-<section>
-  <h2>Cameras</h2>
-  <ul class="camera-list">
-    {% for camera in health.cameras %}
-    <li>
-      <span class="camera-id">{{ camera.camera_id }}</span>
-      <span class="state is-{{ camera.state.value }}">{{ camera.state.value }}</span>
-    </li>
-    {% endfor %}
-  </ul>
+<section class="charts">
+  {% for chart in charts %}
+  <figure class="chart" data-metric="{{ chart.metric }}">
+    <figcaption>{{ chart.metric.replace("_", " ") }}</figcaption>
+    <div class="plot"></div>
+  </figure>
+  {% endfor %}
 </section>
 {% endblock %}

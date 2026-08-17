@@ -35,8 +35,8 @@ Implements P3.1 (`/`, `/healthz`, `/api/metrics`, `/metrics`); P3.2-P3.4 own the
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping, Sequence
-from datetime import timedelta
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -47,6 +47,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from muster.api.board import (
+    DEFAULT_WINDOW,
+    BoardWindow,
+    as_series,
+    charts_of,
+    tiles_for,
+)
 from muster.api.health import (
     DiskHealth,
     EngineHealth,
@@ -81,6 +88,15 @@ MAX_ID_LENGTH = 128
 into a log line or a query."""
 
 PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+
+
+def _utc_now() -> datetime:
+    """The board's window is wall-clock, and everything stored is UTC.
+
+    Injectable for the same reason the supervisor's clocks are: a test that has to wait
+    for real minutes to pass is a test nobody runs.
+    """
+    return datetime.now(UTC)
 
 
 class MetricsQuery(BaseModel):
@@ -118,6 +134,7 @@ def create_app(
     camera_reports: Callable[[], Mapping[CameraId, WorkerReport]] = dict,
     render_prometheus: Callable[[], str] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> FastAPI:
     """Build the local dashboard app around an already-open store.
 
@@ -160,19 +177,41 @@ def create_app(
             camera_id=CameraId(query.camera_id) if query.camera_id else None,
             metrics=query.metric,
         )
-        return {"series": _as_series(rows), "truncated": len(rows) >= query.limit}
+        return {"series": as_series(rows), "truncated": len(rows) >= query.limit}
+
+    def _board_context(window: BoardWindow) -> dict[str, Any]:
+        end = clock()
+        rows = store.metrics_between(start=end - window.span, end=end, limit=MAX_LIMIT)
+        return {
+            "site_id": config.site.site_id,
+            "window": window,
+            "windows": list(BoardWindow),
+            "tiles": tiles_for(config, rows=rows),
+            "charts": charts_of(config, rows=rows),
+            "health": _health(
+                config, store, reports=camera_reports(), uptime_s=monotonic() - started_at
+            ),
+        }
 
     @app.get("/")
-    async def dashboard(request: Request) -> Any:
+    async def dashboard(request: Request, window: BoardWindow = DEFAULT_WINDOW) -> Any:
+        """The board is rendered inline, not fetched.
+
+        A page that is blank until the first poll lands looks broken for exactly as long
+        as the poll interval, which is the first thing a new self-hoster would see.
+
+        `window` is accepted here as well as on the fragment so the range controls are
+        real links: with scripting off they reload the page at the chosen range instead
+        of doing nothing.
+        """
         return templates.TemplateResponse(
-            request=request,
-            name="dashboard.html",
-            context={
-                "site_id": config.site.site_id,
-                "health": _health(
-                    config, store, reports=camera_reports(), uptime_s=monotonic() - started_at
-                ),
-            },
+            request=request, name="dashboard.html", context=_board_context(window)
+        )
+
+    @app.get("/fragments/board")
+    async def board(request: Request, window: BoardWindow = DEFAULT_WINDOW) -> Any:
+        return templates.TemplateResponse(
+            request=request, name="_board.html", context=_board_context(window)
         )
 
     if render_prometheus is not None:
@@ -200,29 +239,6 @@ def _health(
         sync=SyncHealth(enabled=config.cloud_sync.enabled, unsynced_rows=store.unsynced_count()),
         disk=DiskHealth.of(store.path),
     )
-
-
-def _as_series(rows: Sequence[Any]) -> list[dict[str, Any]]:
-    """Group rows into one columnar series per `(camera, metric, scope)`.
-
-    Columnar because uPlot consumes parallel arrays (P3.2); one flat list would plot two
-    cameras' footfall as a single sawtooth. Grouping is a reshape of what the store
-    returned in order, not a computation — no value here is derived from another.
-    """
-    series: dict[tuple[str, str, str | None], dict[str, Any]] = {}
-    for row in rows:
-        key = (row.camera_id, row.metric.value, row.scope_id)
-        if key not in series:
-            series[key] = {
-                "camera_id": row.camera_id,
-                "metric": row.metric.value,
-                "scope_id": row.scope_id,
-                "t": [],
-                "v": [],
-            }
-        series[key]["t"].append(int(row.bucket.timestamp()))
-        series[key]["v"].append(row.value)
-    return list(series.values())
 
 
 __all__ = ["DEFAULT_LIMIT", "MAX_LIMIT", "MAX_WINDOW", "create_app"]
