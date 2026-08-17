@@ -267,3 +267,52 @@ def test_no_validation_error_is_chained_into_the_traceback(
     rendered = "".join(traceback.format_exception(exc_info.value))
     assert "input_value=" not in rendered, "the loader chained pydantic's input rendering"
     assert "user:pass@" not in rendered
+
+
+# --- Storage retention (P2.8) -----------------------------------------------
+
+
+def test_event_retention_defaults_when_the_storage_section_is_absent(
+    valid_config: dict[str, Any], tmp_path: Path
+) -> None:
+    """Every config written before this key existed must keep loading, unchanged."""
+    valid_config.pop("storage", None)
+    path = _write(tmp_path, valid_config)
+
+    config = load_config(path)
+
+    assert config.storage.event_retention_hours == 72
+
+
+def test_event_retention_hours_is_read_from_the_storage_section(
+    valid_config: dict[str, Any], tmp_path: Path
+) -> None:
+    valid_config["storage"] = {"event_retention_hours": 6}
+    path = _write(tmp_path, valid_config)
+
+    config = load_config(path)
+
+    assert config.storage.event_retention_hours == 6
+
+
+@pytest.mark.parametrize("hours", [0, -1])
+def test_a_non_positive_retention_window_is_rejected(
+    valid_config: dict[str, Any], tmp_path: Path, hours: int
+) -> None:
+    """Zero would trim every event the moment it is written, which reads as "off"."""
+    valid_config["storage"] = {"event_retention_hours": hours}
+    path = _write(tmp_path, valid_config)
+
+    with pytest.raises(ConfigError, match="event_retention_hours"):
+        load_config(path)
+
+
+def test_a_retention_window_beyond_a_year_is_rejected(
+    valid_config: dict[str, Any], tmp_path: Path
+) -> None:
+    """`events` is the short-retention log; an unbounded window is a full disk."""
+    valid_config["storage"] = {"event_retention_hours": 8761}
+    path = _write(tmp_path, valid_config)
+
+    with pytest.raises(ConfigError, match="event_retention_hours"):
+        load_config(path)

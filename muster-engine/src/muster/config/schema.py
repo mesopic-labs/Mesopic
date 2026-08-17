@@ -45,6 +45,9 @@ NormalizedPoint = tuple[NormCoord, NormCoord]
 
 PixelExtent = Annotated[int, Field(gt=0)]
 
+_HOURS_IN_A_YEAR = 8760
+"""Ceiling on the raw-event retention window. `events` is the short-retention log."""
+
 
 class ConfigSection(BaseModel):
     """Base for every section: closed to unknown keys, and immutable once loaded.
@@ -216,6 +219,27 @@ class ThresholdsConfig(ConfigSection):
     queue_dwell_weight: bool = True
 
 
+class StorageConfig(ConfigSection):
+    """How long the local SQLite file keeps what it is allowed to keep.
+
+    Separate from `thresholds` because that section tunes what the detector and tracker
+    see (algorithms.md §3), and this one bounds what survives on disk.
+
+    Only `events` has a retention window here. `metrics_minute` is disk-bounded rather
+    than policy-bounded on the edge — a self-hoster's own history on their own disk —
+    and the cap that enforces that ceiling is still an open question in
+    engine-architecture.md §11.
+    """
+
+    event_retention_hours: Annotated[int, Field(gt=0, le=_HOURS_IN_A_YEAR)] = 72
+    """How long the raw event log is kept for local debugging and re-aggregation.
+
+    Bounded at both ends deliberately: zero would delete every event as it was written,
+    which reads like "off" but silently defeats re-aggregation, and an unbounded window
+    is a full disk on a box nobody is watching.
+    """
+
+
 # --- Exporters and sync -----------------------------------------------------
 
 
@@ -308,6 +332,7 @@ class MusterConfig(ConfigSection):
     lines: list[LineConfig] = Field(default_factory=list)
     zones: list[ZoneConfig] = Field(default_factory=list)
     thresholds: ThresholdsConfig = Field(default_factory=ThresholdsConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
     exporters: ExportersConfig = Field(default_factory=ExportersConfig)
     cloud_sync: CloudSyncConfig = Field(default_factory=CloudSyncConfig)
 
