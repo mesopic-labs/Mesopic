@@ -17,6 +17,7 @@ Red-first for P2.7.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from dataclasses import fields
 from datetime import UTC, datetime, timedelta
@@ -105,6 +106,18 @@ def _supervisor(
 def _footfall(store: Store) -> list[float]:
     rows = store.unsynced_metrics(limit=50)
     return sorted(row.value for row in rows if row.metric is MetricName.FOOTFALL)
+
+
+def _wait_all_dead(supervisor: Supervisor, within_s: float) -> None:
+    """Block until every worker has actually exited, or fail saying how many had not.
+
+    Synchronous on purpose: process liveness is not an asyncio event, so there is
+    nothing to await on and a polling loop is what this actually is.
+    """
+    deadline = time.monotonic() + within_s
+    while supervisor.live_workers and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert supervisor.live_workers == 0, f"{supervisor.live_workers} worker(s) still alive"
 
 
 def _logged_events(store: Store) -> int:
@@ -252,6 +265,11 @@ async def test_a_dead_worker_is_restarted_once_its_backoff_has_elapsed(
 
     await supervisor.start()
     await supervisor.drain_once(timeout=5.0, expected=len(config.cameras))
+    # Establish the precondition instead of assuming it. Workers do not die in lockstep,
+    # and `supervise` needs one pass to notice a death and another to act on it -- so a
+    # worker still alive on the first pass would silently never reach the restart branch.
+    _wait_all_dead(supervisor, within_s=5.0)
+
     await supervisor.supervise(monotonic=0.0)
     before = supervisor.restarts
     await supervisor.supervise(monotonic=120.0)

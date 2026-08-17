@@ -211,6 +211,12 @@ class Supervisor:
 
     # --- Keeping workers alive ----------------------------------------------
 
+    @property
+    def live_workers(self) -> int:
+        """How many workers are running. A health signal, and what lets a caller wait
+        for a crash to have actually happened rather than assume it has."""
+        return sum(1 for handle in self._handles if handle.is_alive())
+
     async def supervise(self, *, monotonic: float) -> None:
         """Restart what died, once its backoff has elapsed.
 
