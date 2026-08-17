@@ -36,6 +36,15 @@ thousand crossings, which is tens of kilobytes."""
 MAX_CROSSINGS = 100_000
 """No human labels more than this, and an unbounded list is an unbounded allocation."""
 
+DRAFT_RATER = "draft-unverified"
+"""The rater name a label carries when nobody has stood behind it yet.
+
+Load-bearing rather than decorative: scoring refuses to *gate* on a truth file carrying
+it. Deliberately not a boolean field — ADR-0015's argument against a stored
+``gate_eligible`` applies here too. Promoting a draft means a human replacing this with
+their own name, which is an act of accountability rather than a flag anybody can flip.
+"""
+
 DURATION_TOLERANCE_S = 1e-3
 """Durations are recorded from the container to a few decimal places; a millisecond of
 float noise is not a disagreement, and anything larger means two different cuts."""

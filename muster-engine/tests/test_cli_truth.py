@@ -96,6 +96,33 @@ def test_says_no_out_loud_for_stock_footage(tmp_path: Path) -> None:
     assert "gate-eligible: no" in result.stdout
 
 
+def test_an_eligible_clip_in_the_wrong_scene_does_not_read_as_a_clean_yes(
+    tmp_path: Path,
+) -> None:
+    """The own-rig home clips are gate-eligible and `hard`. A bare "yes" invites exactly
+    the misreading this line exists to prevent, so the scene is named alongside it."""
+    payload = _manifest_payload()
+    payload["scene"]["reference"] = "hard"
+    path = _write(tmp_path / "home-01.clip.json", payload)
+
+    result = RUNNER.invoke(cli.app, ["truth", "validate", str(path)])
+
+    assert result.exit_code == 0
+    assert "gate-eligible: yes" in result.stdout
+    assert "hard" in result.stdout
+
+
+def test_a_draft_truth_file_says_it_cannot_gate(tmp_path: Path) -> None:
+    payload = _truth_payload()
+    payload["labelled_by"] = "draft-unverified"
+    path = _write(tmp_path / "doorway-daylight-01.truth.json", payload)
+
+    result = RUNNER.invoke(cli.app, ["truth", "validate", str(path)])
+
+    assert result.exit_code == 0
+    assert "cannot gate" in result.stdout
+
+
 def test_validates_a_good_truth_file(tmp_path: Path) -> None:
     path = _write(tmp_path / "doorway-daylight-01.truth.json", _truth_payload())
 
