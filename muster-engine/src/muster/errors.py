@@ -48,3 +48,12 @@ class TruthError(MusterError):
     it. Both are loud by design: a quietly-accepted bad label produces an accuracy number
     that looks fine and is wrong.
     """
+
+
+class SnapshotUnavailableError(MusterError):
+    """No calibration frame could be got from a camera, and why.
+
+    Refusing is the design (P3.8): the snapshot comes from the worker that already owns
+    the stream, so a camera that is not streaming has none to give. The message names the
+    camera's state so the operator fixes the stream rather than the drawing tool.
+    """

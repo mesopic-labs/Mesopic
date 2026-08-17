@@ -133,6 +133,52 @@ class GeometryAnalytics:
         self._forget_dead_tracks(camera_id, tracks)
         return events
 
+    # --- Reconfiguration ----------------------------------------------------
+
+    def reconfigure(
+        self, geometry: SiteGeometry, *, camera_id: CameraId, ts: FrameTs
+    ) -> list[RawEvent]:
+        """Swap in edited geometry, closing what the old geometry had open.
+
+        **The close is not politeness, it is the contract.** `_zone_events` is the single
+        owner of track-death → exit (§7), and a swapped-out zone leaves that diff
+        entirely — so an open dwell that is merely dropped never emits its exit, is never
+        counted, and leaks. Everyone inside is therefore walked out first, at `ts`, and
+        the swap happens after.
+
+        The visible consequence is deliberate: editing a polygon under a busy shop reads
+        as everyone leaving and re-entering. That is bounded, honest and one minute wide,
+        which is the right direction to be wrong in compared with a silent leak.
+
+        Only `camera_id`'s state is touched. A worker owns one camera and cannot observe
+        another, so closing another's dwells from here would emit departures nobody saw.
+        """
+        zones = self._geometry.zones_for(camera_id)
+        events = [
+            _zone_event(
+                EventKind.ZONE_EXIT,
+                zone.zone_id,
+                None,
+                departed=(camera_id, track_id, ts),
+            )
+            for zone in zones
+            for track_id in sorted(self._inside.get(zone.zone_id, {}))
+        ]
+        for zone in zones:
+            self._inside.pop(zone.zone_id, None)
+        # Sticky side describes a line that may have just moved, so a carried-over side
+        # would compare the next frame against geometry nobody walked.
+        for key in [k for k in self._tracks if k[0] == camera_id]:
+            del self._tracks[key]
+        self._geometry = geometry
+        return events
+
+    def open_zone_count(self, camera_id: CameraId) -> int:
+        """How many residencies this camera currently holds open. For tests and §15."""
+        return sum(
+            len(self._inside.get(zone.zone_id, {})) for zone in self._geometry.zones_for(camera_id)
+        )
+
     def _tick_ts(
         self, camera_id: CameraId, tracks: Sequence[Track], ts: FrameTs | None
     ) -> datetime | None:

@@ -22,6 +22,7 @@ Implements P2.7 (engine-architecture.md §9).
 from __future__ import annotations
 
 import asyncio
+import secrets
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -30,6 +31,7 @@ from muster.aggregator.aggregator import EXIT_GRACE_S, Aggregator, bucket_of
 from muster.analytics.metrics import build_registry
 from muster.analytics.site_geometry import SiteGeometry
 from muster.config.schema import MusterConfig
+from muster.errors import SnapshotUnavailableError
 from muster.exporters.fanout import ExporterFanout
 from muster.store.store import Store
 from muster.supervisor.handle import WorkerEntry, WorkerHandle, WorkerReport
@@ -51,6 +53,13 @@ TICK_S = 1.0
 
 DRAIN_LIMIT = 512
 """Events taken from one worker per drain, so a busy camera cannot starve the others."""
+
+SNAPSHOT_TIMEOUT_S = 5.0
+"""How long a calibration request waits for a frame.
+
+Generous next to a 2 fps sampling grid and short next to a human's patience. A camera
+that has not answered in five seconds is not slow, it is stuck, and the operator is
+better served by being told that than by a spinner."""
 
 TRIM_INTERVAL_S = 3600.0
 """How often the raw event log is trimmed. A constant rather than a config key: the
@@ -141,9 +150,74 @@ class Supervisor:
             await self._close(self._aggregator.pending_buckets())
         self.exporters.shutdown()
 
+    # --- Calibration and reconfiguration ------------------------------------
+
+    async def snapshot(
+        self,
+        camera_id: CameraId,
+        *,
+        timeout: float = SNAPSHOT_TIMEOUT_S,  # noqa: ASYNC109 - bounds a thread, not a task
+    ) -> bytes:
+        """One encoded frame from a running camera, for the calibration view (§13).
+
+        The frame is grabbed by the worker that already owns the stream, so no second
+        RTSP session is opened and `muster.api` never imports a codec. What comes back is
+        held in memory, streamed once, and never persisted.
+
+        A camera with no live worker is refused rather than served from anywhere else. An
+        operator calibrating a camera they have not got streaming yet is the wrong order,
+        and the alternative — a second out-of-band capture path — is a second thing that
+        can quietly write a frame somewhere.
+        """
+        handle = self._handle_for(camera_id)
+        if handle is None:
+            msg = f"camera {camera_id!r} is not configured"
+            raise SnapshotUnavailableError(msg)
+        if not handle.is_alive():
+            msg = f"camera {camera_id!r} is {handle.state.value} — no snapshot available"
+            raise SnapshotUnavailableError(msg)
+
+        request_id = secrets.token_hex(8)
+        if not handle.request_snapshot(request_id):
+            msg = f"camera {camera_id!r} is not accepting requests"
+            raise SnapshotUnavailableError(msg)
+
+        # The blocking wait runs off the loop thread: the API serves this route and the
+        # supervisor's tick shares that loop, so blocking here stalls every camera's
+        # bucket close for as long as a camera takes to produce a frame.
+        #
+        # `asyncio.timeout` cannot replace the parameter above (ASYNC109): it would
+        # abandon the `to_thread` call rather than end it — a thread blocked on a
+        # `Queue.get` is not cancellable — leaving a thread alive holding the reply. The
+        # deadline has to be inside the blocking call, which is where it is.
+        reply = await asyncio.to_thread(handle.take_snapshot, request_id, timeout)
+        if reply is None:
+            msg = f"camera {camera_id!r} did not answer in {timeout:g}s"
+            raise SnapshotUnavailableError(msg)
+        if reply.jpeg is None:
+            msg = reply.error or f"camera {camera_id!r} could not produce a snapshot"
+            raise SnapshotUnavailableError(msg)
+        return reply.jpeg
+
     async def reload(self, config: MusterConfig) -> None:
-        """Validate-then-swap: rebuild geometry and push new budgets without dropping streams."""
-        raise NotImplementedError
+        """Validate-then-swap: rebuild geometry and push it to every live worker.
+
+        The config is compiled here, before anything is sent, so a config that cannot
+        compile fails where an operator can be told rather than inside a worker that can
+        only die. Each worker then closes what its old geometry had open and adopts the
+        new — see `GeometryAnalytics.reconfigure` for why closing is not optional.
+
+        **This is the geometry half only.** Pushing new budgets to workers is P3.4's, and
+        it rides on the same channel.
+        """
+        geometry = SiteGeometry.compile(config)
+        self._aggregator.retarget(build_registry(geometry))
+        for handle in self._handles:
+            if handle.is_alive():
+                handle.request_reconfigure(geometry)
+
+    def _handle_for(self, camera_id: CameraId) -> WorkerHandle | None:
+        return next((h for h in self._handles if h.camera_id == camera_id), None)
 
     # --- The tick -----------------------------------------------------------
 

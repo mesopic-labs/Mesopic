@@ -19,16 +19,28 @@ from __future__ import annotations
 
 import multiprocessing
 import queue
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from multiprocessing.context import SpawnProcess
 from multiprocessing.queues import Queue
 
+from muster.analytics.site_geometry import SiteGeometry
 from muster.config.schema import MusterConfig
+from muster.supervisor.control import (
+    ControlMessage,
+    Reconfigure,
+    Snapshot,
+    SnapshotReply,
+    Stop,
+)
 from muster.types import CameraId, CameraState, RawEvent
 
-WorkerEntry = Callable[[CameraId, MusterConfig, "Queue[RawEvent]", "Queue[str]"], None]
+WorkerEntry = Callable[
+    [CameraId, MusterConfig, "Queue[RawEvent]", "Queue[ControlMessage]", "Queue[SnapshotReply]"],
+    None,
+]
 """What a camera worker process runs. Must be importable by name — see the module note."""
 
 
@@ -45,14 +57,16 @@ class WorkerReport:
     consecutive_failures: int
 
 
+SNAPSHOT_QUEUE_SIZE = 4
+"""Replies buffered before the worker drops one. Tiny on purpose: a snapshot is answered
+to a browser that is waiting right now, so a backlog of them is stale by definition and
+holding several encoded frames is exactly the memory nobody budgeted for."""
+
 _SPAWN = multiprocessing.get_context("spawn")
 
 
 class WorkerHandle:
     """The supervisor's grip on one camera worker."""
-
-    STOP = "stop"
-    """The control message a worker loops on. Its value is part of the worker contract."""
 
     QUEUE_SIZE = 1000
     """Bounded on purpose: this is the backpressure valve, not a buffer (§9)."""
@@ -77,7 +91,8 @@ class WorkerHandle:
         self._config = config
         self._entry = entry
         self._events: Queue[RawEvent] = _SPAWN.Queue(maxsize=queue_size)
-        self._control: Queue[str] = _SPAWN.Queue(maxsize=16)
+        self._control: Queue[ControlMessage] = _SPAWN.Queue(maxsize=16)
+        self._snapshots: Queue[SnapshotReply] = _SPAWN.Queue(maxsize=SNAPSHOT_QUEUE_SIZE)
         self._process: SpawnProcess | None = None
         self._failures = 0
         self._failed_at: float | None = None
@@ -87,7 +102,13 @@ class WorkerHandle:
     def start(self) -> None:
         self._process = _SPAWN.Process(
             target=self._entry,
-            args=(self.camera_id, self._config, self._events, self._control),
+            args=(
+                self.camera_id,
+                self._config,
+                self._events,
+                self._control,
+                self._snapshots,
+            ),
             name=f"muster-worker-{self.camera_id}",
             daemon=True,
         )
@@ -128,7 +149,49 @@ class WorkerHandle:
     def request_stop(self) -> None:
         """Ask the worker to finish its current frame and return. Never blocks."""
         with suppress(queue.Full):
-            self._control.put_nowait(self.STOP)
+            self._control.put_nowait(Stop())
+
+    # --- Calibration and reconfiguration ------------------------------------
+
+    def request_snapshot(self, request_id: str) -> bool:
+        """Ask for one encoded frame. Returns whether the request was accepted.
+
+        A full control queue means a worker that is not draining it, and saying so is
+        better than queueing a request nobody will answer.
+        """
+        try:
+            self._control.put_nowait(Snapshot(request_id=request_id))
+        except queue.Full:
+            return False
+        return True
+
+    def take_snapshot(self, request_id: str, timeout: float) -> SnapshotReply | None:
+        """Wait for the reply to `request_id`, discarding any that are stale.
+
+        **Correlation is the point.** A caller that timed out and retried would otherwise
+        read the previous request's answer — a stale frame presented as the live one,
+        which is precisely the wrong thing to draw a counting line on. Replies for other
+        requests are dropped rather than requeued: nobody is waiting for them.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                reply = self._snapshots.get(timeout=remaining)
+            except queue.Empty:
+                return None
+            if reply.request_id == request_id:
+                return reply
+
+    def request_reconfigure(self, geometry: SiteGeometry) -> bool:
+        """Ask the worker to close what is open and adopt `geometry`. Never blocks."""
+        try:
+            self._control.put_nowait(Reconfigure(geometry=geometry))
+        except queue.Full:
+            return False
+        return True
 
     def stop(self, timeout: float) -> None:
         """Ask first, kill second. A worker holding a camera socket deserves the ask."""

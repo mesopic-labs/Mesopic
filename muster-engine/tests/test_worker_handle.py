@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from scripted_worker import CONTROL_STOP, emit_then_die, emit_then_exit, run_until_stopped
+from scripted_worker import emit_then_die, emit_then_exit, run_until_stopped
 
 from muster.config.schema import MusterConfig
 from muster.supervisor.handle import WorkerHandle
@@ -105,7 +105,12 @@ def test_a_stopped_worker_is_asked_before_it_is_killed(
 def test_the_control_message_a_stop_sends_is_the_documented_one(
     config: MusterConfig, handles: list[WorkerHandle]
 ) -> None:
-    """A worker that loops on a different sentinel would hang until the kill timeout."""
+    """A worker that loops on a different sentinel would hang until the kill timeout.
+
+    Asserted by stopping a real worker rather than by comparing constants: since P3.8 the
+    message is a `Stop()` instance, and two sides agreeing on a *type* is exactly what an
+    equality check between two imports of the same name cannot tell you.
+    """
     handle = WorkerHandle(FRONT_DOOR, config=config, entry=run_until_stopped)
     handles.append(handle)
 
@@ -113,7 +118,6 @@ def test_the_control_message_a_stop_sends_is_the_documented_one(
     handle.request_stop()
     handle.wait_exit(timeout=5.0)
 
-    assert WorkerHandle.STOP == CONTROL_STOP
     assert not handle.is_alive()
 
 
