@@ -31,16 +31,24 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+import httpx
 import numpy as np
 import pytest
+import yaml
 
+from muster.api.app import create_app
+from muster.config.schema import MusterConfig
 from muster.errors import StreamDropped
 from muster.sampler.sampler import FrameSampler
 from muster.spike import run_spike
+from muster.store.store import Store
 from muster.supervisor.control import SnapshotReply
 from muster.supervisor.snapshot import encode_snapshot
 from muster.tracker.bytetrack import ByteTrackTracker
 from muster.types import CameraId, DecodedFrame, Detection, FrameTs
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+EXAMPLE_CONFIG = REPO_ROOT / "examples" / "muster.yaml"
 
 CAMERA = CameraId("privacy-cam")
 T0 = datetime(2026, 8, 12, 9, 0, 0, tzinfo=UTC)
@@ -471,3 +479,67 @@ def test_a_snapshot_reply_carries_no_raw_pixels(disk_writes: DiskWriteRecorder) 
 
     assert reply.jpeg is not None
     assert TAINT not in reply.jpeg
+
+
+# --- The calibration round trip (P3.3) --------------------------------------
+
+
+@pytest.mark.privacy
+async def test_serving_a_snapshot_to_a_browser_writes_nothing_to_disk(
+    tmp_path: Path, disk_writes: DiskWriteRecorder
+) -> None:
+    """P3.3's acceptance criterion, driven through the route a browser actually calls.
+
+    P3.8 proved the encode and the reply are clean. This is the half that reaches a
+    socket: the whole path from a frame in a worker's hand to bytes in an HTTP response,
+    with the recorder armed across the request itself. The store is opened before the
+    window so its own legitimate file work is not what this measures.
+    """
+    config = MusterConfig.model_validate(yaml.safe_load(EXAMPLE_CONFIG.read_text(encoding="utf-8")))
+
+    async def snapshot(camera_id: CameraId) -> bytes:
+        del camera_id
+        return encode_snapshot(_tainted_frame(0.0, size=64))
+
+    with Store(tmp_path / "muster.db") as store:
+        store.migrate()
+        store.apply_config(config)
+        app = create_app(config=config, store=store, snapshot=snapshot)
+        transport = httpx.ASGITransport(app=app)
+
+        disk_writes.attempts.clear()
+        async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+            response = await client.get("/api/cameras/front-door/snapshot")
+
+    assert response.status_code == 200
+    assert response.content, "an empty response would pass every assertion below vacuously"
+    assert disk_writes.attempts == [], (
+        f"serving the calibration snapshot touched the filesystem: {disk_writes.attempts}"
+    )
+    assert TAINT not in response.content
+
+
+@pytest.mark.privacy
+async def test_a_served_snapshot_may_not_be_cached(tmp_path: Path) -> None:
+    """The browser is the other end of "never persisted".
+
+    A response without `no-store` is one the browser is free to write into its disk
+    cache, which puts a frame on a disk by a route no assertion inside this process can
+    see. It is the same invariant, enforced on the only side of the wire we can reach.
+    """
+    config = MusterConfig.model_validate(yaml.safe_load(EXAMPLE_CONFIG.read_text(encoding="utf-8")))
+
+    async def snapshot(camera_id: CameraId) -> bytes:
+        del camera_id
+        return encode_snapshot(_tainted_frame(0.0, size=64))
+
+    with Store(tmp_path / "muster.db") as store:
+        store.migrate()
+        store.apply_config(config)
+        transport = httpx.ASGITransport(
+            app=create_app(config=config, store=store, snapshot=snapshot)
+        )
+        async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+            response = await client.get("/api/cameras/front-door/snapshot")
+
+    assert response.headers["cache-control"] == "no-store"

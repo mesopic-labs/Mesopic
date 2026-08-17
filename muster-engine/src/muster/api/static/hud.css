@@ -652,3 +652,149 @@ p {
     animation: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * The calibration view (P3.3) — the one surface that shows a picture.
+ *
+ * The darkroom metaphor is literal here: the still is the print, held under the
+ * safelight for as long as it takes to draw on, and never fixed. So the frame is
+ * deliberately subdued — the image is a backdrop for geometry, not the subject — and
+ * every drawn shape reads in the safelight amber that means "live" everywhere else.
+ * Nothing on this page uses a series colour: none of it is data.
+ * ------------------------------------------------------------------------- */
+
+.stage {
+  margin-top: 1.5rem;
+}
+
+.darkroom {
+  position: relative;
+  border: var(--rule);
+  background: var(--panel-2);
+  line-height: 0;
+  overflow: hidden;
+}
+
+.darkroom .still {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* The frame is a tracing surface. Dimming it keeps a drawn line legible over a
+     bright doorway, which is exactly where counting lines get drawn. */
+  filter: saturate(0.55) brightness(0.82);
+}
+
+.darkroom .overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.darkroom .unavailable {
+  margin: 0;
+  padding: 2rem;
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: var(--measure);
+}
+
+/* Geometry is drawn in a 0..1 viewBox, so stroke widths are given in user units and
+   `vector-effect` is what keeps them from scaling to hairlines or slabs. */
+.overlay .shape,
+.overlay .sketch {
+  fill: var(--safelight-soft);
+  stroke: var(--safelight);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.overlay .sketch {
+  fill: none;
+  stroke-dasharray: 6 4;
+}
+
+.overlay .is-line,
+.overlay .normal {
+  fill: none;
+  stroke: var(--safelight);
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.overlay .normal {
+  stroke-width: 1.5;
+}
+
+.overlay .vertex {
+  fill: var(--panel);
+  stroke: var(--safelight);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.tool {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.5rem 0.9rem;
+  color: var(--muted);
+  background: var(--panel);
+  border: var(--rule);
+  cursor: pointer;
+}
+
+.tool:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.tool.is-current {
+  color: var(--ink);
+  border-color: var(--safelight);
+}
+
+.tool.is-commit {
+  margin-left: auto;
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.tool:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Not an error, so not `--fault`: it is the consequence of a correct action, and it has
+   to be read before the click rather than recognised after it. */
+.caution,
+.saved {
+  margin: 0.9rem 0 0;
+  padding: 0.7rem 0.9rem;
+  max-width: var(--measure);
+  line-height: 1.5;
+  font-size: 0.9rem;
+  color: var(--exposed);
+  background: var(--safelight-soft);
+  border-left: 2px solid var(--safelight);
+}
+
+.readings .scope a {
+  color: inherit;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 0.2em;
+}
+
+.readings .scope a:hover {
+  color: var(--safelight);
+}

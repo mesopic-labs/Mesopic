@@ -32,10 +32,18 @@ from scripted_worker import run_until_stopped
 from typer.testing import CliRunner
 
 from muster import cli
-from muster.config.schema import ApiConfig, MusterConfig
+from muster.config import load_config
+from muster.config.schema import ApiConfig, MusterConfig, ZoneConfig
 from muster.runner import DATA_DIR_ENV_VAR, Engine, build_server, store_path
 from muster.store.store import Store
-from muster.types import MetricName, MetricRow, MinuteBucket
+from muster.types import (
+    CameraId,
+    MetricName,
+    MetricRow,
+    MinuteBucket,
+    ZoneId,
+    ZoneRole,
+)
 
 RUNNER = CliRunner()
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -311,3 +319,108 @@ def test_run_never_prints_a_source_url(tmp_path: Path, config: MusterConfig) -> 
     assert "unknown_key" in result.output, "the rejection must still say what was wrong"
     assert "rtsp://" not in result.output
     assert "user:pass" not in result.output
+
+
+# --- The calibration save path (P3.3) ---------------------------------------
+
+
+def _text_of(path: Path) -> str:
+    """Read a file from an async test without tripping the blocking-call lint.
+
+    These are tests, not the event loop the engine runs on; the rule is right about
+    production code and has nothing to say about an assertion.
+    """
+    return path.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def config_file(tmp_path: Path, config: MusterConfig) -> Path:
+    """A real file on disk, because saving geometry means rewriting one."""
+    path = tmp_path / "muster.yaml"
+    path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    return path
+
+
+async def test_saving_geometry_rewrites_the_config_and_reloads_it(
+    store: Store, config_file: Path
+) -> None:
+    """The whole join: writer, loader, store and supervisor behind one callable.
+
+    §13.1 makes the file authoritative, so a save that only reached the store would be
+    undone by the next `apply_config`. What comes back is what the file now says.
+    """
+    config = load_config(config_file)
+    engine = Engine(config, store, entry=run_until_stopped, config_path=config_file)
+    zone = ZoneConfig(
+        zone_id=ZoneId("drawn-in-the-editor"),
+        camera_id=CameraId("front-door"),
+        role=ZoneRole.AREA,
+        polygon=[(0.2, 0.2), (0.8, 0.2), (0.8, 0.8)],
+        metrics=[MetricName("occupancy")],
+    )
+
+    reloaded = await engine.save_geometry([zone], [])
+
+    assert [z.zone_id for z in reloaded.zones] == ["drawn-in-the-editor"]
+    assert "drawn-in-the-editor" in _text_of(config_file)
+    assert load_config(config_file).zones[0].polygon == zone.polygon
+
+
+async def test_a_saved_zone_reaches_the_store(store: Store, config_file: Path) -> None:
+    """The store's tables are the config's compiled form (§11), so they move together."""
+    config = load_config(config_file)
+    engine = Engine(config, store, entry=run_until_stopped, config_path=config_file)
+    zone = ZoneConfig(
+        zone_id=ZoneId("drawn-in-the-editor"),
+        camera_id=CameraId("front-door"),
+        role=ZoneRole.AREA,
+        polygon=[(0.2, 0.2), (0.8, 0.2), (0.8, 0.8)],
+        metrics=[MetricName("occupancy")],
+    )
+
+    await engine.save_geometry([zone], [])
+
+    stored = {row[0] for row in store._connection.execute("SELECT zone_id FROM zones").fetchall()}
+    assert "drawn-in-the-editor" in stored
+
+
+async def test_an_engine_with_no_config_file_cannot_save(
+    store: Store, config: MusterConfig
+) -> None:
+    """A config handed over as an object has no file to write back to, and says so."""
+    engine = Engine(config, store, entry=run_until_stopped)
+
+    transport = httpx.ASGITransport(app=engine.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        response = await client.post("/calibrate/front-door", json={"zones": [], "lines": []})
+
+    assert response.status_code == 503
+
+
+def test_the_command_gives_the_engine_the_config_it_was_pointed_at(
+    tmp_path: Path, config: MusterConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the path, the calibration view is read-only on a real box and nowhere else.
+
+    The Engine tests above prove saving works when it is handed a path; this proves the
+    command hands one over. That join is a single argument and therefore exactly the kind
+    of thing that is silently dropped.
+    """
+    path = tmp_path / "muster.yaml"
+    path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+    seen: dict[str, Any] = {}
+
+    class SpyEngine:
+        def __init__(self, config: MusterConfig, store: Store, **kwargs: Any) -> None:
+            del config, store
+            seen.update(kwargs)
+
+        async def run(self, **kwargs: Any) -> None:
+            del kwargs
+
+    monkeypatch.setattr(cli, "Engine", SpyEngine)
+
+    result = RUNNER.invoke(cli.app, ["run", "--config", str(path)])
+
+    assert result.exit_code == 0, result.output
+    assert seen["config_path"] == path

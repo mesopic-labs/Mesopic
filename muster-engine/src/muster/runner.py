@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-from collections.abc import Callable, Coroutine, Iterator, Mapping
+from collections.abc import Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,7 +29,10 @@ from typing import TYPE_CHECKING
 import uvicorn
 
 from muster.api.app import create_app
-from muster.config.schema import ApiConfig, MusterConfig
+from muster.config import load_config
+from muster.config.schema import ApiConfig, LineConfig, MusterConfig, ZoneConfig
+from muster.config.writer import write_geometry
+from muster.errors import ConfigError
 from muster.exporters.fanout import build_exporters
 from muster.exporters.prometheus import PrometheusExporter
 from muster.store.store import Store
@@ -121,11 +124,16 @@ class Engine:
         store: Store,
         *,
         entry: WorkerEntry = run_camera_worker,
+        config_path: Path | None = None,
     ) -> None:
         store.migrate()
         store.apply_config(config)
         self.config = config
         self.store = store
+        self.config_path = config_path
+        """Where geometry saves land. `None` for an engine handed a config object rather
+        than a file — there is nowhere to write back to, and the calibration view says so
+        instead of inventing a path."""
         self.supervisor = Supervisor(config, store=store, entry=entry)
         self.supervisor.exporters = build_exporters(config)
         self.app = create_app(
@@ -133,7 +141,30 @@ class Engine:
             store=store,
             camera_reports=self.supervisor.camera_reports,
             render_prometheus=_prometheus_renderer(self.supervisor),
+            snapshot=self.supervisor.snapshot,
+            save_geometry=self.save_geometry if config_path is not None else None,
         )
+
+    async def save_geometry(
+        self, zones: Sequence[ZoneConfig], lines: Sequence[LineConfig]
+    ) -> MusterConfig:
+        """Write the site's geometry, then adopt what landed.
+
+        The order is deliberate and is the whole reason this lives in the composition
+        root rather than in a route. The file is written first because §13.1 makes it
+        authoritative; it is then **read back** rather than trusted, so what the store
+        compiles and the workers adopt is what a restart would also read. A save that
+        reloaded the in-memory value it just wrote would hide any divergence between the
+        two until the next restart, which is the worst possible moment to find one.
+        """
+        if self.config_path is None:  # pragma: no cover - the app never offers the route
+            msg = "this engine was built without a config file to write back to"
+            raise ConfigError(msg)
+        write_geometry(self.config_path, zones=zones, lines=lines)
+        self.config = load_config(self.config_path)
+        self.store.apply_config(self.config)
+        await self.supervisor.reload(self.config)
+        return self.config
 
     async def run(self, *, serve: Serve = serve_uvicorn) -> None:
         """Run until a signal, a stopped supervisor, or a server that gave up."""

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{#
+  The three read-only geometry views §13 names: `/cameras`, `/zones`, `/lines`.
+
+  One template rather than three because they are one table with a different column set —
+  a list of things that belong to a camera, each linking to the canvas where that camera
+  is drawn. The editing happens in exactly one place, and these are the ways to reach it.
+#}
+
+{% block title %}{{ heading }} — Muster{% endblock %}
+{% block heading %}{{ heading }}{% endblock %}
+{% block subtitle %}
+Geometry is normalized, so it survives a camera changing resolution. Drawing happens on
+the calibration page for each camera.
+{% endblock %}
+
+{% block content %}
+<section class="readings" aria-label="{{ heading }}">
+  <ul>
+    {% for row in rows %}
+    <li class="reading">
+      <span class="scope"><a href="/calibrate/{{ row.camera_id }}">{{ row.label }}</a></span>
+      <span class="metric">{{ row.detail }}</span>
+      <span class="value">{{ row.extent }}</span>
+    </li>
+    {% else %}
+    <li class="reading"><span class="scope">nothing configured</span></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{#
+  The calibration view — the one Muster page that puts a frame on screen (§13).
+
+  The snapshot is fetched from a route that answers `Cache-Control: no-store`, drawn
+  under an SVG overlay, and forgotten when the tab closes. Nothing here uploads it and
+  nothing here writes it: what leaves this page on save is normalized geometry, which is
+  why the picture is disposable and why a resolution change does not invalidate the work.
+
+  Geometry is drawn in the overlay's own 0..1 coordinate space via `viewBox`, so a point
+  is stored exactly as it is drawn and the browser does the scaling. There is no pixel
+  arithmetic on the save path at all — the only conversion is the pointer position, and
+  it divides by the element's own box.
+#}
+
+{% block scripts %}<script src="/static/calibrate.js" defer></script>{% endblock %}
+
+{% block title %}Calibrate {{ camera.name }} — Muster{% endblock %}
+{% block heading %}{{ camera.name }}{% endblock %}
+{% block subtitle %}
+One still, held in memory for as long as this tab is open. It is never written to disk,
+never uploaded, and never stored — what you save is the geometry, not the picture.
+{% endblock %}
+
+{% block content %}
+<section class="stage" aria-label="Calibration">
+  <div class="darkroom" data-camera="{{ camera.camera_id }}">
+    <img class="still" alt="Still from {{ camera.name }}, for drawing on"
+         src="/api/cameras/{{ camera.camera_id }}/snapshot" />
+    <svg class="overlay" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true"></svg>
+    <p class="unavailable" hidden>
+      No still available. A snapshot comes from the worker that is already streaming this
+      camera, so the camera has to be running before it can be calibrated.
+    </p>
+  </div>
+
+  <div class="tools" role="group" aria-label="Drawing tools">
+    <button type="button" class="tool is-current" data-mode="zone">Zone</button>
+    <button type="button" class="tool" data-mode="line">Line</button>
+    <button type="button" class="tool" data-act="undo">Undo</button>
+    <button type="button" class="tool" data-act="clear">Clear</button>
+    <button type="button" class="tool is-commit" data-act="save"{% if not can_save %} disabled{% endif %}>
+      Save
+    </button>
+  </div>
+
+  {# The consequence of P3.8's close-before-swap, said before the click rather than
+     discovered afterwards in the dwell chart. #}
+  <p class="caution" role="note">
+    Saving reloads this camera's geometry immediately. Everyone standing in a zone right
+    now is counted out and re-enters, so dwell and occupancy will show a break — prefer a
+    quiet moment over a busy one.
+  </p>
+  <p class="saved" role="status" aria-live="polite" hidden></p>
+</section>
+
+<section class="readings" aria-label="Saved geometry">
+  <h2>On this camera</h2>
+  <ul>
+    {% for zone in zones %}
+    <li class="reading">
+      <span class="scope">{{ zone.zone_id }}</span>
+      <span class="metric">zone · {{ zone.role.value }}</span>
+      <span class="value">{{ zone.polygon | length }} pts</span>
+    </li>
+    {% endfor %}
+    {% for line in lines %}
+    <li class="reading">
+      <span class="scope">{{ line.line_id }}</span>
+      <span class="metric">line · {{ line.positive_dir.value }}</span>
+      <span class="value">2 pts</span>
+    </li>
+    {% endfor %}
+    {% if not zones and not lines %}
+    <li class="reading"><span class="scope">nothing drawn yet</span></li>
+    {% endif %}
+  </ul>
+</section>
+{% endblock %}
