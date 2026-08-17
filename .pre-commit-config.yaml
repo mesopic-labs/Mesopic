@@ -9,8 +9,15 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      # Vendored assets are excluded from both fixers: their bytes must stay identical to
+      # what upstream published, because `VENDOR.md` records a SHA-256 of each one and
+      # the digest test is what turns a silent substitution into a red build. A stripped
+      # trailing newline is indistinguishable from a tampered file to a hash, and "the
+      # formatter did it" is not a distinction a supply-chain check can afford to make.
       - id: trailing-whitespace
+        exclude: ^muster-engine/src/muster/api/static/vendor/
       - id: end-of-file-fixer
+        exclude: ^muster-engine/src/muster/api/static/vendor/
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-toml

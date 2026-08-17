@@ -1,0 +1,106 @@
+{#
+  The polled fragment: engine health, the tiles, and the chart data.
+
+  The `hx-*` attributes ride on this element rather than on a wrapper because the swap
+  replaces this element — a trigger declared on a parent would keep firing at whatever
+  the parent used to point at, and one declared on a child would be swapped away with it.
+
+  The chart *shells* deliberately live outside this fragment, in `dashboard.html`. Their
+  uPlot instances survive every poll and are handed new data by `board.js`; re-rendering
+  them here would tear down and rebuild a canvas every 30 seconds and lose the reader's
+  place in the process.
+#}
+<div id="board"
+     class="board"
+     hx-get="/fragments/board?window={{ window.value }}"
+     hx-trigger="every 30s"
+     hx-swap="outerHTML">
+
+  {# Inside the fragment so the current-range highlight swaps with the data it describes.
+     Real `href`s, so the range still changes with scripting off — htmx intercepts the
+     click when it is on. #}
+  <nav class="windows" aria-label="Time range">
+    {% for choice in windows %}
+    <a href="/?window={{ choice.value }}"
+       class="window{% if choice == window %} is-current{% endif %}"
+       {% if choice == window %}aria-current="true"{% endif %}
+       hx-get="/fragments/board?window={{ choice.value }}"
+       hx-target="#board"
+       hx-swap="outerHTML">{{ choice.value }}</a>
+    {% endfor %}
+  </nav>
+
+  <section class="hud-panel">
+    <span class="hud-corner tl"></span>
+    <span class="hud-corner tr"></span>
+    <span class="hud-corner bl"></span>
+    <span class="hud-corner br"></span>
+
+    <p class="hud-live">
+      <span class="dot-live{% if health.status.value != 'ok' %} is-{{ health.status.value }}{% endif %}"></span>
+      engine {{ health.status.value }}
+    </p>
+
+    <dl class="readout">
+      <div>
+        <dt>Cameras</dt>
+        <dd>{{ health.cameras | selectattr("state.value", "eq", "streaming") | list | length }}/{{ health.cameras | length }}</dd>
+      </div>
+      <div>
+        <dt>Uptime</dt>
+        <dd>{{ health.uptime_s }}s</dd>
+      </div>
+      <div>
+        <dt>Unsynced</dt>
+        <dd>{{ health.sync.unsynced_rows }}</dd>
+      </div>
+      <div>
+        <dt>Disk free</dt>
+        <dd>{{ health.disk.free_pct }}%</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section>
+    <h2>Cameras</h2>
+    <ul class="camera-list">
+      {% for camera in health.cameras %}
+      <li>
+        <span class="camera-id">{{ camera.camera_id }}</span>
+        <span class="state is-{{ camera.state.value }}">{{ camera.state.value }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  <section>
+    <h2>Now</h2>
+    <ul class="tiles">
+      {#
+        A tile with no value renders an em dash, never a zero. Zero is a measurement —
+        it says nobody walked past. No data says nothing was reported, and printing `0`
+        for a camera that has been dead all morning tells the operator their shop is
+        empty.
+      #}
+      {% for tile in tiles %}
+      <li class="tile">
+        <p class="tile-scope">{{ tile.label }}</p>
+        <p class="tile-metric">{{ tile.metric.value.replace("_", " ") }}{% if tile.total %} <span class="tile-qualifier">/ {{ window.value }}</span>{% endif %}</p>
+        <p class="tile-value{% if tile.value is none %} is-absent{% endif %}">
+          {%- if tile.value is none -%}
+            &mdash;
+          {%- elif tile.total -%}
+            {{ tile.value | round | int }}
+          {%- else -%}
+            {{ tile.value | round(1) }}
+          {%- endif -%}
+        </p>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  {# One request feeds the tiles and the charts, so the two halves of the page can never
+     disagree about which window they are showing. #}
+  <script id="board-data" type="application/json">{{ charts | tojson }}</script>
+</div>

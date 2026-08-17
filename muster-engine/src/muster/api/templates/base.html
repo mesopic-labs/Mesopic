@@ -10,7 +10,13 @@
        Root-relative rather than `url_for`, which renders an absolute URL and so bakes
        the request's host into the page — wrong the moment the dashboard is reached
        through a reverse proxy or by IP instead of by name. #}
+    <link rel="stylesheet" href="/static/vendor/uPlot.min.css" />
     <link rel="stylesheet" href="/static/hud.css" />
+    {# Vendored, not linked: see static/vendor/VENDOR.md. `defer` rather than `async` —
+       board.js needs uPlot defined, and defer preserves document order. #}
+    <script src="/static/vendor/htmx.min.js" defer></script>
+    <script src="/static/vendor/uPlot.iife.min.js" defer></script>
+    <script src="/static/board.js" defer></script>
   </head>
   <body>
     <div class="wrap">
