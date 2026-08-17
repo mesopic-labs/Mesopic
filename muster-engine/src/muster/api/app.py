@@ -5,7 +5,8 @@ Routes (engine-architecture.md §13):
 | Route            | Purpose                                                          |
 |------------------|------------------------------------------------------------------|
 | `/`              | Live occupancy tiles, core-six charts, heatmap, staff/customer    |
-| `/cameras` `/zones` `/lines` | View and draw the site geometry                      |
+| `/cameras` `/zones` `/lines` | The site's geometry, each row linking to its canvas   |
+| `/calibrate/{camera_id}` | Draw zones and lines over one ephemeral snapshot          |
 | `/config`        | Render, validate, and hot-reload `muster.yaml`                    |
 | `/api/metrics`   | Read-only time-series JSON                                        |
 | `/healthz`       | Machine-readable engine and per-camera health                     |
@@ -29,13 +30,15 @@ Two rules this module is built around:
   composition root. Keeps the dependency arrow pointing one way, and makes every route
   testable without spawning a worker.
 
-Implements P3.1 (`/`, `/healthz`, `/api/metrics`, `/metrics`); P3.2-P3.4 own the rest.
+Implements P3.1 (`/`, `/healthz`, `/api/metrics`, `/metrics`). P3.2 added the board;
+P3.3's calibration routes live in `calibration.py` and are included here; P3.4 owns
+`/config`.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -57,6 +60,7 @@ from muster.api.board import (
     scope_slots,
     tiles_for,
 )
+from muster.api.calibration import calibration_router
 from muster.api.health import (
     DiskHealth,
     EngineHealth,
@@ -64,9 +68,19 @@ from muster.api.health import (
     camera_health,
     engine_health,
 )
-from muster.config.schema import MusterConfig
+from muster.config.schema import LineConfig, MusterConfig, ZoneConfig
 from muster.supervisor.handle import WorkerReport
 from muster.types import CameraId, MetricName
+
+Snapshotter = Callable[[CameraId], Awaitable[bytes]]
+"""`Supervisor.snapshot` — one frame from the worker that already owns the stream."""
+
+GeometrySaver = Callable[[Sequence[ZoneConfig], Sequence[LineConfig]], Awaitable[MusterConfig]]
+"""Write the site's geometry and hot-reload it, returning the config that landed.
+
+Returning the *reloaded* config rather than `None` is what keeps the dashboard honest
+after a save: the file on disk is the authority (§13.1), so what the app should render
+afterwards is what came back off it, not what the browser asked for."""
 
 if TYPE_CHECKING:
     from typing import Self
@@ -136,6 +150,8 @@ def create_app(
     store: Store,
     camera_reports: Callable[[], Mapping[CameraId, WorkerReport]] = dict,
     render_prometheus: Callable[[], str] | None = None,
+    snapshot: Snapshotter | None = None,
+    save_geometry: GeometrySaver | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     clock: Callable[[], datetime] = _utc_now,
 ) -> FastAPI:
@@ -145,8 +161,27 @@ def create_app(
     `render_prometheus` is `PrometheusExporter.render` when that exporter is enabled and
     `None` when it is not — in which case `/metrics` is not registered at all, because a
     404 is the honest answer for a surface the operator turned off.
+
+    `snapshot` and `save_geometry` are the calibration view's two halves, and both are
+    `None` for an app built without a supervisor behind it. Their routes still exist in
+    that case and answer 503: the surface is real, the engine behind it is not running.
     """
     started_at = monotonic()
+    live_config = config
+    """The config the app renders from.
+
+    Rebound by a successful save, because after one the file on disk no longer matches
+    the value this app was constructed with — and every surface built from config (the
+    tiles, the scope colours, the shape list) would otherwise keep rendering the geometry
+    the process started with until someone restarted it."""
+
+    def current() -> MusterConfig:
+        return live_config
+
+    def _adopt(saved: MusterConfig) -> None:
+        nonlocal live_config
+        live_config = saved
+
     app = FastAPI(title="Muster", docs_url=None, redoc_url=None, openapi_url=None)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=TEMPLATES_DIR)
@@ -165,7 +200,7 @@ def create_app(
     @app.get("/healthz")
     async def healthz() -> EngineHealth:
         return _health(
-            config,
+            current(),
             store,
             reports=camera_reports(),
             uptime_s=monotonic() - started_at,
@@ -186,7 +221,7 @@ def create_app(
         end = clock()
         rows = store.metrics_between(start=end - window.span, end=end, limit=MAX_LIMIT)
         return {
-            "site_id": config.site.site_id,
+            "site_id": current().site.site_id,
             "window": window,
             "windows": list(BoardWindow),
             # The exposure strip's axis. UTC on the page because UTC is what is stored —
@@ -194,12 +229,12 @@ def create_app(
             # than one that is consistently in a timezone you have to know.
             "since": end - window.span,
             "now": end,
-            "tiles": tiles_for(config, rows=rows),
-            "charts": charts_of(config, rows=rows),
-            "slots": scope_slots(config),
+            "tiles": tiles_for(current(), rows=rows),
+            "charts": charts_of(current(), rows=rows),
+            "slots": scope_slots(current()),
             "exposure": exposure_of(rows, end=end, window=window),
             "health": _health(
-                config, store, reports=camera_reports(), uptime_s=monotonic() - started_at
+                current(), store, reports=camera_reports(), uptime_s=monotonic() - started_at
             ),
             "uptime": human_duration(monotonic() - started_at),
         }
@@ -224,6 +259,16 @@ def create_app(
         return templates.TemplateResponse(
             request=request, name="_board.html", context=_board_context(window)
         )
+
+    app.include_router(
+        calibration_router(
+            current=current,
+            adopt=_adopt,
+            templates=templates,
+            snapshot=snapshot,
+            save_geometry=save_geometry,
+        )
+    )
 
     if render_prometheus is not None:
 

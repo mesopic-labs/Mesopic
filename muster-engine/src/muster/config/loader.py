@@ -41,7 +41,7 @@ def load_config(path: Path) -> MusterConfig:
     try:
         return MusterConfig.model_validate(document)
     except ValidationError as error:
-        raise ConfigError(_describe_validation_error(path, error)) from None
+        raise ConfigError(describe_validation_error(path, error)) from None
 
 
 def _read_document(path: Path) -> dict[str, Any]:
@@ -77,7 +77,13 @@ def _yaml_location(error: yaml.YAMLError) -> str:
     return f" at line {mark.line + 1}, column {mark.column + 1}"
 
 
-def _describe_validation_error(path: Path, error: ValidationError) -> str:
+def describe_validation_error(path: Path, error: ValidationError) -> str:
+    """Say where a config is wrong without saying what it contains.
+
+    Shared with the geometry writer (P3.3) rather than copied: `include_input=False` is
+    the whole reason a validation failure cannot print an RTSP URL, and a second
+    hand-rolled formatter is a second chance to forget it.
+    """
     problems = error.errors(include_url=False, include_context=False, include_input=False)
     reported = problems[:MAX_REPORTED_PROBLEMS]
     detail = "; ".join(f"{_location(problem['loc'])}: {problem['msg']}" for problem in reported)

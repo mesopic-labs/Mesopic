@@ -18,14 +18,20 @@
     <script src="/static/vendor/htmx.min.js" defer></script>
     <script src="/static/vendor/uPlot.iife.min.js" defer></script>
     <script src="/static/board.js" defer></script>
+    {% block scripts %}{% endblock %}
   </head>
   <body>
     <div class="frame">
       <header class="masthead">
         <p class="mark">Muster</p>
         <h1>{% block heading %}{{ site_id }}{% endblock %}</h1>
+        {# A block, not a constant: the claim is true of every page but the calibration
+           view, which is the one place §13 puts a frame on screen. A page that shows a
+           frame under a banner saying it does not is worse than no banner. #}
         <p class="subtitle">
+          {%- block subtitle -%}
           Your cameras, counted. No frame is written to disk, and none appears on this page.
+          {%- endblock -%}
         </p>
       </header>
       {% block content %}{% endblock %}

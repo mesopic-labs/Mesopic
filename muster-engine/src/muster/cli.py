@@ -408,7 +408,7 @@ def run(
     database = store_path(config_path=config_path, data_dir=data_dir)
     database.parent.mkdir(parents=True, exist_ok=True)
     with Store(database) as store:
-        asyncio.run(Engine(config, store).run())
+        asyncio.run(Engine(config, store, config_path=config_path).run())
 
 
 if __name__ == "__main__":
