@@ -32,6 +32,15 @@ from muster.detector.runtime import DEFAULT_RUNTIME, artefact_tag
 from muster.errors import ModelError
 from muster.types import Runtime
 
+DEFAULT_MODEL = "yolox-nano"
+"""The Apache-2.0 default (ADR-0013). Provisional until P1.7's N100 table lands."""
+
+MODEL_CACHE_ENV_VAR = "MUSTER_MODEL_CACHE"
+DEFAULT_MODEL_CACHE = Path.home() / ".cache" / "muster" / "models"
+"""Where artefacts land. Here rather than in `cli`, because the CLI is not the only
+composition root any more: a camera worker builds a detector without going through it.
+"""
+
 DOWNLOAD_TIMEOUT_S = 60.0
 """Explicit, always. A hung fetch on first run must fail rather than wedge the engine."""
 

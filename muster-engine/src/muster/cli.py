@@ -31,7 +31,12 @@ from muster.bench import (
     read_current_rss_bytes,
 )
 from muster.detector.detector import Detector
-from muster.detector.model_manager import ModelManager
+from muster.detector.model_manager import (
+    DEFAULT_MODEL,
+    DEFAULT_MODEL_CACHE,
+    MODEL_CACHE_ENV_VAR,
+    ModelManager,
+)
 from muster.detector.onnx_detector import OnnxDetector
 from muster.errors import MusterError, TruthError
 from muster.ingest.rtsp import RtspFrameSource
@@ -42,9 +47,6 @@ from muster.tracker.bytetrack import ByteTrackTracker
 from muster.tracker.tracker import Tracker
 from muster.truth import DRAFT_RATER, gate_eligible, load_manifest, load_truth
 from muster.types import CameraId
-
-DEFAULT_MODEL = "yolox-nano"
-"""The Apache-2.0 default (ADR-0013). Provisional until P1.7's N100 table lands."""
 
 DEFAULT_BENCH_FPS = 2.5
 """Above the M0 floor on purpose.
@@ -57,9 +59,6 @@ evenly (400 ms), and a box that sustains it clears the floor with margin.
 
 DEFAULT_BENCH_DURATION_S = 1800.0
 """The M0 gate's soak length: 30 minutes (implementation-plan P1.7)."""
-
-MODEL_CACHE_ENV_VAR = "MUSTER_MODEL_CACHE"
-DEFAULT_MODEL_CACHE = Path.home() / ".cache" / "muster" / "models"
 
 app = typer.Typer(
     name="muster",
