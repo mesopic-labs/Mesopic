@@ -44,8 +44,8 @@ for a published number.
 
 | Clip | Provenance | Consent | Scene | Labels | Gate-eligible |
 |---|---|---|---|---|---|
-| `home-hallway-oblique-01` | own_rig | obtained | hard | none — **unlabelled** | yes |
-| `home-hallway-oblique-02` | own_rig | obtained | hard | none — **unlabelled** | yes |
+| `home-hallway-oblique-01` | own_rig | obtained | hard | 3 in, 3 out — emil | yes |
+| `home-hallway-oblique-02` | own_rig | obtained | hard | 1 in, 1 out — emil | yes |
 | `home-kitchen-oblique-01` | own_rig | obtained | hard | n/a — no counting line | yes |
 | `storefront-oblique-01` | stock | unknown | hard | 3 in, 1 out — draft | no |
 | `entrance-headon-01` | stock | unknown | typical | 1 in — draft | no |
@@ -85,12 +85,33 @@ continuous, several people walking a known schedule. See `../../Muster-docs/docs
 §7 and §8; §8's hour-grain-vs-minute-grain question wants an answer *before* that session,
 not after.
 
-> **Gate-eligible and unlabelled is a new combination here, and it has a sharp edge.**
+> **Gate-eligible is a new property here, and it has a sharp edge.**
 > `score(..., gating=True)` refuses a clip whose provenance or consent fails, and checks
-> nothing about the labels. While every gate-eligible clip was hypothetical that gap was
-> inert. It is not any more: a truth file marked `draft-unverified` against one of these
-> clips would pass the gate guard. Until that is closed, treat "is this label verified?"
-> as a question the code does not yet ask for you.
+> nothing else — not the scene class, not the clip length, not whether a human ever
+> verified the labels. While every gate-eligible clip was hypothetical that gap was inert.
+> It is not any more: these three are `hard`, minutes long, and would pass the guard.
+> Until it is closed, "is this clip a legitimate basis for this number?" is a question the
+> code does not yet ask for you.
+
+### How the `home-hallway-*` clips were labelled
+
+Rater `emil`, 2026-08-17, watching the normalised 1080p25 clips end to end — not the
+camera originals, which are 60 fps and a different length, and not sampled frames.
+
+**Marks are whole seconds, so read the timestamps as ±0.5 s** rather than the ±0.3 s the
+stock drafts claim. That is coarser than it looks and still comfortably enough for a
+count: the only crossing anywhere near a minute boundary is `-01`'s inward mark at 61.0 s,
+which stays in minute 1 across its whole uncertainty range. Nothing here can move buckets.
+
+The labels were cross-checked against an independent background-subtraction sweep of the
+same footage, run at 2 Hz against this same line. **All six crossings in `-01` matched**,
+median offset 0.4 s and worst 1.2 s (the outward mark at 67 s, the one to re-time first if
+anyone ever needs sub-second precision). The sweep also produced eight crossings the rater
+did not, *every one of them* between 18 s and 53 s — the interval where the subject is
+sitting down, seated, and standing up again. That is blob jitter across the line, and it
+is a good illustration of why a truth file is not something a detector can produce for
+itself: the machine's extra "crossings" are concentrated exactly where a human sees
+somebody sitting still.
 
 `entrance-headon-loop30-01` is `entrance-headon-01` repeated 98 times to reach 30 minutes.
 It exists for soak-style runs that want a byte-reproducible file rather than the
