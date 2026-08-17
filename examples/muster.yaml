@@ -85,6 +85,14 @@ storage:
   # until you delete them. Raw events are the short-retention log.
   event_retention_hours: 72
 
+api:
+  # The local dashboard and its JSON. Loopback by default: the dashboard carries no
+  # credential, so the bind address is the access control. Reaching it from another
+  # machine is a deliberate act — set host to 0.0.0.0 only if you mean it, and prefer
+  # publishing the port from a container to your own loopback instead.
+  host: "127.0.0.1"
+  port: 8080
+
 exporters:
   mqtt: { enabled: true, broker: "192.168.1.10", base_topic: "muster" }
   prometheus: { enabled: true }     # served at :8080/metrics

@@ -316,3 +316,57 @@ def test_a_retention_window_beyond_a_year_is_rejected(
 
     with pytest.raises(ConfigError, match="event_retention_hours"):
         load_config(path)
+
+
+# --- The local API (P3.1) ---------------------------------------------------
+
+
+def test_the_api_binds_to_loopback_when_the_section_is_absent(
+    valid_config: dict[str, Any], tmp_path: Path
+) -> None:
+    """The dashboard is unauthenticated, so off-box reachability is an opt-in act.
+
+    A default of `0.0.0.0` would put camera topology and occupancy history in front of
+    the whole LAN on first run. The container case is handled in the compose file, not
+    by weakening this (P3.6).
+    """
+    valid_config.pop("api", None)
+    path = _write(tmp_path, valid_config)
+
+    config = load_config(path)
+
+    assert config.api.host == "127.0.0.1"
+    assert config.api.port == 8080
+    assert config.api.enabled is True
+
+
+def test_the_api_host_and_port_are_read_from_the_api_section(
+    valid_config: dict[str, Any], tmp_path: Path
+) -> None:
+    valid_config["api"] = {"host": "0.0.0.0", "port": 9000}  # noqa: S104 - the opt-in this key exists for
+    path = _write(tmp_path, valid_config)
+
+    config = load_config(path)
+
+    assert config.api.host == "0.0.0.0"  # noqa: S104 - see above
+    assert config.api.port == 9000
+
+
+@pytest.mark.parametrize("port", [0, -1, 65536])
+def test_a_port_outside_the_tcp_range_is_rejected(
+    valid_config: dict[str, Any], tmp_path: Path, port: int
+) -> None:
+    valid_config["api"] = {"port": port}
+    path = _write(tmp_path, valid_config)
+
+    with pytest.raises(ConfigError, match=r"api\.port"):
+        load_config(path)
+
+
+def test_an_empty_api_host_is_rejected(valid_config: dict[str, Any], tmp_path: Path) -> None:
+    """An empty string binds every interface in some stacks — the opposite of the default."""
+    valid_config["api"] = {"host": ""}
+    path = _write(tmp_path, valid_config)
+
+    with pytest.raises(ConfigError, match=r"api\.host"):
+        load_config(path)

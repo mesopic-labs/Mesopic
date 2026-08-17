@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}Muster{% endblock %}</title>
+    {# Every asset is served from this box. A CDN font or script would turn a dashboard
+       load into an off-box request and break the airgapped installs this is built for.
+
+       Root-relative rather than `url_for`, which renders an absolute URL and so bakes
+       the request's host into the page — wrong the moment the dashboard is reached
+       through a reverse proxy or by IP instead of by name. #}
+    <link rel="stylesheet" href="/static/hud.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="stack-tight">
+        <p class="eyebrow">Muster<span class="sig">.</span> {{ site_id }}</p>
+        <h1>{% block heading %}Dashboard{% endblock %}</h1>
+      </header>
+      {% block content %}{% endblock %}
+    </div>
+  </body>
+</html>

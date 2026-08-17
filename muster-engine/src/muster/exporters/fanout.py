@@ -44,6 +44,16 @@ class ExporterFanout:
     def names(self) -> tuple[str, ...]:
         return tuple(self._exporters)
 
+    def get(self, name: str) -> Exporter | None:
+        """The exporter config enabled under `name`, if any.
+
+        For the one exporter that is also a *surface*: Prometheus is scraped from the
+        local API's `/metrics`, so the route has to render the very instance the fan-out
+        feeds. A second one would own a second `CollectorRegistry` and scrape clean
+        forever while the real counters climbed out of sight.
+        """
+        return self._exporters.get(name)
+
     def healthy_names(self) -> tuple[str, ...]:
         """Exporters that have not failed. What `/healthz` will report (P3.1)."""
         return tuple(name for name in self._exporters if name not in self.failures)

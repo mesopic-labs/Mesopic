@@ -17,19 +17,212 @@ to disk or uploaded. Geometry saves as normalized coordinates, so the snapshot i
 disposable — which is what keeps the "frames discarded immediately" guarantee intact even
 during setup.
 
-Implements P3.1 onward.
+Two rules this module is built around:
+
+* **Every handler is `async def`.** Starlette runs a sync handler in a threadpool, and
+  `sqlite3` connections are thread-affine (the same fact that keeps the supervisor's
+  writes on its loop thread), so a sync handler touching the store raises
+  `ProgrammingError` — but only under a real server, never when a test calls it directly.
+  `test_every_route_is_a_coroutine` is what keeps this true.
+* **The engine is injected as callables, not as objects.** The app never imports the
+  supervisor or an exporter; it is handed `camera_states` and `render_prometheus` by the
+  composition root. Keeps the dependency arrow pointing one way, and makes every route
+  testable without spawning a worker.
+
+Implements P3.1 (`/`, `/healthz`, `/api/metrics`, `/metrics`); P3.2-P3.4 own the rest.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import time
+from collections.abc import Callable, Mapping, Sequence
+from datetime import timedelta
+from pathlib import Path
+from typing import TYPE_CHECKING, Annotated, Any
+
+from fastapi import FastAPI, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+
+from muster.api.health import (
+    DiskHealth,
+    EngineHealth,
+    SyncHealth,
+    camera_health,
+    engine_health,
+)
+from muster.config.schema import MusterConfig
+from muster.supervisor.handle import WorkerReport
+from muster.types import CameraId, MetricName
 
 if TYPE_CHECKING:
-    from fastapi import FastAPI
+    from typing import Self
 
     from muster.store import Store
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
-def create_app(store: Store) -> FastAPI:
-    """Build the local dashboard app around an already-open store."""
-    raise NotImplementedError
+MAX_LIMIT = 20_000
+"""Rows one request may return. A minute-bucketed month of the core six is under this;
+an unbounded read of a long history is how a dashboard poll OOMs the box."""
+
+DEFAULT_LIMIT = 5_000
+
+MAX_WINDOW = timedelta(days=31)
+"""Widest range a single request may span, for the reason `MAX_LIMIT` exists. A longer
+view is a pre-aggregated one, which is the cloud's job (ADR-0005)."""
+
+MAX_ID_LENGTH = 128
+"""Long enough for any id a config can name, short enough that nothing large is echoed
+into a log line or a query."""
+
+PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+
+
+class MetricsQuery(BaseModel):
+    """The `/api/metrics` query string, parsed into a typed window at the edge.
+
+    Untrusted input becomes a strict structure here and is rejected on first
+    inconsistency — it is never sanitised and passed on.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    start: AwareDatetime = Field(alias="from")
+    """Timezone-aware on purpose: everything stored is UTC, and a bare local timestamp
+    would silently shift the window by the operator's offset."""
+    end: AwareDatetime = Field(alias="to")
+    camera_id: Annotated[str, Field(max_length=MAX_ID_LENGTH)] | None = None
+    metric: list[MetricName] | None = None
+    limit: Annotated[int, Field(gt=0, le=MAX_LIMIT)] = DEFAULT_LIMIT
+
+    @model_validator(mode="after")
+    def _window_must_be_forward_and_bounded(self) -> Self:
+        if self.end <= self.start:
+            msg = "the window must end after it starts"
+            raise ValueError(msg)
+        if self.end - self.start > MAX_WINDOW:
+            msg = "the window is too wide"
+            raise ValueError(msg)
+        return self
+
+
+def create_app(
+    *,
+    config: MusterConfig,
+    store: Store,
+    camera_reports: Callable[[], Mapping[CameraId, WorkerReport]] = dict,
+    render_prometheus: Callable[[], str] | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> FastAPI:
+    """Build the local dashboard app around an already-open store.
+
+    `camera_reports` is `Supervisor.camera_reports` in production and a literal in tests.
+    `render_prometheus` is `PrometheusExporter.render` when that exporter is enabled and
+    `None` when it is not — in which case `/metrics` is not registered at all, because a
+    404 is the honest answer for a surface the operator turned off.
+    """
+    started_at = monotonic()
+    app = FastAPI(title="Muster", docs_url=None, redoc_url=None, openapi_url=None)
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    templates = Jinja2Templates(directory=TEMPLATES_DIR)
+
+    @app.exception_handler(RequestValidationError)
+    async def _generic_rejection(request: Request, exc: RequestValidationError) -> JSONResponse:
+        """Say no without saying what was sent.
+
+        FastAPI's default body quotes the offending input straight back, and an RTSP URL
+        carries the camera's credentials — the same leak P2.1 closed in the config
+        loader's tracebacks. Detail belongs in the log, not in the response.
+        """
+        del request, exc
+        return JSONResponse(status_code=400, content={"detail": "invalid request"})
+
+    @app.get("/healthz")
+    async def healthz() -> EngineHealth:
+        return _health(
+            config,
+            store,
+            reports=camera_reports(),
+            uptime_s=monotonic() - started_at,
+        )
+
+    @app.get("/api/metrics")
+    async def api_metrics(query: Annotated[MetricsQuery, Query()]) -> dict[str, Any]:
+        rows = store.metrics_between(
+            start=query.start,
+            end=query.end,
+            limit=query.limit,
+            camera_id=CameraId(query.camera_id) if query.camera_id else None,
+            metrics=query.metric,
+        )
+        return {"series": _as_series(rows), "truncated": len(rows) >= query.limit}
+
+    @app.get("/")
+    async def dashboard(request: Request) -> Any:
+        return templates.TemplateResponse(
+            request=request,
+            name="dashboard.html",
+            context={
+                "site_id": config.site.site_id,
+                "health": _health(
+                    config, store, reports=camera_reports(), uptime_s=monotonic() - started_at
+                ),
+            },
+        )
+
+    if render_prometheus is not None:
+
+        @app.get("/metrics", response_class=PlainTextResponse)
+        async def prometheus() -> PlainTextResponse:
+            return PlainTextResponse(
+                content=render_prometheus(), media_type=PROMETHEUS_CONTENT_TYPE
+            )
+
+    return app
+
+
+def _health(
+    config: MusterConfig,
+    store: Store,
+    *,
+    reports: Mapping[CameraId, WorkerReport],
+    uptime_s: float,
+) -> EngineHealth:
+    return engine_health(
+        camera_health(config, reports),
+        uptime_s=uptime_s,
+        schema_version=store.schema_version(),
+        sync=SyncHealth(enabled=config.cloud_sync.enabled, unsynced_rows=store.unsynced_count()),
+        disk=DiskHealth.of(store.path),
+    )
+
+
+def _as_series(rows: Sequence[Any]) -> list[dict[str, Any]]:
+    """Group rows into one columnar series per `(camera, metric, scope)`.
+
+    Columnar because uPlot consumes parallel arrays (P3.2); one flat list would plot two
+    cameras' footfall as a single sawtooth. Grouping is a reshape of what the store
+    returned in order, not a computation — no value here is derived from another.
+    """
+    series: dict[tuple[str, str, str | None], dict[str, Any]] = {}
+    for row in rows:
+        key = (row.camera_id, row.metric.value, row.scope_id)
+        if key not in series:
+            series[key] = {
+                "camera_id": row.camera_id,
+                "metric": row.metric.value,
+                "scope_id": row.scope_id,
+                "t": [],
+                "v": [],
+            }
+        series[key]["t"].append(int(row.bucket.timestamp()))
+        series[key]["v"].append(row.value)
+    return list(series.values())
+
+
+__all__ = ["DEFAULT_LIMIT", "MAX_LIMIT", "MAX_WINDOW", "create_app"]

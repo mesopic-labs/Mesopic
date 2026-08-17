@@ -1,0 +1,337 @@
+/*
+ * The HUD design system — the shared visual language of every Muster surface.
+ *
+ * This file is the canonical copy. The local dashboard, the hosted dashboard and the
+ * landing page all take their tokens from here, so the three read as one product rather
+ * than three that happen to share a name.
+ *
+ * Theming has three states, and all three are defined explicitly: an operator who picked
+ * a theme gets `data-theme`, an operator who picked nothing gets `prefers-color-scheme`,
+ * and everyone gets the light palette as the base. A token defined *only* inside a media
+ * query inherits the host's value when the query does not match, which is how a panel
+ * ends up with black text on a black background for exactly the users who set a
+ * preference.
+ *
+ * Numerics are monospace and tabular throughout: a readout whose digits change width
+ * jitters on every refresh, and the dashboard refreshes on a poll (P3.2).
+ */
+
+:root {
+  --ground: #e8edef;
+  --panel: #ffffff;
+  --panel-2: #f2f6f7;
+  --ink: #121a1e;
+  --muted: #59707b;
+  --line: #cbd8dd;
+  --line-strong: #9db0b8;
+  --signal: #c2700a;
+  --signal-soft: rgba(194, 112, 10, 0.12);
+  --stream: #227d8c;
+  --stream-soft: rgba(34, 125, 140, 0.12);
+  --closed: #a4432e;
+  --scene: #dfe6e9;
+
+  --mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+
+  --measure: 66ch;
+  --pad: clamp(1.25rem, 4vw, 3rem);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0d1316;
+    --panel: #141c20;
+    --panel-2: #1a2429;
+    --ink: #e4ecef;
+    --muted: #8ba0aa;
+    --line: #253238;
+    --line-strong: #3c505a;
+    --signal: #ffb020;
+    --signal-soft: rgba(255, 176, 32, 0.14);
+    --stream: #4cc9dd;
+    --stream-soft: rgba(76, 201, 221, 0.13);
+    --closed: #e0705a;
+    --scene: #1b262b;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground: #0d1316;
+  --panel: #141c20;
+  --panel-2: #1a2429;
+  --ink: #e4ecef;
+  --muted: #8ba0aa;
+  --line: #253238;
+  --line-strong: #3c505a;
+  --signal: #ffb020;
+  --signal-soft: rgba(255, 176, 32, 0.14);
+  --stream: #4cc9dd;
+  --stream-soft: rgba(76, 201, 221, 0.13);
+  --closed: #e0705a;
+  --scene: #1b262b;
+}
+
+:root[data-theme="light"] {
+  --ground: #e8edef;
+  --panel: #ffffff;
+  --panel-2: #f2f6f7;
+  --ink: #121a1e;
+  --muted: #59707b;
+  --line: #cbd8dd;
+  --line-strong: #9db0b8;
+  --signal: #c2700a;
+  --signal-soft: rgba(194, 112, 10, 0.12);
+  --stream: #227d8c;
+  --stream-soft: rgba(34, 125, 140, 0.12);
+  --closed: #a4432e;
+  --scene: #dfe6e9;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 68rem;
+  margin: 0 auto;
+  padding: var(--pad);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(2rem, 5vw, 3.5rem);
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  font-weight: 800;
+}
+
+h2 {
+  font-size: clamp(1.2rem, 2.4vw, 1.5rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+}
+
+p {
+  margin: 0;
+  max-width: var(--measure);
+}
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0;
+}
+
+.sig {
+  color: var(--signal);
+}
+
+.rule {
+  height: 1px;
+  background: var(--line);
+  border: 0;
+  margin: 0;
+}
+
+/* ---------- HUD frame ---------- */
+
+.hud-panel {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 1.4rem;
+}
+
+.hud-corner {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line-strong);
+}
+
+.hud-corner.tl {
+  top: 10px;
+  left: 10px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.hud-corner.tr {
+  top: 10px;
+  right: 10px;
+  border-left: 0;
+  border-bottom: 0;
+}
+
+.hud-corner.bl {
+  bottom: 10px;
+  left: 10px;
+  border-right: 0;
+  border-top: 0;
+}
+
+.hud-corner.br {
+  bottom: 10px;
+  right: 10px;
+  border-left: 0;
+  border-top: 0;
+}
+
+.hud-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dot-live {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--signal);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+.dot-live.is-degraded {
+  background: var(--stream);
+  animation: none;
+}
+
+.dot-live.is-down {
+  background: var(--closed);
+  animation: none;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot-live {
+    animation: none;
+  }
+}
+
+/* ---------- readout strip ---------- */
+
+.readout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  border: 1px solid var(--line);
+  background: var(--panel);
+  margin: 0;
+}
+
+.readout div {
+  padding: 0.85rem 1rem;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.readout div:last-child {
+  border-right: 0;
+}
+
+.readout dt {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.readout dd {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- camera list ---------- */
+
+.camera-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.camera-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.camera-list li:last-child {
+  border-bottom: 0;
+}
+
+.camera-id {
+  font-family: var(--mono);
+  font-size: 0.9rem;
+}
+
+.state {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.state.is-streaming {
+  color: var(--signal);
+}
+
+.state.is-backoff,
+.state.is-stalled {
+  color: var(--closed);
+}
+
+/* Wide content scrolls inside its own box; the page itself never scrolls sideways. */
+.scroll-x {
+  overflow-x: auto;
+}

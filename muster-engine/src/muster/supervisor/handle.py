@@ -21,14 +21,29 @@ import multiprocessing
 import queue
 from collections.abc import Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from multiprocessing.context import SpawnProcess
 from multiprocessing.queues import Queue
 
 from muster.config.schema import MusterConfig
-from muster.types import CameraId, RawEvent
+from muster.types import CameraId, CameraState, RawEvent
 
 WorkerEntry = Callable[[CameraId, MusterConfig, "Queue[RawEvent]", "Queue[str]"], None]
 """What a camera worker process runs. Must be importable by name — see the module note."""
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerReport:
+    """Everything the supervisor knows about one camera, for `/healthz` (§15).
+
+    Two fields rather than a bare state because the count is what explains the state: a
+    camera in `BACKOFF` with one failure is a stream that hiccuped, and the same camera
+    with forty is a URL that has been wrong since install.
+    """
+
+    state: CameraState
+    consecutive_failures: int
+
 
 _SPAWN = multiprocessing.get_context("spawn")
 
@@ -80,6 +95,31 @@ class WorkerHandle:
 
     def is_alive(self) -> bool:
         return self._process is not None and self._process.is_alive()
+
+    @property
+    def state(self) -> CameraState:
+        """What `/healthz` reports for this camera (engine-architecture.md §15).
+
+        **This is process liveness standing in for stream state, and it over-claims.** A
+        worker whose RTSP connection is reconnecting inside its own loop is still a live
+        process, and is reported here as `STREAMING`. The honest facts — last frame time
+        and effective fps — live inside the worker and are never sent back to the
+        supervisor, so `STALLED` is unreachable from here and `/healthz` serialises those
+        two fields as `null`. A worker→supervisor status heartbeat is what replaces this
+        with the real thing; until then this distinguishes "running" from "not running",
+        which is what the restart policy already knows.
+        """
+        if self.is_alive():
+            return CameraState.STREAMING
+        return CameraState.BACKOFF
+
+    @property
+    def consecutive_failures(self) -> int:
+        """Deaths since this worker last ran successfully. Reset by `note_started`."""
+        return self._failures
+
+    def report(self) -> WorkerReport:
+        return WorkerReport(state=self.state, consecutive_failures=self._failures)
 
     def wait_exit(self, timeout: float) -> None:
         if self._process is not None:

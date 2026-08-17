@@ -182,6 +182,22 @@ source_modules = ["muster.sync"]
 forbidden_modules = ["muster.ingest", "muster.detector", "av", "cv2"]
 
 [[tool.importlinter.contracts]]
+name = "The dashboard serves numbers, never frames (engine-architecture §13)"
+source_modules = ["muster.api"]
+type = "forbidden"
+# The web layer is the one part of the engine reachable from a browser, so the "frames
+# never leave the box" guarantee is worth having as a property of the import graph rather
+# than of everyone's care. It also keeps the handlers thin by construction: with no
+# decoder and no detector in reach, the only thing an endpoint can do is read the store.
+#
+# P3.3's calibration snapshot is the single exception in §13, and it is NOT an exception
+# to this contract: the snapshot is grabbed by the worker that already owns the stream and
+# handed over as bytes, so the browser gets a frame without this package ever importing a
+# codec. If that turns out to need `muster.ingest` here, the answer is a new seam, not a
+# wider contract.
+forbidden_modules = ["muster.ingest", "muster.detector", "muster.tracker", "av", "cv2"]
+
+[[tool.importlinter.contracts]]
 name = "Ground truth handles labels, never pixels (ADR-0015)"
 type = "forbidden"
 source_modules = ["muster.truth"]

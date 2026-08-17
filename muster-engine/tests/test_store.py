@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -70,9 +70,10 @@ def _metric(
     scope: ScopeId | None = DOOR_LINE,
     bucket: MinuteBucket = BUCKET,
     metric: MetricName = MetricName.FOOTFALL,
+    camera: CameraId = FRONT_DOOR,
 ) -> MetricRow:
     return MetricRow(
-        camera_id=FRONT_DOOR,
+        camera_id=camera,
         bucket=bucket,
         metric=metric,
         scope_id=scope,
@@ -299,6 +300,70 @@ def test_an_upsert_reopens_a_bucket_for_sync(store: Store) -> None:
     store.upsert_metrics([_metric(9.0)])
 
     assert [row.value for row in store.unsynced_metrics(limit=10)] == [9.0]
+
+
+def test_the_unsynced_backlog_can_be_counted_without_reading_it(store: Store) -> None:
+    """`/healthz` reports the backlog depth; materialising it to len() would be the bug."""
+    store.upsert_metrics([_metric(1.0, bucket=BUCKET), _metric(2.0, bucket=LATER)])
+
+    assert store.unsynced_count() == 2
+
+
+# --- Reading the series back (P3.1) -----------------------------------------
+
+
+def test_metrics_between_returns_the_window_in_bucket_order(store: Store) -> None:
+    """The dashboard plots left to right; ordering here is what makes the handler thin."""
+    store.upsert_metrics([_metric(2.0, bucket=LATER), _metric(1.0, bucket=BUCKET)])
+
+    rows = store.metrics_between(start=BUCKET, end=LATER + timedelta(minutes=1), limit=100)
+
+    assert [(row.bucket, row.value) for row in rows] == [(BUCKET, 1.0), (LATER, 2.0)]
+
+
+def test_metrics_between_excludes_the_end_bucket(store: Store) -> None:
+    """Half-open, like `trim`: a minute belongs to exactly one window, never to two."""
+    store.upsert_metrics([_metric(1.0, bucket=BUCKET), _metric(2.0, bucket=LATER)])
+
+    rows = store.metrics_between(start=BUCKET, end=LATER, limit=100)
+
+    assert [row.bucket for row in rows] == [BUCKET]
+
+
+def test_metrics_between_can_select_one_camera(store: Store) -> None:
+    store.upsert_metrics([_metric(1.0), _metric(5.0, camera=CameraId("till"))])
+
+    rows = store.metrics_between(camera_id=FRONT_DOOR, start=BUCKET, end=LATER, limit=100)
+
+    assert [row.camera_id for row in rows] == [FRONT_DOOR]
+
+
+def test_metrics_between_can_select_named_metrics(store: Store) -> None:
+    store.upsert_metrics(
+        [_metric(1.0), _metric(3.0, metric=MetricName.OCCUPANCY, scope=ScopeId("shop-floor"))]
+    )
+
+    rows = store.metrics_between(metrics=[MetricName.OCCUPANCY], start=BUCKET, end=LATER, limit=100)
+
+    assert [row.metric for row in rows] == [MetricName.OCCUPANCY]
+
+
+def test_metrics_between_respects_its_limit(store: Store) -> None:
+    """A year of buckets is 525,600 rows; an unbounded read is an OOM on an N100."""
+    store.upsert_metrics([_metric(1.0, bucket=BUCKET), _metric(2.0, bucket=LATER)])
+
+    rows = store.metrics_between(start=BUCKET, end=LATER + timedelta(minutes=1), limit=1)
+
+    assert len(rows) == 1
+
+
+def test_metrics_between_maps_the_camera_wide_scope_back_to_none(store: Store) -> None:
+    """`''` is a storage detail of the upsert key (P2.5); readers must never see it."""
+    store.upsert_metrics([_metric(4.0, scope=None, metric=MetricName.OCCUPANCY)])
+
+    (row,) = store.metrics_between(start=BUCKET, end=LATER, limit=100)
+
+    assert row.scope_id is None
 
 
 # --- The event log ----------------------------------------------------------
