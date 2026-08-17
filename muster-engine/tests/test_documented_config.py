@@ -12,8 +12,13 @@ was to run both documents through it for real. That is what they now do: every d
 we publish is validated by the same code path a user's file takes, so a renamed key, an
 out-of-range coordinate or an invented metric name fails here first.
 
-What is left alongside that is only what validation cannot see: that the two documents
-describe the same schema as each other, and that neither of them inlines a secret.
+What is left alongside that is only what validation cannot see: that the README and the
+worked example describe the same schema as each other, and that none of these documents
+inlines a secret.
+
+`fixtures/muster.yaml` is checked here too, though nobody reads it as documentation. It
+is the geometry the ground-truth clips are labelled against, so drift there does not
+mislead a reader — it silently invalidates every label made against it.
 """
 
 from __future__ import annotations
@@ -30,6 +35,13 @@ from muster.config import load_config
 REPO_ROOT = Path(__file__).resolve().parents[2]
 README = REPO_ROOT / "README.md"
 EXAMPLE_CONFIG = REPO_ROOT / "examples" / "muster.yaml"
+FIXTURE_CONFIG = REPO_ROOT / "fixtures" / "muster.yaml"
+"""The geometry the ground-truth clips are labelled against.
+
+Not documentation, but it drifts the same way and the cost of drift is worse: a renamed
+key here does not confuse a reader, it silently invalidates every label made against the
+line this file defines.
+"""
 
 
 def _readme_config_block() -> dict[str, Any]:
@@ -46,16 +58,30 @@ def documented() -> dict[str, Any]:
     return _readme_config_block()
 
 
-@pytest.fixture(scope="module")
-def example() -> dict[str, Any]:
-    parsed = yaml.safe_load(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
+def _yaml_document(path: Path) -> dict[str, Any]:
+    parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert isinstance(parsed, dict)
     return parsed
 
 
-@pytest.mark.parametrize("document", ["readme", "example"])
+@pytest.fixture(scope="module")
+def example() -> dict[str, Any]:
+    return _yaml_document(EXAMPLE_CONFIG)
+
+
+@pytest.fixture(scope="module")
+def documents(documented: dict[str, Any], example: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Every config this repository commits, by the name the tests parametrize over."""
+    return {
+        "readme": documented,
+        "example": example,
+        "fixtures": _yaml_document(FIXTURE_CONFIG),
+    }
+
+
+@pytest.mark.parametrize("document", ["readme", "example", "fixtures"])
 def test_every_documented_config_validates(
-    document: str, documented: dict[str, Any], example: dict[str, Any], tmp_path: Path
+    document: str, documents: dict[str, dict[str, Any]], tmp_path: Path
 ) -> None:
     """The documents we publish go through the loader a user's file goes through.
 
@@ -63,7 +89,7 @@ def test_every_documented_config_validates(
     `exporters`, a coordinate outside `[0, 1]`, `dwell_time` for `dwell_seconds` — each
     is now rejected by the schema itself rather than by a test re-implementing it.
     """
-    config = documented if document == "readme" else example
+    config = documents[document]
     path = tmp_path / "muster.yaml"
     path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 
@@ -84,33 +110,32 @@ def test_readme_and_example_agree_on_structure(
     assert set(documented["zones"][0]) <= set(example["zones"][0])
 
 
-@pytest.mark.parametrize("document", ["readme", "example"])
+@pytest.mark.parametrize("document", ["readme", "example", "fixtures"])
 def test_every_documented_config_shows_some_geometry(
-    document: str, documented: dict[str, Any], example: dict[str, Any]
+    document: str, documents: dict[str, dict[str, Any]]
 ) -> None:
     """Validation accepts a site with no lines or zones; a *worked example* must not be one.
 
     The engine counts nothing without geometry, so a document that shows none is not
     showing the reader how to use it — which is a documentation bug the schema cannot
-    have an opinion about.
+    have an opinion about. The fixture config is held to the same bar for a different
+    reason: it exists only to give the labels a geometry to mean something against.
     """
-    config = documented if document == "readme" else example
+    config = documents[document]
 
     assert config.get("lines"), f"{document} defines no lines"
     assert config.get("zones"), f"{document} defines no zones"
 
 
 @pytest.mark.privacy
-@pytest.mark.parametrize("document", ["readme", "example"])
-def test_no_document_inlines_a_secret(
-    document: str, documented: dict[str, Any], example: dict[str, Any]
-) -> None:
+@pytest.mark.parametrize("document", ["readme", "example", "fixtures"])
+def test_no_document_inlines_a_secret(document: str, documents: dict[str, dict[str, Any]]) -> None:
     """Secrets are referenced by env-var name, never written into the config file.
 
     The RTSP URL is the deliberate exception: it is the one credential that has to be in
     the file, and the documented form uses the `user:pass` placeholder.
     """
-    config = documented if document == "readme" else example
+    config = documents[document]
     sync = config.get("cloud_sync", {})
 
     assert "site_token" not in sync, "the site token must be a `site_token_env` reference"

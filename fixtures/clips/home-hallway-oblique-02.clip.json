@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "clip_id": "home-hallway-oblique-02",
+  "sha256": "6fe89d469be8e4326b823cd12e1e7c85145933aaeb569e3548f6c11fad165f1b",
+  "duration_s": 16.64,
+  "width": 1920,
+  "height": 1080,
+  "fps": 25.0,
+  "provenance": {
+    "kind": "own_rig",
+    "licence": "Owned - recorded by us",
+    "licence_verified_utc": "2026-08-17",
+    "url": null
+  },
+  "consent": {
+    "model_release": "obtained",
+    "note": "Sole subject is the author, who recorded the clip and consents to this use. No other person appears in frame."
+  },
+  "scene": {
+    "reference": "hard",
+    "mount_height_m": 2.1,
+    "mount_angle_deg": null,
+    "lighting": "daylight_window_backlight"
+  }
+}
