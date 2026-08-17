@@ -40,7 +40,7 @@ from muster.sampler.sampler import FrameSampler
 from muster.spike import run_spike
 from muster.tracker.bytetrack import ByteTrackTracker
 from muster.tracker.tracker import Tracker
-from muster.truth import gate_eligible, load_manifest, load_truth
+from muster.truth import DRAFT_RATER, gate_eligible, load_manifest, load_truth
 from muster.types import CameraId
 
 DEFAULT_MODEL = "yolox-nano"
@@ -307,6 +307,11 @@ def _describe_manifest(path: Path) -> str:
     Gate-eligibility is printed for every manifest, in words, because the failure this
     command exists to catch is footage being committed under a provenance nobody checked.
     A reviewer should be able to see "no" without knowing the rule.
+
+    The scene rides alongside it because "yes" answers a narrower question than it looks
+    like it answers: eligibility is about consent and provenance, and a clip can clear
+    both and still be the wrong scene to read this gate's number off. Own-rig footage at
+    a 2.1 m mount is the worked example — eligible, `hard`, and not a good doorway.
     """
     manifest = load_manifest(path)
     verdict = "yes" if gate_eligible(manifest) else "no"
@@ -314,6 +319,7 @@ def _describe_manifest(path: Path) -> str:
         f"ok  {manifest.clip_id}  {manifest.duration_s:g}s  "
         f"{manifest.width}x{manifest.height}@{manifest.fps:g}  "
         f"{manifest.provenance.kind}/{manifest.consent.model_release}  "
+        f"scene {manifest.scene.reference}  "
         f"gate-eligible: {verdict}"
     )
 
@@ -322,9 +328,12 @@ def _describe_truth(path: Path) -> str:
     truth = load_truth(path)
     count = len(truth.crossings)
     plural = "" if count == 1 else "s"
+    # A draft is the one rater name that changes what the file may be used for, so it is
+    # spelled out rather than left for the reader to recognise.
+    draft = "  (unverified — cannot gate)" if truth.labelled_by == DRAFT_RATER else ""
     return (
         f"ok  {truth.clip_id}  {truth.duration_s:g}s  "
-        f"{count} crossing{plural}  by {truth.labelled_by}"
+        f"{count} crossing{plural}  by {truth.labelled_by}{draft}"
     )
 
 

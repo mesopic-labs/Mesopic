@@ -18,11 +18,19 @@ from dataclasses import dataclass
 from math import ceil
 
 from muster.errors import TruthError
-from muster.truth.clips import ClipManifest, gate_eligible
-from muster.truth.labels import TruthFile, check_pairing
+from muster.truth.clips import ClipManifest, SceneReference, gate_eligible
+from muster.truth.labels import DRAFT_RATER, TruthFile, check_pairing
 from muster.types import ClipId, Direction, MetricName, MetricRow, MinuteBucket
 
 SECONDS_PER_MINUTE = 60
+
+DEFAULT_GATE_SCENE = SceneReference.GOOD_DOORWAY
+"""The scene v1's accuracy gate is specified against (accuracy-targets-and-sla.md §1.1).
+
+A default rather than a constant because the gated scene genuinely varies: M1 gates the
+good doorway, while the v1.0-committed targets M5 answers to are stated against
+``typical``. Hardcoding one would make the other unexpressible.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +99,37 @@ def mape(predicted: Mapping[int, float], truth: Mapping[int, int]) -> float:
     return 100.0 * total / len(truth)
 
 
+def gate_blockers(
+    truth: TruthFile, manifest: ClipManifest, *, scene: SceneReference
+) -> tuple[str, ...]:
+    """Every reason this clip and these labels may not back a published number.
+
+    Two different questions, kept separate on purpose. :func:`gate_eligible` answers the
+    *permission* one — may we publish from footage of these people at all — and is
+    settled by ADR-0015; it is unchanged and still means exactly what the ADR says. What
+    follows it here is the *validity* question: does this clip measure the thing the gate
+    is specified on, and did a human stand behind the labels. A clip can pass the first
+    and fail the second, which is not a hypothetical — the 2.1 m own-rig home clips are
+    gate-eligible, `hard`, and would have scored without complaint.
+
+    Returns every failure rather than the first, so a clip that is wrong three ways says
+    so in one pass instead of one refusal per fix.
+    """
+    blockers: list[str] = []
+    if not gate_eligible(manifest):
+        blockers.append(
+            f"provenance {manifest.provenance.kind} with consent "
+            f"{manifest.consent.model_release} is not gate-eligible"
+        )
+    if manifest.scene.reference is not scene:
+        blockers.append(
+            f"scene is {manifest.scene.reference}, but this gate is specified on {scene}"
+        )
+    if truth.labelled_by == DRAFT_RATER:
+        blockers.append(f"labels are unverified ({DRAFT_RATER})")
+    return tuple(blockers)
+
+
 def score(
     truth: TruthFile,
     manifest: ClipManifest,
@@ -98,20 +137,26 @@ def score(
     *,
     stream_start: MinuteBucket,
     gating: bool,
+    gate_scene: SceneReference = DEFAULT_GATE_SCENE,
 ) -> Score:
     """Measure the engine's footfall against a labelled clip.
 
-    ``gating`` is explicit and unforgiving: asking to gate on footage whose provenance or
-    consent does not permit it raises rather than returning a number nobody may publish.
-    Measuring the same clip with ``gating=False`` is fine, and is what metric development
-    runs against all day.
+    ``gating`` is explicit and unforgiving: asking to gate on a clip that may not back a
+    published number raises rather than returning one. Measuring the same clip with
+    ``gating=False`` is always fine, and is what metric development runs against all day
+    — every refusal here is about publishing, never about measuring.
+
+    ``gate_scene`` names which reference scene is being gated, because a target quoted
+    outside its scene is void and the scene differs by milestone.
+
+    What is *not* checked, and is left to the caller: clip length. The gate is stated at
+    hour grain, so a three-minute clip cannot produce it — but whether a given run needs
+    an hour, thirty minutes, or a minute-grain series is an open call, and encoding a
+    guess here would settle it by accident.
     """
     check_pairing(truth, manifest)
-    if gating and not gate_eligible(manifest):
-        message = (
-            f"clip {manifest.clip_id} is not gate-eligible: "
-            f"provenance {manifest.provenance.kind}, consent {manifest.consent.model_release}"
-        )
+    if gating and (blockers := gate_blockers(truth, manifest, scene=gate_scene)):
+        message = f"clip {manifest.clip_id} may not back a published number: " + "; ".join(blockers)
         raise TruthError(message)
 
     expected = footfall_per_minute(truth)

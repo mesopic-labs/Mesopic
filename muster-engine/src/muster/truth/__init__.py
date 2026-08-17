@@ -7,7 +7,8 @@ property of the dependency graph rather than a convention.
 Public surface:
 
 * :class:`ClipManifest` / :func:`load_manifest` — what a clip is and where it came from
-* :func:`gate_eligible` — may this footage back a released accuracy claim?
+* :func:`gate_eligible` — may this footage be published from at all? (ADR-0015)
+* :func:`gate_blockers` — and is this clip a valid basis for *this* gate's number?
 * :func:`resolve_clip` — find the video and verify it is the one the manifest names
 * :class:`TruthFile` / :func:`load_truth` — what a human saw happen in it
 * :func:`check_pairing` — confirm the labels and the clip describe the same footage
@@ -28,10 +29,11 @@ from muster.truth.clips import (
     load_manifest,
     resolve_clip,
 )
-from muster.truth.labels import Crossing, TruthFile, check_pairing, load_truth
-from muster.truth.score import Score, footfall_per_minute, mape, score
+from muster.truth.labels import DRAFT_RATER, Crossing, TruthFile, check_pairing, load_truth
+from muster.truth.score import Score, footfall_per_minute, gate_blockers, mape, score
 
 __all__ = [
+    "DRAFT_RATER",
     "ClipManifest",
     "Consent",
     "Crossing",
@@ -44,6 +46,7 @@ __all__ = [
     "TruthFile",
     "check_pairing",
     "footfall_per_minute",
+    "gate_blockers",
     "gate_eligible",
     "load_manifest",
     "load_truth",

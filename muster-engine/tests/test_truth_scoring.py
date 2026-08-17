@@ -14,23 +14,38 @@ Written red-first.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
 from muster.errors import TruthError
-from muster.truth import ClipManifest, TruthFile, footfall_per_minute, mape, score
+from muster.truth import (
+    ClipManifest,
+    SceneReference,
+    TruthFile,
+    footfall_per_minute,
+    gate_blockers,
+    gate_eligible,
+    load_manifest,
+    load_truth,
+    mape,
+    score,
+)
 from muster.types import CameraId, MetricName, MetricRow, MinuteBucket, ScopeId
 
+FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 CAMERA = CameraId("front-door")
 STREAM_START = MinuteBucket(datetime(2026, 8, 16, 9, 30, 0, tzinfo=UTC))
 
 
-def _truth(*crossings: tuple[float, str], duration_s: float = 180.0) -> TruthFile:
+def _truth(
+    *crossings: tuple[float, str], duration_s: float = 180.0, labelled_by: str = "mark"
+) -> TruthFile:
     return TruthFile.model_validate(
         {
             "schema_version": 1,
             "clip_id": "doorway-daylight-01",
-            "labelled_by": "mark",
+            "labelled_by": labelled_by,
             "labelled_at_utc": "2026-08-17T14:02:11Z",
             "duration_s": duration_s,
             "crossings": [
@@ -41,7 +56,9 @@ def _truth(*crossings: tuple[float, str], duration_s: float = 180.0) -> TruthFil
     )
 
 
-def _manifest(*, kind: str = "own_rig", release: str = "obtained") -> ClipManifest:
+def _manifest(
+    *, kind: str = "own_rig", release: str = "obtained", scene: str = "good_doorway"
+) -> ClipManifest:
     return ClipManifest.model_validate(
         {
             "schema_version": 1,
@@ -59,7 +76,7 @@ def _manifest(*, kind: str = "own_rig", release: str = "obtained") -> ClipManife
             },
             "consent": {"model_release": release, "note": None},
             "scene": {
-                "reference": "good_doorway",
+                "reference": scene,
                 "mount_height_m": 2.8,
                 "mount_angle_deg": 42.0,
                 "lighting": "even_daylight",
@@ -215,6 +232,102 @@ def test_gating_on_eligible_footage_is_allowed() -> None:
     result = score(truth, _manifest(), [_row(0, 1.0)], stream_start=STREAM_START, gating=True)
 
     assert result.gating is True
+
+
+def test_gating_on_a_clip_outside_the_gated_scene_is_refused() -> None:
+    """Consent is not the only way a clip can be the wrong basis for a number.
+
+    A `hard` clip is footage we are allowed to publish from and still measures a
+    different thing than the good-doorway target it would be read against. Before this
+    check the 2.1 m home clips were gate-eligible and would have scored without complaint.
+    """
+    truth = _truth((10.0, "in"))
+
+    with pytest.raises(TruthError, match="scene"):
+        score(
+            truth,
+            _manifest(scene="hard"),
+            [_row(0, 1.0)],
+            stream_start=STREAM_START,
+            gating=True,
+        )
+
+
+def test_gating_on_the_scene_actually_being_gated_is_allowed() -> None:
+    """The gated scene is the caller's to name. M1 gates good_doorway; M5's committed
+    targets are stated against `typical`, so hardcoding one scene would be wrong."""
+    truth = _truth((10.0, "in"))
+
+    result = score(
+        truth,
+        _manifest(scene="typical"),
+        [_row(0, 1.0)],
+        stream_start=STREAM_START,
+        gating=True,
+        gate_scene=SceneReference.TYPICAL,
+    )
+
+    assert result.gating is True
+
+
+def test_gating_on_unverified_labels_is_refused() -> None:
+    """`draft-unverified` is an admission, and the gate must not accept one.
+
+    The rater name is the accountability mechanism: a draft can be promoted only by a
+    human putting their own name on it, which is a deliberate act rather than a flag.
+    """
+    truth = _truth((10.0, "in"), labelled_by="draft-unverified")
+
+    with pytest.raises(TruthError, match="unverified"):
+        score(truth, _manifest(), [_row(0, 1.0)], stream_start=STREAM_START, gating=True)
+
+
+def test_a_hard_clip_with_draft_labels_still_measures_without_gating() -> None:
+    """Every refusal above is about publishing, never about measuring. Metric development
+    runs against exactly this shape of clip all day and must stay unobstructed."""
+    truth = _truth((10.0, "in"), labelled_by="draft-unverified")
+
+    result = score(
+        truth,
+        _manifest(scene="hard"),
+        [_row(0, 1.0)],
+        stream_start=STREAM_START,
+        gating=False,
+    )
+
+    assert result.gating is False
+
+
+def test_gate_blockers_reports_every_reason_at_once() -> None:
+    """A clip that fails three ways should say so in one pass, not one refusal per fix."""
+    blockers = gate_blockers(
+        _truth((10.0, "in"), labelled_by="draft-unverified"),
+        _manifest(kind="stock", release="unknown", scene="hard"),
+        scene=SceneReference.GOOD_DOORWAY,
+    )
+
+    assert len(blockers) == 3
+
+
+def test_the_committed_own_rig_clips_cannot_gate() -> None:
+    """The regression this guard exists for, pinned against the real files.
+
+    `home-hallway-oblique-01` is genuinely gate-eligible — our own rig, consent obtained —
+    and was shot on a 2.1 m mount, which makes it `hard`. Both halves matter: if a future
+    edit promotes its scene, relaxes the check, or quietly widens eligibility, this fails
+    before anybody reads a published number off eighty seconds of a domestic hallway.
+    """
+    manifest = load_manifest(FIXTURES / "clips" / "home-hallway-oblique-01.clip.json")
+    truth = load_truth(FIXTURES / "truth" / "home-hallway-oblique-01.truth.json")
+
+    assert gate_eligible(manifest) is True
+
+    with pytest.raises(TruthError, match="scene"):
+        score(truth, manifest, [], stream_start=STREAM_START, gating=True)
+
+
+def test_gate_blockers_is_empty_for_a_clip_that_may_gate() -> None:
+    assert gate_blockers(_truth((10.0, "in")), _manifest(), scene=SceneReference.GOOD_DOORWAY) == ()
 
 
 def test_measuring_ineligible_footage_without_gating_is_fine() -> None:
