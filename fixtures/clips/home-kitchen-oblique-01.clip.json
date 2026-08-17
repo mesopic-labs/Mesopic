@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "clip_id": "home-kitchen-oblique-01",
+  "sha256": "7bf8a5ecf97ea6f598fd8fea963183afcbd2af63cbffc0a4e33bcdfedd69ceba",
+  "duration_s": 117.8,
+  "width": 1920,
+  "height": 1080,
+  "fps": 25.0,
+  "provenance": {
+    "kind": "own_rig",
+    "licence": "Owned - recorded by us",
+    "licence_verified_utc": "2026-08-17",
+    "url": null
+  },
+  "consent": {
+    "model_release": "obtained",
+    "note": "Sole subject is the author, who recorded the clip and consents to this use. No other person appears in frame."
+  },
+  "scene": {
+    "reference": "hard",
+    "mount_height_m": 2.1,
+    "mount_angle_deg": null,
+    "lighting": "daylight_indoor"
+  }
+}

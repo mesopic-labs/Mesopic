@@ -44,15 +44,53 @@ for a published number.
 
 | Clip | Provenance | Consent | Scene | Labels | Gate-eligible |
 |---|---|---|---|---|---|
+| `home-hallway-oblique-01` | own_rig | obtained | hard | none — **unlabelled** | yes |
+| `home-hallway-oblique-02` | own_rig | obtained | hard | none — **unlabelled** | yes |
+| `home-kitchen-oblique-01` | own_rig | obtained | hard | n/a — no counting line | yes |
 | `storefront-oblique-01` | stock | unknown | hard | 3 in, 1 out — draft | no |
 | `entrance-headon-01` | stock | unknown | typical | 1 in — draft | no |
 | `entrance-headon-loop30-01` | stock | unknown | typical | none | no |
 
-The first two are ~19 s of a shop entrance and exist so metric-plugin work has something
-concrete to run against. Neither is inside the reference mounting envelope (both are near
-eye-level rather than 30–60° from horizontal) and neither is long enough to fill an hour,
-so neither can produce the gating number. **The accuracy gate still needs an own-rig
-recording session with consent obtained.**
+The stock clips are ~19 s of a shop entrance and exist so metric-plugin work has
+something concrete to run against. Neither is inside the reference mounting envelope
+(both are near eye-level rather than 30–60° from horizontal), and being stock, neither
+can ever gate.
+
+### The `home-*` clips: what they are and what they are not
+
+Three own-rig clips of a domestic hallway and kitchen, 3 min 34 s in total, one subject,
+a fixed mount, daylight. They are the first footage here that **is** gate-eligible: the
+provenance is ours and the only person in frame is the author. That matters, because it
+is the half of the problem no stock library can solve.
+
+They are still not the gate clip, for reasons that are about the footage rather than the
+paperwork:
+
+- **The mount is 2.1 m**, below the 2.2 m floor for a `typical` scene, so all three are
+  classified `hard` on the reference table's own terms. Everything else about them —
+  angle inside 30–60°, feet visible throughout, single-file, ≥ 1080p — is `typical` or
+  better; the height is the axis that binds. The gate is specified on `good_doorway`, so
+  no amount of labelling makes these clips produce it.
+- **There are only ~8 crossings in the longest clip.** At that count a single miscount is
+  a double-digit error, so the number could not distinguish a passing engine from a
+  failing one even if the scene qualified.
+- **One subject means no two-abreast, no mutual occlusion, no queue.** Whatever these
+  clips can say about `queue_len` is nothing.
+
+What they are good for is the thing that was actually blocked: metric plugins can now be
+written against real detections on real footage instead of invented expectations.
+
+**The accuracy gate still needs a dedicated recording session** — 2.5–3.5 m, ≥ 1 hour
+continuous, several people walking a known schedule. See `../../Muster-docs/docs/04-testing/ground-truth-clip-set-design.md`
+§7 and §8; §8's hour-grain-vs-minute-grain question wants an answer *before* that session,
+not after.
+
+> **Gate-eligible and unlabelled is a new combination here, and it has a sharp edge.**
+> `score(..., gating=True)` refuses a clip whose provenance or consent fails, and checks
+> nothing about the labels. While every gate-eligible clip was hypothetical that gap was
+> inert. It is not any more: a truth file marked `draft-unverified` against one of these
+> clips would pass the gate guard. Until that is closed, treat "is this label verified?"
+> as a question the code does not yet ask for you.
 
 `entrance-headon-loop30-01` is `entrance-headon-01` repeated 98 times to reach 30 minutes.
 It exists for soak-style runs that want a byte-reproducible file rather than the
@@ -85,6 +123,15 @@ the threshold is obvious. For an oblique storefront it is not: someone walking a
 pavement passes within a metre of the door, and whether they count depends on where the
 line sits. Until the clicker can overlay the configured line, an oblique clip's labels are
 only meaningful alongside the config they were made against.
+
+**`muster.yaml` in this directory is that config**, committed beside the labels for
+exactly this reason. It defines one line, `entrance`, on the hallway camera, and three
+zones. Read it before labelling anything — particularly the note on endpoint order, which
+decides the sign of every crossing and is invisible in the resulting truth file.
+
+The kitchen clip has no counting line on purpose. Nobody transits a threshold in it; the
+subject moves between three stations and stands at each. A line drawn across that scene
+would be measuring an event the footage does not contain.
 
 ## Labelling a clip
 
@@ -121,9 +168,36 @@ happens at exactly one boundary, inside `muster.truth.score`.
 
 ## Adding a clip
 
-1. Put the video somewhere outside the repository, named `<clip_id>.mp4`.
+1. **Normalise the camera original**, which is never itself a fixture:
+
+   ```
+   scripts/normalize-clip.sh ~/Downloads/IMG_1234.MOV my-clip-01 "$MUSTER_CLIPS_DIR"
+   ```
+
+   This produces the 1080p25 SDR BT.709 artefact the manifest hashes, and it exists
+   because three things about a camera original will otherwise poison the fixture
+   quietly:
+
+   - **A recent iPhone records HLG/BT.2020 high dynamic range.** No RTSP camera ever
+     hands the engine that, and fed in untouched it decodes washed-out and flat — an
+     accuracy number measured against it would be precise and meaningless. The script
+     tone-maps; its exposure constant was measured from the scene, not assumed, and the
+     comment there says how to re-measure for a different one.
+   - **The container carries where it was shot.** An iPhone `.MOV` has
+     `com.apple.quicktime.location.ISO6709` in it — a GPS fix of the room, which for
+     own-rig footage is somebody's home — plus an audio track of whatever was said in it.
+     Both are stripped. Neither belongs in a file that gets passed around.
+   - **The encode has to be reproducible**, or re-making the clip invalidates the labels.
+     The script is bit-exact: same input and same ffmpeg give the same SHA-256.
+
+   Then hash it, and never re-encode. `resolve_clip` refuses a clip that does not match
+   its manifest, which is the point.
+
 2. Write `clips/<clip_id>.clip.json`. Record the licence **and the date a human read it** —
-   a licence nobody checked on a stated day is a licence nobody checked.
+   a licence nobody checked on a stated day is a licence nobody checked. Measure
+   `mount_height_m` and `mount_angle_deg` **at the rig, with a tape, before the camera
+   moves**; they are unrecoverable afterwards and they decide which reference scene the
+   clip belongs to, and therefore which target it is read against.
 3. Be honest about `consent.model_release`. `unknown` is the correct answer far more often
    than it is comfortable, and it costs nothing except the ability to gate on that clip.
 4. Label it, and commit the truth file.
