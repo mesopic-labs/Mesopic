@@ -27,7 +27,13 @@ from typing import Any
 
 import pytest
 import yaml
-from scripted_worker import emit_occupancy_sample, emit_then_die, emit_then_exit, line_of
+from scripted_worker import (
+    emit_occupancy_sample,
+    emit_then_die,
+    emit_then_exit,
+    line_of,
+    run_until_stopped,
+)
 
 from muster.aggregator.aggregator import EXIT_GRACE_S
 from muster.config.schema import MusterConfig
@@ -449,3 +455,24 @@ async def test_trimming_does_not_run_on_every_tick(
 
     assert first == 1, "the first tick trims, so a long-dead engine expires on startup"
     assert supervisor.trim_runs == 1, "five more ticks a second apart must not re-trim"
+
+
+async def test_a_drain_that_never_gets_its_events_still_returns(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """The drain deadline must hold even when the injected clock is frozen.
+
+    Regression: the bound read the *injected* monotonic clock, which these tests freeze,
+    so a worker that never delivered spun this loop forever. It hung CI rather than
+    failing it, which is strictly worse — a hang has no error message and no line number.
+    """
+    supervisor = _supervisor(config, store, clock, run_until_stopped)
+
+    await supervisor.start()
+    started = time.monotonic()
+    received = await supervisor.drain_once(timeout=0.2, expected=99)
+    elapsed = time.monotonic() - started
+    await supervisor.stop()
+
+    assert received == []
+    assert 0.2 <= elapsed < 5.0, f"the deadline did not bound the drain ({elapsed:.2f}s)"
