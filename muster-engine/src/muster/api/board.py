@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -98,6 +98,85 @@ def tiles_for(config: MusterConfig, *, rows: Sequence[MetricRow]) -> tuple[Tile,
     )
 
 
+EXPOSURE_CELLS = 60
+"""How many cells the exposure strip is divided into — a minute each at the shortest
+window, twenty-four at the longest."""
+
+
+@dataclass(frozen=True, slots=True)
+class Exposure:
+    """Which parts of the window the engine actually has rows for.
+
+    Presence, not magnitude: a cell is lit if *any* scope reported inside it. It answers
+    the question that comes before every number on the page — has this box been seeing
+    anything, and for how long — which no individual metric can answer, because a quiet
+    zone and a dead camera produce the same empty chart.
+    """
+
+    cells: tuple[bool, ...]
+    """Oldest first."""
+
+    @property
+    def covered(self) -> int:
+        return sum(self.cells)
+
+
+def exposure_of(
+    rows: Sequence[MetricRow],
+    *,
+    end: datetime,
+    window: BoardWindow,
+    cells: int = EXPOSURE_CELLS,
+) -> Exposure:
+    """Fold every row into the cell of the strip its bucket falls in.
+
+    Rows outside the window are dropped rather than clamped: a row from before the window
+    is not evidence that the window has data, and clamping it into the first cell would
+    draw exactly that claim.
+    """
+    span = window.span / cells
+    start = MinuteBucket(end - window.span)
+    lit = [False] * cells
+    for row in rows:
+        if not start <= row.bucket <= end:
+            continue
+        # A bucket at exactly `end` indexes one past the last cell; it belongs to the
+        # strip's final cell, not off the end of it.
+        lit[min(int((row.bucket - start) / span), cells - 1)] = True
+    return Exposure(cells=tuple(lit))
+
+
+def human_duration(seconds: float) -> str:
+    """Seconds as the coarsest two units that still say something.
+
+    An uptime is read at a glance and never acted on to the second, so `14h 22m` is the
+    whole of what the operator wants from `51720.4`.
+    """
+    whole = max(int(seconds), 0)
+    hours, rest = divmod(whole, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def scope_slots(config: MusterConfig) -> dict[str, int]:
+    """A stable colour slot per scope, in config order.
+
+    Colour follows the scope, never its rank inside one chart: assigning by position
+    within a chart makes `shop-floor` the first series on the occupancy plate and the
+    second on the dwell plate, so it changes colour between two panels the operator reads
+    side by side. From the config for the same reason the tiles are — a scope that is
+    silent today must not be handed a different colour tomorrow when it starts reporting.
+    """
+    slots: dict[str, int] = {}
+    for camera_id, _, scope_id in _configured_scopes(config):
+        slots.setdefault(scope_id or camera_id, len(slots))
+    return slots
+
+
 def as_series(rows: Sequence[MetricRow]) -> list[dict[str, Any]]:
     """Group rows into one columnar series per `(camera, metric, scope)`.
 
@@ -137,10 +216,13 @@ def charts_of(config: MusterConfig, *, rows: Sequence[MetricRow]) -> list[dict[s
     for row in rows:
         by_metric.setdefault(row.metric, []).append(row)
 
-    return [_chart(metric, by_metric.get(metric, [])) for metric in _configured_metrics(config)]
+    slots = scope_slots(config)
+    return [
+        _chart(metric, by_metric.get(metric, []), slots) for metric in _configured_metrics(config)
+    ]
 
 
-def _chart(metric: MetricName, rows: Sequence[MetricRow]) -> dict[str, Any]:
+def _chart(metric: MetricName, rows: Sequence[MetricRow], slots: dict[str, int]) -> dict[str, Any]:
     points: dict[str, dict[int, float]] = {}
     for row in rows:
         label = row.scope_id or row.camera_id
@@ -150,7 +232,14 @@ def _chart(metric: MetricName, rows: Sequence[MetricRow]) -> dict[str, Any]:
     labels = sorted(points)
     return {
         "metric": metric.value,
+        # A count per bucket is a bar and a level is a line — the same split the readings
+        # columns make, drawn rather than captioned. A count joined bucket to bucket is a
+        # sawtooth that implies the floor emptied and refilled every single minute.
+        "total": metric in COUNTING_METRICS,
         "labels": labels,
+        # Parallel to `labels`, so the plate's swatches and the plot's strokes cannot
+        # drift apart. A scope the config does not know about folds into the last slot.
+        "slots": [slots.get(label, len(slots)) for label in labels],
         "t": axis,
         "v": [[points[label].get(at) for at in axis] for label in labels],
     }
@@ -203,10 +292,15 @@ def _fold(rows: Sequence[MetricRow]) -> dict[_Key, float]:
 __all__ = [
     "COUNTING_METRICS",
     "DEFAULT_WINDOW",
+    "EXPOSURE_CELLS",
     "UNTILED_METRICS",
     "BoardWindow",
+    "Exposure",
     "Tile",
     "as_series",
     "charts_of",
+    "exposure_of",
+    "human_duration",
+    "scope_slots",
     "tiles_for",
 ]

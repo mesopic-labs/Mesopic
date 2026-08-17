@@ -30,7 +30,15 @@ import pytest
 import yaml
 
 from muster.api.app import create_app
-from muster.api.board import BoardWindow, charts_of, tiles_for
+from muster.api.board import (
+    EXPOSURE_CELLS,
+    BoardWindow,
+    charts_of,
+    exposure_of,
+    human_duration,
+    scope_slots,
+    tiles_for,
+)
 from muster.config.schema import MusterConfig
 from muster.store.store import Store
 from muster.supervisor.handle import WorkerReport
@@ -205,6 +213,111 @@ def test_a_scope_missing_a_bucket_gets_a_hole_not_a_shift(config: MusterConfig) 
     assert till == [None, 30.0]
 
 
+# --- Colour slots -----------------------------------------------------------
+
+
+def test_a_scope_keeps_one_colour_across_every_chart(config: MusterConfig) -> None:
+    """Colour follows the scope, never its rank within a chart.
+
+    Assigning by position means `shop-floor` is the first series in the occupancy chart
+    and the second in the dwell chart, so it changes colour between two plates the
+    operator reads side by side.
+    """
+    slots = scope_slots(config)
+
+    charts = charts_of(config, rows=[])
+    for chart in charts:
+        for label, slot in zip(chart["labels"], chart["slots"], strict=True):
+            assert slot == slots[label]
+
+
+def test_the_slots_come_from_the_config_not_the_rows(config: MusterConfig) -> None:
+    """Same rule the tiles follow. A scope that is silent today must not be handed a
+    different colour tomorrow when it starts reporting."""
+    slots = scope_slots(config)
+
+    assert slots == scope_slots(config)
+    assert set(slots) == {"door-count", "shop-floor", "queue-till"}
+    assert sorted(slots.values()) == list(range(len(slots)))
+
+
+# --- The exposure strip -----------------------------------------------------
+
+
+def _at(minutes_ago: int) -> datetime:
+    return datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=minutes_ago)
+
+
+def test_a_window_with_no_rows_is_wholly_unexposed(config: MusterConfig) -> None:
+    """The strip's job is to make a blind box obvious before any number is read."""
+    exposure = exposure_of([], end=_at(0), window=BoardWindow.HOUR)
+
+    assert exposure.covered == 0
+    assert not any(exposure.cells)
+
+
+def test_a_bucket_marks_only_the_cell_it_falls_in(config: MusterConfig) -> None:
+    """One hour across 60 cells is a cell a minute, so a single bucket lights one cell."""
+    end = _at(0)
+    rows = [_row(MetricName.OCCUPANCY, 3.0, minutes_ago=30)]
+
+    exposure = exposure_of(rows, end=end, window=BoardWindow.HOUR)
+
+    assert exposure.covered == 1
+    assert exposure.cells[30] is True
+
+
+def test_the_newest_bucket_lands_inside_the_strip(config: MusterConfig) -> None:
+    """A bucket at exactly `end` belongs to the last cell, not one past the end."""
+    end = _at(0)
+    rows = [_row(MetricName.OCCUPANCY, 3.0, minutes_ago=0)]
+
+    exposure = exposure_of(rows, end=end, window=BoardWindow.HOUR)
+
+    assert exposure.cells[-1] is True
+    assert len(exposure.cells) == 60
+
+
+def test_a_bucket_older_than_the_window_is_not_drawn(config: MusterConfig) -> None:
+    """The strip describes the window on screen. A row from before it is not evidence
+    that the window has data."""
+    rows = [_row(MetricName.OCCUPANCY, 3.0, minutes_ago=180)]
+
+    exposure = exposure_of(rows, end=_at(0), window=BoardWindow.HOUR)
+
+    assert exposure.covered == 0
+
+
+def test_coverage_counts_cells_and_not_rows(config: MusterConfig) -> None:
+    """Six cameras reporting the same minute is one exposed minute, not six."""
+    rows = [
+        _row(MetricName.OCCUPANCY, 3.0, minutes_ago=10),
+        _row(MetricName.QUEUE_LEN, 1.0, minutes_ago=10, camera_id=TILL, scope_id=ScopeId("q")),
+        _row(MetricName.OCCUPANCY, 4.0, minutes_ago=11),
+    ]
+
+    exposure = exposure_of(rows, end=_at(0), window=BoardWindow.HOUR)
+
+    assert exposure.covered == 2
+
+
+# --- Uptime -----------------------------------------------------------------
+
+
+def test_uptime_reads_as_a_duration_not_a_count_of_seconds() -> None:
+    """`51720.4s` is a number the operator has to divide. The board is read at a glance."""
+    assert human_duration(45.0) == "45s"
+    assert human_duration(90.0) == "1m 30s"
+    assert human_duration(3600.0) == "1h 0m"
+    assert human_duration(51720.4) == "14h 22m"
+
+
+def test_uptime_never_renders_a_negative_duration() -> None:
+    """The clock behind it is monotonic, but a formatter that can print `-1s` is one
+    clock change away from saying the engine started in the future."""
+    assert human_duration(-5.0) == "0s"
+
+
 # --- The fragment -----------------------------------------------------------
 
 
@@ -244,6 +357,24 @@ async def test_the_fragment_carries_the_series_for_the_charts(client: httpx.Asyn
     text = (await client.get("/fragments/board")).text
 
     assert 'type="application/json"' in text
+
+
+async def test_the_fragment_draws_the_exposure_strip(client: httpx.AsyncClient) -> None:
+    """The strip is the one panel that distinguishes a quiet shop from a blind box, and
+    it is inside the polled fragment so it ages with the data it describes."""
+    text = (await client.get("/fragments/board")).text
+
+    assert text.count('class="cell') == EXPOSURE_CELLS
+    assert "intervals with data" in text
+
+
+async def test_the_fragment_separates_levels_from_counts(client: httpx.AsyncClient) -> None:
+    """Reading a level as a count is the mistake the two columns exist to prevent: one is
+    what the floor is like now, the other is what the window accumulated."""
+    text = (await client.get("/fragments/board", params={"window": "1h"})).text
+
+    assert ">Now<" in text
+    assert ">This 1h<" in text
 
 
 async def test_the_fragment_reports_engine_health(client: httpx.AsyncClient) -> None:

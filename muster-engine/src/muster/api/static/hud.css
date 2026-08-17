@@ -5,6 +5,13 @@
  * landing page all take their tokens from here, so the three read as one product rather
  * than three that happen to share a name.
  *
+ * The direction is a darkroom. Muster is a camera product that deliberately shows no
+ * picture, and a darkroom is the one room where images exist and are never displayed:
+ * you work by safelight, and white light is the thing that ruins the print. So the
+ * safelight amber means one thing only — this engine is live — and it is the only
+ * saturated colour in the page's chrome. Series colours come from the enlarger's own
+ * filtration set and are used nowhere but data.
+ *
  * Theming has three states, and all three are defined explicitly: an operator who picked
  * a theme gets `data-theme`, an operator who picked nothing gets `prefers-color-scheme`,
  * and everyone gets the light palette as the base. A token defined *only* inside a media
@@ -12,80 +19,116 @@
  * ends up with black text on a black background for exactly the users who set a
  * preference.
  *
+ * The series ramps are not eyeballed. Both modes were checked with the data-viz
+ * validator on all pairs: OKLCH lightness band, chroma floor, protan/deutan/tritan
+ * separation, and contrast against their own surface. Re-run it before changing one.
+ *
  * Numerics are monospace and tabular throughout: a readout whose digits change width
  * jitters on every refresh, and the dashboard refreshes on a poll (P3.2).
  */
 
 :root {
-  --ground: #e8edef;
-  --panel: #ffffff;
-  --panel-2: #f2f6f7;
-  --ink: #121a1e;
-  --muted: #59707b;
-  --line: #cbd8dd;
-  --line-strong: #9db0b8;
-  --signal: #c2700a;
-  --signal-soft: rgba(194, 112, 10, 0.12);
-  --stream: #227d8c;
-  --stream-soft: rgba(34, 125, 140, 0.12);
-  --closed: #a4432e;
-  --scene: #dfe6e9;
+  color-scheme: light;
+
+  /* Surfaces: fibre-base paper under a lightbox, not cream. */
+  --ground: #e5e0d6;
+  --panel: #f5f2ec;
+  --panel-2: #ece7dd;
+  --ink: #1e1a16;
+  --muted: #6a6058;
+  --line: #d6cfc3;
+  --line-strong: #a99f92;
+  --exposed: #7d7268;
+
+  /* Reserved. Safelight = live; fault = a print that will not come back. */
+  --safelight: #9a5b02;
+  --safelight-soft: rgba(154, 91, 2, 0.12);
+  --fault: #a8341a;
+
+  /* Series — enlarger filtration: print blue, magenta, developer green, bronze. */
+  --s1: #1a75ab;
+  --s2: #96076d;
+  --s3: #14a053;
+  --s4: #8a5a0c;
+  --s-other: #6a6058;
 
   --mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
 
-  --measure: 66ch;
-  --pad: clamp(1.25rem, 4vw, 3rem);
+  --measure: 58ch;
+  --pad: clamp(1.25rem, 4vw, 3.5rem);
+  --rule: 1px solid var(--line);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --ground: #0d1316;
-    --panel: #141c20;
-    --panel-2: #1a2429;
-    --ink: #e4ecef;
-    --muted: #8ba0aa;
-    --line: #253238;
-    --line-strong: #3c505a;
-    --signal: #ffb020;
-    --signal-soft: rgba(255, 176, 32, 0.14);
-    --stream: #4cc9dd;
-    --stream-soft: rgba(76, 201, 221, 0.13);
-    --closed: #e0705a;
-    --scene: #1b262b;
+    color-scheme: dark;
+
+    --ground: #17151a;
+    --panel: #1f1c22;
+    --panel-2: #272329;
+    --ink: #f0eae0;
+    --muted: #9c9289;
+    --line: #2e2932;
+    --line-strong: #4a434f;
+    --exposed: #b3a89c;
+
+    --safelight: #e9a23f;
+    --safelight-soft: rgba(233, 162, 63, 0.14);
+    --fault: #f0644e;
+
+    --s1: #2e9ad6;
+    --s2: #c74a96;
+    --s3: #17a458;
+    --s4: #9c6612;
+    --s-other: #9c9289;
   }
 }
 
 :root[data-theme="dark"] {
-  --ground: #0d1316;
-  --panel: #141c20;
-  --panel-2: #1a2429;
-  --ink: #e4ecef;
-  --muted: #8ba0aa;
-  --line: #253238;
-  --line-strong: #3c505a;
-  --signal: #ffb020;
-  --signal-soft: rgba(255, 176, 32, 0.14);
-  --stream: #4cc9dd;
-  --stream-soft: rgba(76, 201, 221, 0.13);
-  --closed: #e0705a;
-  --scene: #1b262b;
+  color-scheme: dark;
+
+  --ground: #17151a;
+  --panel: #1f1c22;
+  --panel-2: #272329;
+  --ink: #f0eae0;
+  --muted: #9c9289;
+  --line: #2e2932;
+  --line-strong: #4a434f;
+  --exposed: #b3a89c;
+
+  --safelight: #e9a23f;
+  --safelight-soft: rgba(233, 162, 63, 0.14);
+  --fault: #f0644e;
+
+  --s1: #2e9ad6;
+  --s2: #c74a96;
+  --s3: #17a458;
+  --s4: #9c6612;
+  --s-other: #9c9289;
 }
 
 :root[data-theme="light"] {
-  --ground: #e8edef;
-  --panel: #ffffff;
-  --panel-2: #f2f6f7;
-  --ink: #121a1e;
-  --muted: #59707b;
-  --line: #cbd8dd;
-  --line-strong: #9db0b8;
-  --signal: #c2700a;
-  --signal-soft: rgba(194, 112, 10, 0.12);
-  --stream: #227d8c;
-  --stream-soft: rgba(34, 125, 140, 0.12);
-  --closed: #a4432e;
-  --scene: #dfe6e9;
+  color-scheme: light;
+
+  --ground: #e5e0d6;
+  --panel: #f5f2ec;
+  --panel-2: #ece7dd;
+  --ink: #1e1a16;
+  --muted: #6a6058;
+  --line: #d6cfc3;
+  --line-strong: #a99f92;
+  --exposed: #7d7268;
+
+  --safelight: #9a5b02;
+  --safelight-soft: rgba(154, 91, 2, 0.12);
+  --fault: #a8341a;
+
+  --s1: #1a75ab;
+  --s2: #96076d;
+  --s3: #14a053;
+  --s4: #8a5a0c;
+  --s-other: #6a6058;
 }
 
 *,
@@ -99,39 +142,58 @@ body {
   background: var(--ground);
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 17px;
-  line-height: 1.6;
+  font-size: 16px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
 
-.wrap {
-  max-width: 68rem;
+/* The safelight, filling the room from above. The one ambient effect on the page; it
+   carries no information, so it stays far below the threshold where it competes with
+   any mark that does. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 40vh;
+  background: radial-gradient(70% 100% at 50% 0%, var(--safelight-soft), transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.frame {
+  position: relative;
+  z-index: 1;
+  max-width: 74rem;
   margin: 0 auto;
   padding: var(--pad);
   display: flex;
   flex-direction: column;
-  gap: clamp(2rem, 5vw, 3.5rem);
+  gap: clamp(2.25rem, 5vw, 3.5rem);
+}
+
+/* The polled fragment is a swap target, not a layout box. Dissolving it lets the panels
+   inside it sit in the page's own column alongside the chart plates, which cannot live
+   inside it — see `_board.html`. Without this the plates could only ever come after
+   every panel the fragment owns, including the engine footer. */
+.board {
+  display: contents;
+}
+
+/* Read the page top to bottom: is it seeing anything, what is the floor doing, what
+   shape has the day had, and only then is the box itself well. */
+.engine {
+  order: 1;
+}
+
+:focus-visible {
+  outline: 2px solid var(--safelight);
+  outline-offset: 2px;
 }
 
 h1,
-h2,
-h3 {
-  text-wrap: balance;
-  margin: 0;
-}
-
-h1 {
-  font-size: clamp(1.8rem, 4vw, 2.6rem);
-  line-height: 1.05;
-  letter-spacing: -0.03em;
-  font-weight: 800;
-}
-
 h2 {
-  font-size: clamp(1.2rem, 2.4vw, 1.5rem);
-  line-height: 1.15;
-  letter-spacing: -0.02em;
-  font-weight: 700;
+  margin: 0;
+  text-wrap: balance;
 }
 
 p {
@@ -139,196 +201,442 @@ p {
   max-width: var(--measure);
 }
 
-.eyebrow {
+/* ---------- shared label voice ---------- */
+
+/* Every small label on every surface speaks in this one voice: the mono stack, upper
+   case, widely tracked — the lettering printed along a film rebate. */
+.mark,
+.exposure figcaption .label,
+.exposure .ticks,
+.reading .scope,
+.reading .metric,
+.status,
+.window,
+.state,
+.facts dt,
+.plate figcaption {
   font-family: var(--mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.16em;
+  font-size: 0.66rem;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
   color: var(--muted);
-  margin: 0;
 }
 
-.sig {
-  color: var(--signal);
+/* ---------- masthead ---------- */
+
+.masthead {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
-.rule {
-  height: 1px;
-  background: var(--line);
-  border: 0;
-  margin: 0;
+.masthead h1 {
+  /* A site is an identifier, not a title, so it is set as one: mono, lower case, tight. */
+  font-family: var(--mono);
+  font-size: clamp(2rem, 6vw, 3.4rem);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: -0.045em;
+  color: var(--ink);
 }
 
-/* ---------- HUD frame ---------- */
-
-.hud-panel {
-  position: relative;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  padding: 1.4rem;
+.masthead .subtitle {
+  font-size: 0.9rem;
+  color: var(--muted);
+  max-width: 72ch;
 }
 
-.hud-corner {
-  position: absolute;
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--line-strong);
+/* ---------- the bar: engine state and range ---------- */
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: var(--rule);
 }
 
-.hud-corner.tl {
-  top: 10px;
-  left: 10px;
-  border-right: 0;
-  border-bottom: 0;
-}
-
-.hud-corner.tr {
-  top: 10px;
-  right: 10px;
-  border-left: 0;
-  border-bottom: 0;
-}
-
-.hud-corner.bl {
-  bottom: 10px;
-  left: 10px;
-  border-right: 0;
-  border-top: 0;
-}
-
-.hud-corner.br {
-  bottom: 10px;
-  right: 10px;
-  border-left: 0;
-  border-top: 0;
-}
-
-.hud-live {
+.status {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-family: var(--mono);
-  font-size: 0.65rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--muted);
+  gap: 0.5rem;
 }
 
-.dot-live {
-  width: 6px;
-  height: 6px;
+.lamp {
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--signal);
-  animation: pulse 2.4s ease-in-out infinite;
+  background: var(--safelight);
+  box-shadow: 0 0 0 4px var(--safelight-soft);
+  animation: safelight 3.2s ease-in-out infinite;
 }
 
-.dot-live.is-degraded {
-  background: var(--stream);
+/* Degraded is the safelight still on with something wrong under it, so it keeps the
+   colour and loses the fill: lit but hollow, and not pulsing. */
+.lamp.is-degraded {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--safelight);
   animation: none;
 }
 
-.dot-live.is-down {
-  background: var(--closed);
+.lamp.is-down {
+  background: var(--fault);
+  box-shadow: none;
   animation: none;
 }
 
-@keyframes pulse {
+@keyframes safelight {
   0%,
   100% {
     opacity: 1;
   }
   50% {
-    opacity: 0.25;
+    opacity: 0.35;
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .dot-live {
-    animation: none;
-  }
+.windows {
+  display: flex;
+  gap: 0.35rem;
 }
 
-/* ---------- readout strip ---------- */
+.window {
+  text-decoration: none;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  padding: 0.25rem 0.6rem;
+}
 
-.readout {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
-  border: 1px solid var(--line);
-  background: var(--panel);
+.window:hover {
+  color: var(--ink);
+}
+
+.window.is-current {
+  color: var(--safelight);
+  border-color: var(--safelight);
+}
+
+/* ---------- the exposure strip ---------- */
+
+.exposure {
   margin: 0;
-}
-
-.readout div {
-  padding: 0.85rem 1rem;
-  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.6rem;
 }
 
-.readout div:last-child {
-  border-right: 0;
+.exposure figcaption {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
 }
 
-.readout dt {
+.exposure figcaption .label {
+  color: var(--ink);
+}
+
+.exposure figcaption .count {
   font-family: var(--mono);
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.exposure figcaption .note {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.strip {
+  display: flex;
+  gap: 2px;
+  height: 2.6rem;
+  padding: 3px;
+  background: var(--panel);
+  border: var(--rule);
+  border-radius: 3px;
+}
+
+.cell {
+  flex: 1 1 0;
+  min-width: 2px;
+  border-radius: 1px;
+  /* Unexposed: not a low value, not a zero — paper that was never given any light.
+     Drawn as a texture so it can never be misread as a small measurement, and kept dim
+     so the difference from an exposed cell is legible at arm's length. */
+  background-color: var(--ground);
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 3px,
+    var(--line-strong) 3px 4px
+  );
+}
+
+.cell.is-lit {
+  background-color: var(--exposed);
+  background-image: none;
+}
+
+/* The leading edge. The strip is a clock as much as a coverage map, and this is where
+   "now" is — the only place the safelight touches data. */
+.cell.is-now {
+  background-color: var(--safelight);
+  background-image: none;
+  opacity: 1;
+}
+
+.ticks {
+  display: flex;
+  justify-content: space-between;
+  max-width: none;
+}
+
+/* ---------- readings ---------- */
+
+.readings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: clamp(1.5rem, 4vw, 3rem);
+}
+
+.readings h2 {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--ink);
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.readings ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.reading {
+  display: grid;
+  grid-template-columns: 3px 1fr auto;
+  align-items: baseline;
+  column-gap: 0.85rem;
+  padding: 0.75rem 0;
+  border-bottom: var(--rule);
+}
+
+.reading:last-child {
+  border-bottom: 0;
+}
+
+/* Identity rides on this 3px mark, not on the number. The value is a number and wears
+   the text colour; the swatch is what ties it to its line on the plate below. */
+.swatch {
+  grid-row: 1 / 3;
+  align-self: stretch;
+  background: var(--s-other);
+  border-radius: 1px;
+}
+
+.reading[data-slot="0"] .swatch {
+  background: var(--s1);
+}
+
+.reading[data-slot="1"] .swatch {
+  background: var(--s2);
+}
+
+.reading[data-slot="2"] .swatch {
+  background: var(--s3);
+}
+
+.reading[data-slot="3"] .swatch {
+  background: var(--s4);
+}
+
+.reading .scope {
+  color: var(--ink);
+  letter-spacing: 0.1em;
+}
+
+.reading .metric {
+  grid-column: 2;
   font-size: 0.62rem;
-  letter-spacing: 0.11em;
+}
+
+.reading .value {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  align-self: center;
+  font-family: var(--mono);
+  font-size: clamp(1.6rem, 4vw, 2.1rem);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  color: var(--ink);
+}
+
+/* An em dash is not a reading, so it is not painted like one: no data reads as absent
+   rather than as a number that happens to be small. */
+.reading .value.is-absent {
+  color: var(--muted);
+  opacity: 0.5;
+}
+
+/* ---------- plates ---------- */
+
+.plates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(24rem, 1fr));
+  gap: 1rem;
+}
+
+.plate {
+  margin: 0;
+  padding: 0.9rem 1rem 0.6rem;
+  background: var(--panel);
+  border: var(--rule);
+  border-radius: 3px;
+}
+
+/* The lead plate is the metric the operator configured first. It gets the width and the
+   height; the rest are the supporting sheet. */
+.plate.is-lead {
+  grid-column: 1 / -1;
+}
+
+.plate figcaption {
+  color: var(--ink);
+  margin-bottom: 0.5rem;
+}
+
+/* The plot height is a token rather than a rule on `.plot`, because uPlot renders its
+   legend *inside* that element: a fixed height would clip the readout instead of
+   sizing the canvas. `board.js` reads this property to size the canvas it draws. */
+.plate {
+  --plot-h: 150px;
+}
+
+.plate.is-lead {
+  --plot-h: 240px;
+}
+
+/* uPlot draws its own chrome; these keep it speaking the same language. The legend
+   doubles as the crosshair readout, so it is present even for a single series. */
+.plate .u-legend {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding-top: 0.2rem;
+  text-align: left;
+}
+
+/* uPlot's first legend row is the x series. Its label is the word "Time", which the
+   axis underneath it already says. */
+.plate .u-legend .u-series:first-child {
+  display: none;
+}
+
+.plate .u-legend .u-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.plate .u-legend .u-marker {
+  border-radius: 1px;
+}
+
+.plate .u-title,
+.plate .u-select {
+  color: var(--muted);
+}
+
+/* ---------- engine ---------- */
+
+.engine {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1.1rem clamp(1.5rem, 4vw, 3rem);
+  padding-top: 1.25rem;
+  border-top: var(--rule);
+}
+
+@media (min-width: 52rem) {
+  .engine {
+    /* The camera list is a fixed-width column; the facts take whatever is left, which is
+       what keeps them on one row instead of wrapping a lone `Disk free` underneath. */
+    grid-template-columns: minmax(16rem, 20rem) 1fr;
+  }
+}
+
+.engine h2 {
+  grid-column: 1 / -1;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
   color: var(--muted);
 }
 
-.readout dd {
-  margin: 0;
-  font-size: 1.5rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-}
-
-/* ---------- camera list ---------- */
-
-.camera-list {
+.cameras {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
 }
 
-.camera-list li {
+.cameras li {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.7rem 0;
-  border-bottom: 1px solid var(--line);
+  padding: 0.5rem 0;
+  border-bottom: var(--rule);
 }
 
-.camera-list li:last-child {
+.cameras li:last-child {
   border-bottom: 0;
 }
 
 .camera-id {
   font-family: var(--mono);
-  font-size: 0.9rem;
-}
-
-.state {
-  font-family: var(--mono);
-  font-size: 0.65rem;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-  color: var(--muted);
+  font-size: 0.85rem;
+  color: var(--ink);
 }
 
 .state.is-streaming {
-  color: var(--signal);
+  color: var(--safelight);
 }
 
 .state.is-backoff,
 .state.is-stalled {
-  color: var(--closed);
+  color: var(--fault);
+}
+
+.facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 1rem 1.5rem;
+  align-content: start;
+}
+
+.facts div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.facts dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--ink);
 }
 
 /* Wide content scrolls inside its own box; the page itself never scrolls sideways. */
@@ -336,121 +644,11 @@ p {
   overflow-x: auto;
 }
 
-/* ---------- range controls (P3.2) ---------- */
-
-.windows {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 1.25rem;
-}
-
-.window {
-  font-family: var(--mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.08em;
-  text-decoration: none;
-  color: var(--muted);
-  border: 1px solid var(--line);
-  padding: 0.3rem 0.7rem;
-}
-
-.window.is-current {
-  color: var(--signal);
-  border-color: var(--signal);
-}
-
-/* ---------- live tiles (P3.2) ---------- */
-
-.tiles {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
-  gap: 1px;
-  background: var(--line);
-  border: 1px solid var(--line);
-}
-
-.tile {
-  background: var(--panel);
-  padding: 0.85rem 1rem;
-}
-
-.tile p {
-  margin: 0;
-}
-
-.tile-scope {
-  font-family: var(--mono);
-  font-size: 0.65rem;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.tile-metric {
-  font-size: 0.7rem;
-  color: var(--muted);
-}
-
-.tile-qualifier {
-  opacity: 0.7;
-}
-
-.tile-value {
-  font-family: var(--mono);
-  font-size: 1.7rem;
-  color: var(--signal);
-  transition: color 200ms ease;
-}
-
-/* An em dash is not a reading, so it is not painted like one: no data reads as absent
-   rather than as a number that happens to be small. */
-.tile-value.is-absent {
-  color: var(--muted);
-  opacity: 0.55;
-}
-
-/* ---------- charts (P3.2) ---------- */
-
-.charts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
-  gap: 1.25rem;
-  margin-top: 1.5rem;
-}
-
-.chart {
-  margin: 0;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  padding: 0.85rem 1rem 0.5rem;
-}
-
-.chart figcaption {
-  font-family: var(--mono);
-  font-size: 0.65rem;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin-bottom: 0.5rem;
-}
-
-/* uPlot draws its own chrome; these keep it speaking the HUD's language. */
-.chart .u-legend {
-  font-family: var(--mono);
-  font-size: 0.65rem;
-  color: var(--muted);
-}
-
-.chart .u-title,
-.chart .u-select {
-  color: var(--muted);
-}
-
+/* The pulse is the only motion on the page, so this is the whole of the opt-out. A
+   blanket `* { transition: none !important }` would be a rule nobody can override
+   later for a case that deserves it. */
 @media (prefers-reduced-motion: reduce) {
-  .tile-value {
-    transition: none;
+  .lamp {
+    animation: none;
   }
 }

@@ -185,7 +185,7 @@ async def test_the_stylesheet_is_served(client: httpx.AsyncClient) -> None:
     response = await client.get("/static/hud.css")
 
     assert response.status_code == httpx.codes.OK
-    assert "--signal" in response.text
+    assert "--safelight" in response.text
 
 
 async def test_the_page_loads_nothing_from_the_internet(client: httpx.AsyncClient) -> None:

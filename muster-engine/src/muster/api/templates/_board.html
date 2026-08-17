@@ -1,5 +1,6 @@
 {#
-  The polled fragment: engine health, the tiles, and the chart data.
+  The polled fragment: engine health, the exposure strip, the readings, and the chart
+  data.
 
   The `hx-*` attributes ride on this element rather than on a wrapper because the swap
   replaces this element — a trigger declared on a parent would keep firing at whatever
@@ -16,39 +17,124 @@
      hx-trigger="every 30s"
      hx-swap="outerHTML">
 
-  {# Inside the fragment so the current-range highlight swaps with the data it describes.
-     Real `href`s, so the range still changes with scripting off — htmx intercepts the
-     click when it is on. #}
-  <nav class="windows" aria-label="Time range">
-    {% for choice in windows %}
-    <a href="/?window={{ choice.value }}"
-       class="window{% if choice == window %} is-current{% endif %}"
-       {% if choice == window %}aria-current="true"{% endif %}
-       hx-get="/fragments/board?window={{ choice.value }}"
-       hx-target="#board"
-       hx-swap="outerHTML">{{ choice.value }}</a>
-    {% endfor %}
-  </nav>
-
-  <section class="hud-panel">
-    <span class="hud-corner tl"></span>
-    <span class="hud-corner tr"></span>
-    <span class="hud-corner bl"></span>
-    <span class="hud-corner br"></span>
-
-    <p class="hud-live">
-      <span class="dot-live{% if health.status.value != 'ok' %} is-{{ health.status.value }}{% endif %}"></span>
+  <div class="bar">
+    <p class="status">
+      <span class="lamp{% if health.status.value != 'ok' %} is-{{ health.status.value }}{% endif %}"></span>
       engine {{ health.status.value }}
     </p>
 
-    <dl class="readout">
-      <div>
-        <dt>Cameras</dt>
-        <dd>{{ health.cameras | selectattr("state.value", "eq", "streaming") | list | length }}/{{ health.cameras | length }}</dd>
-      </div>
+    {# Inside the fragment so the current-range highlight swaps with the data it describes.
+       Real `href`s, so the range still changes with scripting off — htmx intercepts the
+       click when it is on. #}
+    <nav class="windows" aria-label="Time range">
+      {% for choice in windows %}
+      <a href="/?window={{ choice.value }}"
+         class="window{% if choice == window %} is-current{% endif %}"
+         {% if choice == window %}aria-current="true"{% endif %}
+         hx-get="/fragments/board?window={{ choice.value }}"
+         hx-target="#board"
+         hx-swap="outerHTML">{{ choice.value }}</a>
+      {% endfor %}
+    </nav>
+  </div>
+
+  {#
+    The exposure strip. Every other panel on this page answers "what happened"; this one
+    answers the question underneath it — has the box been seeing anything at all, and for
+    how long. A quiet zone and a dead camera draw the same flat chart, and only this tells
+    them apart.
+  #}
+  <figure class="exposure">
+    <figcaption>
+      <span class="label">Exposure</span>
+      <span class="count">{{ exposure.covered }}/{{ exposure.cells | length }}</span>
+      <span class="note">intervals with data</span>
+    </figcaption>
+
+    <div class="strip"
+         role="img"
+         aria-label="{{ exposure.covered }} of {{ exposure.cells | length }} intervals in the last {{ window.value }} carry data.">
+      {%- for lit in exposure.cells -%}
+      <i class="cell{% if lit %} is-lit{% endif %}{% if loop.last %} is-now{% endif %}"></i>
+      {%- endfor -%}
+    </div>
+
+    <p class="ticks">
+      <span>{{ since.strftime("%H:%M") }} UTC</span>
+      <span>now</span>
+    </p>
+  </figure>
+
+  {#
+    Two columns because there are two kinds of number here and reading one as the other
+    is the mistake worth designing out: a level is what the floor is like at this moment,
+    a count is what the window accumulated. Summing occupancy would report a quiet
+    afternoon as a crowd; showing the newest bucket of footfall would report a busy day
+    as one person.
+  #}
+  <section class="readings">
+    {% set levels = tiles | rejectattr("total") | list %}
+    {% set counts = tiles | selectattr("total") | list %}
+
+    {% if levels %}
+    <div class="column">
+      <h2>Now</h2>
+      <ul>
+        {#
+          A reading with no value renders an em dash, never a zero. Zero is a measurement
+          — it says nobody walked past. No data says nothing was reported, and printing
+          `0` for a camera that has been dead all morning tells the operator their shop
+          is empty.
+        #}
+        {% for tile in levels %}
+        <li class="reading" data-slot="{{ slots.get(tile.label, 0) }}">
+          <span class="swatch" aria-hidden="true"></span>
+          <span class="scope">{{ tile.label }}</span>
+          <span class="metric">{{ tile.metric.value.replace("_", " ") }}</span>
+          <span class="value{% if tile.value is none %} is-absent{% endif %}">
+            {%- if tile.value is none %}&mdash;{% else %}{{ tile.value | round(1) }}{% endif -%}
+          </span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    {% if counts %}
+    <div class="column">
+      <h2>This {{ window.value }}</h2>
+      <ul>
+        {% for tile in counts %}
+        <li class="reading" data-slot="{{ slots.get(tile.label, 0) }}">
+          <span class="swatch" aria-hidden="true"></span>
+          <span class="scope">{{ tile.label }}</span>
+          <span class="metric">{{ tile.metric.value.replace("_", " ") }}</span>
+          <span class="value{% if tile.value is none %} is-absent{% endif %}">
+            {%- if tile.value is none %}&mdash;{% else %}{{ tile.value | round | int }}{% endif -%}
+          </span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="engine">
+    <h2>Engine</h2>
+
+    <ul class="cameras">
+      {% for camera in health.cameras %}
+      <li>
+        <span class="camera-id">{{ camera.camera_id }}</span>
+        <span class="state is-{{ camera.state.value }}">{{ camera.state.value }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+
+    <dl class="facts">
       <div>
         <dt>Uptime</dt>
-        <dd>{{ health.uptime_s }}s</dd>
+        <dd>{{ uptime }}</dd>
       </div>
       <div>
         <dt>Unsynced</dt>
@@ -61,46 +147,7 @@
     </dl>
   </section>
 
-  <section>
-    <h2>Cameras</h2>
-    <ul class="camera-list">
-      {% for camera in health.cameras %}
-      <li>
-        <span class="camera-id">{{ camera.camera_id }}</span>
-        <span class="state is-{{ camera.state.value }}">{{ camera.state.value }}</span>
-      </li>
-      {% endfor %}
-    </ul>
-  </section>
-
-  <section>
-    <h2>Now</h2>
-    <ul class="tiles">
-      {#
-        A tile with no value renders an em dash, never a zero. Zero is a measurement —
-        it says nobody walked past. No data says nothing was reported, and printing `0`
-        for a camera that has been dead all morning tells the operator their shop is
-        empty.
-      #}
-      {% for tile in tiles %}
-      <li class="tile">
-        <p class="tile-scope">{{ tile.label }}</p>
-        <p class="tile-metric">{{ tile.metric.value.replace("_", " ") }}{% if tile.total %} <span class="tile-qualifier">/ {{ window.value }}</span>{% endif %}</p>
-        <p class="tile-value{% if tile.value is none %} is-absent{% endif %}">
-          {%- if tile.value is none -%}
-            &mdash;
-          {%- elif tile.total -%}
-            {{ tile.value | round | int }}
-          {%- else -%}
-            {{ tile.value | round(1) }}
-          {%- endif -%}
-        </p>
-      </li>
-      {% endfor %}
-    </ul>
-  </section>
-
-  {# One request feeds the tiles and the charts, so the two halves of the page can never
-     disagree about which window they are showing. #}
+  {# One request feeds the readings and the charts, so the two halves of the page can
+     never disagree about which window they are showing. #}
   <script id="board-data" type="application/json">{{ charts | tojson }}</script>
 </div>
