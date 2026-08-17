@@ -32,9 +32,9 @@ from muster.analytics.site_geometry import SiteGeometry
 from muster.config.schema import MusterConfig
 from muster.exporters.fanout import ExporterFanout
 from muster.store.store import Store
-from muster.supervisor.handle import WorkerEntry, WorkerHandle
+from muster.supervisor.handle import WorkerEntry, WorkerHandle, WorkerReport
 from muster.supervisor.worker import run_camera_worker
-from muster.types import FrameTs, MinuteBucket, RawEvent
+from muster.types import CameraId, FrameTs, MinuteBucket, RawEvent
 
 BUCKET_S = 60.0
 
@@ -263,6 +263,16 @@ class Supervisor:
         """How many workers are running. A health signal, and what lets a caller wait
         for a crash to have actually happened rather than assume it has."""
         return sum(1 for handle in self._handles if handle.is_alive())
+
+    def camera_reports(self) -> dict[CameraId, WorkerReport]:
+        """Per-camera state for `/healthz`, for the workers this supervisor runs.
+
+        A camera disabled in config has no worker and is deliberately absent rather than
+        reported as broken — describing a camera the operator switched off as `BACKOFF`
+        is how a health endpoint pages someone at 3am about a decision they made. Naming
+        it `DISABLED` needs config, which the health builder has and this does not.
+        """
+        return {handle.camera_id: handle.report() for handle in self._handles}
 
     async def supervise(self, *, monotonic: float) -> None:
         """Restart what died, once its backoff has elapsed.

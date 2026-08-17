@@ -48,6 +48,8 @@ PixelExtent = Annotated[int, Field(gt=0)]
 _HOURS_IN_A_YEAR = 8760
 """Ceiling on the raw-event retention window. `events` is the short-retention log."""
 
+_MAX_TCP_PORT = 65535
+
 
 class ConfigSection(BaseModel):
     """Base for every section: closed to unknown keys, and immutable once loaded.
@@ -251,6 +253,22 @@ class StorageConfig(ConfigSection):
     """
 
 
+class ApiConfig(ConfigSection):
+    """Where the local dashboard and its JSON listen (engine-architecture.md §13).
+
+    §13 asks for "minimal and local" auth and this section is the minimal half: the
+    dashboard carries no credential, so the bind address *is* the access control.
+    """
+
+    enabled: bool = True
+    host: Annotated[str, Field(min_length=1)] = "127.0.0.1"
+    """Loopback by default, because the dashboard is unauthenticated and exposes camera
+    topology and occupancy history. Reaching it from another machine is the operator's
+    deliberate act. In a container this is set to `0.0.0.0` and the port published on the
+    host's loopback instead, which keeps the same boundary one layer out (P3.6)."""
+    port: Annotated[int, Field(gt=0, le=_MAX_TCP_PORT)] = 8080
+
+
 # --- Exporters and sync -----------------------------------------------------
 
 
@@ -344,6 +362,7 @@ class MusterConfig(ConfigSection):
     zones: list[ZoneConfig] = Field(default_factory=list)
     thresholds: ThresholdsConfig = Field(default_factory=ThresholdsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    api: ApiConfig = Field(default_factory=ApiConfig)
     exporters: ExportersConfig = Field(default_factory=ExportersConfig)
     cloud_sync: CloudSyncConfig = Field(default_factory=CloudSyncConfig)
 

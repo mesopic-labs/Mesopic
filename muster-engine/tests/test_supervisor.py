@@ -41,7 +41,7 @@ from muster.exporters.fanout import ExporterFanout
 from muster.store.store import Store
 from muster.supervisor.handle import WorkerEntry
 from muster.supervisor.supervisor import BUCKET_S, CLOSE_LAG_S, Supervisor
-from muster.types import MetricName, MetricRow, ScopeId
+from muster.types import CameraState, MetricName, MetricRow, ScopeId
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_CONFIG = REPO_ROOT / "examples" / "muster.yaml"
@@ -544,3 +544,75 @@ async def test_exporters_are_only_told_about_rows_the_store_accepted(
 
     assert spy.rows_in_store_when_called
     assert min(spy.rows_in_store_when_called) > 0
+
+
+# --- What the supervisor can honestly say about a camera (P3.1) -------------
+
+
+async def test_a_running_worker_reports_streaming(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """`/healthz` has to distinguish a working camera from a flapping one (§15)."""
+    supervisor = _supervisor(config, store, clock, run_until_stopped)
+
+    await supervisor.start()
+    reports = supervisor.camera_reports()
+
+    assert set(reports) == {camera.camera_id for camera in config.cameras}
+    assert {report.state for report in reports.values()} == {CameraState.STREAMING}
+    await supervisor.stop()
+
+
+async def test_a_dead_worker_reports_backoff(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """A camera nobody is decoding is degraded, and the operator is told which one."""
+    supervisor = _supervisor(config, store, clock, partial(emit_then_die, crossings=1))
+
+    await supervisor.start()
+    await supervisor.drain_once(timeout=5.0, expected=len(config.cameras))
+    _wait_all_dead(supervisor, within_s=5.0)
+    await supervisor.supervise(monotonic=0.0)
+
+    assert {report.state for report in supervisor.camera_reports().values()} == {
+        CameraState.BACKOFF
+    }
+    await supervisor.stop()
+
+
+async def test_a_camera_reports_how_many_times_it_has_failed(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """§15 shows the failure count as the thing that explains *why* a box is degraded.
+
+    Reporting a constant next to `state: backoff` would be a plausible-looking guess in a
+    field the supervisor genuinely knows the answer to.
+    """
+    supervisor = _supervisor(config, store, clock, partial(emit_then_die, crossings=1))
+
+    await supervisor.start()
+    await supervisor.drain_once(timeout=5.0, expected=len(config.cameras))
+    _wait_all_dead(supervisor, within_s=5.0)
+    await supervisor.supervise(monotonic=0.0)
+
+    assert {report.consecutive_failures for report in supervisor.camera_reports().values()} == {1}
+    await supervisor.stop()
+
+
+async def test_a_camera_disabled_in_config_gets_no_worker_and_no_state(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """A disabled camera is not a broken one; reporting it as BACKOFF would page someone.
+
+    The supervisor speaks only for the workers it runs. Naming the disabled camera as
+    DISABLED belongs to the health builder, which reads config.
+    """
+    parsed = config.model_dump()
+    parsed["cameras"][0]["enabled"] = False
+    partly_disabled = MusterConfig.model_validate(parsed)
+    supervisor = _supervisor(partly_disabled, store, clock, run_until_stopped)
+
+    await supervisor.start()
+
+    assert config.cameras[0].camera_id not in supervisor.camera_reports()
+    await supervisor.stop()

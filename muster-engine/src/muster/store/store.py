@@ -76,6 +76,12 @@ class Store:
 
     # --- Lifecycle ----------------------------------------------------------
 
+    @property
+    def path(self) -> Path:
+        """Where this database lives. `/healthz` measures free space on *its* filesystem,
+        which on an appliance with a separate data volume is not the root's."""
+        return self._path
+
     def close(self) -> None:
         self._connection.close()
 
@@ -333,6 +339,52 @@ class Store:
         except sqlite3.Error:
             msg = "cannot write metric rows"
             raise StoreError(msg) from None
+
+    def metrics_between(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        limit: int,
+        camera_id: CameraId | None = None,
+        metrics: Sequence[MetricName] | None = None,
+    ) -> list[MetricRow]:
+        """The series a dashboard plots: `[start, end)`, oldest first, capped at `limit`.
+
+        The window is half-open for the reason `trim`'s is — a minute belongs to exactly
+        one window, so consecutive requests neither double-count nor drop a bucket.
+
+        Ordering and filtering live here rather than in the caller because
+        engine-architecture.md §13 makes the API a reader: handlers query the store and
+        render, they do not compute. `limit` has no default on purpose — a year of
+        buckets is over half a million rows, and the caller has to have said what it can
+        hold.
+        """
+        clauses = ["bucket >= ?", "bucket < ?"]
+        parameters: list[object] = [start.isoformat(), end.isoformat()]
+        if camera_id is not None:
+            clauses.append("camera_id = ?")
+            parameters.append(camera_id)
+        if metrics is not None:
+            clauses.append(f"metric IN ({', '.join('?' * len(metrics))})")
+            parameters.extend(metric.value for metric in metrics)
+        parameters.append(limit)
+        cursor = self._connection.execute(
+            f"""SELECT camera_id, bucket, metric, scope_id, value, staff_value, sample_count
+                FROM metrics_minute
+                WHERE {" AND ".join(clauses)}
+                ORDER BY bucket, camera_id, metric, scope_id
+                LIMIT ?""",  # noqa: S608 - every clause is a fixed string; values are bound
+            parameters,
+        )
+        return [_row_from(record) for record in cursor.fetchall()]
+
+    def unsynced_count(self) -> int:
+        """How many rows have never reached the cloud. Reported by `/healthz` (§15)."""
+        (count,) = self._connection.execute(
+            "SELECT count(*) FROM metrics_minute WHERE synced_at IS NULL"
+        ).fetchone()
+        return int(count)
 
     def unsynced_metrics(self, limit: int) -> list[MetricRow]:
         """Rows awaiting cloud sync, in bucket order. Drives the sync cursor."""

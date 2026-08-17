@@ -14,6 +14,7 @@ Commands are typed Python functions; Typer derives the interface from the annota
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -30,6 +31,7 @@ from muster.bench import (
     evaluate,
     read_current_rss_bytes,
 )
+from muster.config.loader import load_config
 from muster.detector.detector import Detector
 from muster.detector.model_manager import (
     DEFAULT_MODEL,
@@ -38,11 +40,13 @@ from muster.detector.model_manager import (
     ModelManager,
 )
 from muster.detector.onnx_detector import OnnxDetector
-from muster.errors import MusterError, TruthError
+from muster.errors import ConfigError, MusterError, TruthError
 from muster.ingest.rtsp import RtspFrameSource
 from muster.ingest.source import FrameSource
+from muster.runner import DATA_DIR_ENV_VAR, Engine, store_path
 from muster.sampler.sampler import FrameSampler
 from muster.spike import run_spike
+from muster.store.store import Store
 from muster.tracker.bytetrack import ByteTrackTracker
 from muster.tracker.tracker import Tracker
 from muster.truth import DRAFT_RATER, gate_eligible, load_manifest, load_truth
@@ -370,6 +374,41 @@ def truth_validate(
 
     if failed:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def run(
+    config_path: Annotated[
+        Path,
+        typer.Option("--config", help="Path to muster.yaml.", show_default=False),
+    ],
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            help=f"Where the SQLite store lives. Defaults to ${DATA_DIR_ENV_VAR}, "
+            "then the config file's own directory.",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Run the engine: every enabled camera, the store, and the local dashboard.
+
+    The whole box in one process and one event loop (engine-architecture.md §9). Stops on
+    SIGINT or SIGTERM, closing the open minute before it goes.
+    """
+    try:
+        config = load_config(config_path)
+    except ConfigError as error:
+        # `load_config` has already generalised what it says: a validation error can
+        # otherwise carry a camera's whole source block, credentials included (P2.1).
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from None
+
+    database = store_path(config_path=config_path, data_dir=data_dir)
+    database.parent.mkdir(parents=True, exist_ok=True)
+    with Store(database) as store:
+        asyncio.run(Engine(config, store).run())
 
 
 if __name__ == "__main__":
