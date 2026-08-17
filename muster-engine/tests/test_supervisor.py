@@ -372,6 +372,11 @@ async def test_an_event_for_a_forgotten_bucket_is_dropped_and_counted(
     clock.advance(60 + CLOSE_LAG_S + 1)
     await supervisor.tick()
 
+    # Both workers must have died before the first supervise pass, for the reason
+    # `test_a_dead_worker_is_restarted_once_its_backoff_has_elapsed` waits: one pass
+    # notices a death and the next acts on it, so a worker still alive here is merely
+    # noticed and never restarted -- and then only half the stragglers are replayed.
+    _wait_all_dead(supervisor, within_s=5.0)
     await supervisor.supervise(monotonic=0.0)
     await supervisor.supervise(monotonic=120.0)
     await supervisor.drain_once(timeout=5.0, expected=3 * cameras)
