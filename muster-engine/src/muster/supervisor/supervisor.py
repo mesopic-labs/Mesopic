@@ -30,6 +30,7 @@ from muster.aggregator.aggregator import EXIT_GRACE_S, Aggregator, bucket_of
 from muster.analytics.metrics import build_registry
 from muster.analytics.site_geometry import SiteGeometry
 from muster.config.schema import MusterConfig
+from muster.exporters.fanout import ExporterFanout
 from muster.store.store import Store
 from muster.supervisor.handle import WorkerEntry, WorkerHandle
 from muster.supervisor.worker import run_camera_worker
@@ -88,6 +89,9 @@ class Supervisor:
             for camera in config.cameras
             if camera.enabled
         ]
+        self.exporters = ExporterFanout({})
+        """Where committed rows go next. Replaced by `build_exporters(config)` at the
+        composition root; empty here so a supervisor is usable without any peer."""
         self._closed_through: MinuteBucket | None = None
         self._stopping = False
         self.skipped_untracked_events = 0
@@ -103,6 +107,7 @@ class Supervisor:
     # --- Lifecycle ----------------------------------------------------------
 
     async def start(self) -> None:
+        self.exporters.start()
         for handle in self._handles:
             handle.start()
             handle.note_started(self._monotonic())
@@ -134,6 +139,7 @@ class Supervisor:
         if flush:
             self._aggregator.flush(FrameTs(self._now()))
             await self._close(self._aggregator.pending_buckets())
+        self.exporters.shutdown()
 
     async def reload(self, config: MusterConfig) -> None:
         """Validate-then-swap: rebuild geometry and push new budgets without dropping streams."""
@@ -223,6 +229,11 @@ class Supervisor:
                 # a dedicated writer thread, which is a change to the store's contract
                 # rather than to this file.
                 self._store.upsert_metrics(rows)
+                # AFTER the write, never before: an exporter that announces a number the
+                # store rejected has told the outside world something the engine does not
+                # believe. The fan-out contains its own failures, so a dead broker cannot
+                # turn into a missed bucket here (§12).
+                self.exporters.on_metrics(rows)
             self._closed_through = bucket
             self._aggregator.forget_before(MinuteBucket(bucket + timedelta(seconds=BUCKET_S)))
 

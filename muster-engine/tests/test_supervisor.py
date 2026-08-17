@@ -37,10 +37,11 @@ from scripted_worker import (
 
 from muster.aggregator.aggregator import EXIT_GRACE_S
 from muster.config.schema import MusterConfig
+from muster.exporters.fanout import ExporterFanout
 from muster.store.store import Store
 from muster.supervisor.handle import WorkerEntry
 from muster.supervisor.supervisor import BUCKET_S, CLOSE_LAG_S, Supervisor
-from muster.types import MetricName, ScopeId
+from muster.types import MetricName, MetricRow, ScopeId
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_CONFIG = REPO_ROOT / "examples" / "muster.yaml"
@@ -371,6 +372,11 @@ async def test_an_event_for_a_forgotten_bucket_is_dropped_and_counted(
     clock.advance(60 + CLOSE_LAG_S + 1)
     await supervisor.tick()
 
+    # Both workers must have died before the first supervise pass, for the reason
+    # `test_a_dead_worker_is_restarted_once_its_backoff_has_elapsed` waits: one pass
+    # notices a death and the next acts on it, so a worker still alive here is merely
+    # noticed and never restarted -- and then only half the stragglers are replayed.
+    _wait_all_dead(supervisor, within_s=5.0)
     await supervisor.supervise(monotonic=0.0)
     await supervisor.supervise(monotonic=120.0)
     await supervisor.drain_once(timeout=5.0, expected=3 * cameras)
@@ -476,3 +482,65 @@ async def test_a_drain_that_never_gets_its_events_still_returns(
 
     assert received == []
     assert 0.2 <= elapsed < 5.0, f"the deadline did not bound the drain ({elapsed:.2f}s)"
+
+
+# --- Exporter fan-out (P3.5) ------------------------------------------------
+
+
+class SpyExporter:
+    """Records what it was handed, and when relative to the store."""
+
+    def __init__(self, store: Store) -> None:
+        self._store = store
+        self.rows: list[MetricRow] = []
+        self.rows_in_store_when_called: list[int] = []
+
+    def start(self) -> None:
+        return None
+
+    def on_metric(self, row: MetricRow) -> None:
+        self.rows.append(row)
+        self.rows_in_store_when_called.append(len(self._store.unsynced_metrics(limit=50)))
+
+    def shutdown(self) -> None:
+        return None
+
+
+async def test_committed_rows_reach_the_exporters(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    spy = SpyExporter(store)
+    supervisor = _supervisor(config, store, clock, partial(emit_then_exit, crossings=2))
+    supervisor.exporters = ExporterFanout({"spy": spy})
+
+    await supervisor.start()
+    await supervisor.drain_once(timeout=5.0, expected=2 * len(config.cameras))
+    clock.advance(60 + CLOSE_LAG_S + 1)
+    await supervisor.tick()
+    await supervisor.stop()
+
+    assert [row.value for row in spy.rows if row.metric is MetricName.FOOTFALL] == [2.0] * len(
+        config.cameras
+    )
+
+
+async def test_exporters_are_only_told_about_rows_the_store_accepted(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """Announcing a number the store rejected tells the world what the engine does not believe.
+
+    The spy counts the rows already in the store at the moment it is called: zero would
+    mean the fan-out ran before the write.
+    """
+    spy = SpyExporter(store)
+    supervisor = _supervisor(config, store, clock, partial(emit_then_exit, crossings=1))
+    supervisor.exporters = ExporterFanout({"spy": spy})
+
+    await supervisor.start()
+    await supervisor.drain_once(timeout=5.0, expected=len(config.cameras))
+    clock.advance(60 + CLOSE_LAG_S + 1)
+    await supervisor.tick()
+    await supervisor.stop()
+
+    assert spy.rows_in_store_when_called
+    assert min(spy.rows_in_store_when_called) > 0
