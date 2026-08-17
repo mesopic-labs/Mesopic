@@ -211,9 +211,20 @@ class ThresholdsConfig(ConfigSection):
 
     detection_confidence: Annotated[float, Field(ge=0.0, le=1.0)] = 0.35
     track_thresh: Annotated[float, Field(ge=0.0, le=1.0)] = 0.5
-    match_thresh: Annotated[float, Field(ge=0.0, le=1.0)] = 0.8
-    """Gates the association COST (1 - IoU), not the IoU: 0.8 means a minimum IoU of 0.2.
-    The name is the one §13.1 documents; the misreading it invites was a real bug."""
+    max_cost: Annotated[float, Field(gt=0.0)] = 0.4
+    """Stage-1 association gate: accept a match iff its COST is below this.
+
+    Named for the tracker's own units rather than for `match_thresh`, the name
+    engine-architecture.md §13.1 used to carry. That name is an IoU-cost number, and
+    ADR-0014 chose centre distance as the cost function — whose 0.4 is its own *measured*
+    operating point on a different scale entirely, explicitly "not a scaled-down guess"
+    from an IoU number. A config key that cannot be translated into what the tracker
+    reads is a key that either does nothing or breaks association silently; this one is
+    the number the tracker actually uses.
+    """
+    max_cost_low: Annotated[float, Field(gt=0.0)] = 0.25
+    """Stage-2 (low-confidence) gate. TIGHTER than stage 1, which is the opposite of what
+    the BYTE paper's names suggest — see algorithms.md §3.3."""
     track_memory_s: Annotated[float, Field(gt=0.0)] = 2.0
     dwell_min_s: Annotated[float, Field(ge=0.0)] = 3.0
     queue_dwell_weight: bool = True

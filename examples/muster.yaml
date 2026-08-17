@@ -69,9 +69,12 @@ zones:
 thresholds:
   detection_confidence: 0.35
   track_thresh: 0.5                 # high/low confidence split
-  # WARNING: this gates the association COST (1 - IoU), NOT the IoU. 0.8 => minimum IoU 0.2.
-  # Stage 1 (high-confidence) uses this; stage 2 (low-confidence) uses 0.5, i.e. TIGHTER.
-  match_thresh: 0.8
+  # Association gates, in the TRACKER's units: a match is accepted iff its cost is below
+  # these. Stage 2 is tighter than stage 1, the opposite of what the BYTE names suggest.
+  # These are centre-distance cost's own measured operating points (ADR-0014) — they do
+  # not translate from an IoU threshold.
+  max_cost: 0.4
+  max_cost_low: 0.25
   track_memory_s: 2.0               # how long a lost track is remembered
   dwell_min_s: 3.0                  # ignore transient zone touches shorter than this
   queue_dwell_weight: true
