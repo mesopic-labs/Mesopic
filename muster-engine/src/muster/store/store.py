@@ -374,13 +374,29 @@ class Store:
             msg = "cannot stamp rows as synced"
             raise StoreError(msg) from None
 
-    def trim(self) -> None:
-        """Enforce event retention and the disk-bounded metric cap.
+    def trim(self, *, before: datetime) -> int:
+        """Drop raw events captured before `before`. Returns how many went.
 
-        Not P2.5: the retention window is `event_retention_hours`, a config key P2.8
-        adds along with the job that reads it (implementation-plan.md P2.8, MK.4).
+        The window is half-open — an event exactly at the cutoff is kept — and the
+        caller supplies the cutoff rather than the retention window itself. The store
+        has no clock for the same reason the aggregator has none: a component that reads
+        the time decides, by itself and invisibly, which data exists. `before` is
+        `now - timedelta(hours=config.storage.event_retention_hours)`.
+
+        Only `events` is trimmed. `metrics_minute` is the durable, syncable series, and
+        a row whose `synced_at` is still `NULL` has never reached the cloud — deleting
+        one destroys the only copy. The disk-bounded metric cap engine-architecture.md
+        §11 also names is deliberately not implemented here: §11 leaves its default an
+        open question and §14 puts disk-full handling in M6.
         """
-        raise NotImplementedError
+        cutoff = before.isoformat()
+        try:
+            with self._transaction() as connection:
+                cursor = connection.execute("DELETE FROM events WHERE ts < ?", (cutoff,))
+                return cursor.rowcount
+        except sqlite3.Error:
+            msg = "cannot trim the event log"
+            raise StoreError(msg) from None
 
 
 _EventRow = tuple[str, str, str, int, str | None, str | None, int | None, int]

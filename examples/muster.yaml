@@ -76,6 +76,12 @@ thresholds:
   dwell_min_s: 3.0                  # ignore transient zone touches shorter than this
   queue_dwell_weight: true
 
+storage:
+  # How long the raw event log is kept, for local debugging and re-aggregation.
+  # Metrics are NOT trimmed by this: minute rows are the durable series and stay
+  # until you delete them. Raw events are the short-retention log.
+  event_retention_hours: 72
+
 exporters:
   mqtt: { enabled: true, broker: "192.168.1.10", base_topic: "muster" }
   prometheus: { enabled: true }     # served at :8080/metrics
