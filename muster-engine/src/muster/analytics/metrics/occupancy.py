@@ -86,6 +86,14 @@ class _SampledZoneMetric:
             return []
         weighted = sum((sample.confirmed_value or 0.0) * (sample.dt_s or 0.0) for sample in samples)
         peak = max(sample.value or 0.0 for sample in samples)
+        # Each staff sub-count on the same basis as the series it belongs to: the mean is
+        # `Δt`-weighted over the confirmed count, so its staff half must be too, and the
+        # peak reads the raw count. Crossing them would report a staff number derived from
+        # a different population than the total beside it (staff.py, ADR-0021).
+        staff_weighted = sum(
+            (sample.staff_confirmed_value or 0.0) * (sample.dt_s or 0.0) for sample in samples
+        )
+        staff_peak = max(sample.staff_value or 0.0 for sample in samples)
         return [
             MetricRow(
                 camera_id=camera_id,
@@ -93,11 +101,12 @@ class _SampledZoneMetric:
                 metric=metric,
                 scope_id=ScopeId(zone.zone_id),
                 value=value,
+                staff_value=staff,
                 sample_count=len(samples),
             )
-            for metric, value in (
-                (self.mean_metric, weighted / elapsed),
-                (self.peak_metric, peak),
+            for metric, value, staff in (
+                (self.mean_metric, weighted / elapsed, staff_weighted / elapsed),
+                (self.peak_metric, peak, staff_peak),
             )
         ]
 

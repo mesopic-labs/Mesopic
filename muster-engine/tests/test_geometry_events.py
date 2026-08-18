@@ -110,7 +110,6 @@ def _track(
     track_id: int = 1,
     coasted: bool = False,
     camera: CameraId = CAMERA,
-    is_staff: bool = False,
 ) -> Track:
     return Track(
         camera_id=camera,
@@ -119,7 +118,6 @@ def _track(
         foot_point=point,
         score=0.9,
         time_since_update=1 if coasted else 0,
-        is_staff=is_staff,
     )
 
 
@@ -200,17 +198,11 @@ def test_positive_dir_labels_the_sign_but_does_not_change_it() -> None:
     assert [event.direction for event in _walk(outward, *steps)] == [1]
 
 
-def test_a_staff_track_carries_its_tag_onto_the_event() -> None:
-    """The adjacency metric (A2) reduces on this flag; losing it here loses the metric."""
-    analytics = _analytics(lines=[_line()])
-
-    events = _walk(
-        analytics,
-        _track((0.5, 0.2), second=0, is_staff=True),
-        _track((0.5, 0.8), second=1, is_staff=True),
-    )
-
-    assert events[0].is_staff is True
+# The staff tag used to be asserted here, from a `Track` built with `is_staff=True`. That
+# contract no longer exists: the tracker cannot see geometry, so it could never have set
+# the flag, and P4.2 moved the decision into this module where the polygons are.
+# `tests/test_staff_adjacency.py` covers it properly — from a zone rather than from a
+# hand-set field, which is the only way the assertion could ever have failed.
 
 
 # --- Line crossing: what must NOT be counted --------------------------------

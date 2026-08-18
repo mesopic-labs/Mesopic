@@ -37,6 +37,7 @@ from muster.types import (
     Track,
     TrackId,
     ZoneId,
+    ZoneRole,
 )
 
 HYSTERESIS_DELTA = 0.02
@@ -78,11 +79,21 @@ class _Residency:
 
 @dataclass(slots=True)
 class _TrackState:
-    """Per track: where it last was, and whether that was an observation or a guess."""
+    """Per track: where it last was, whether that was an observation or a guess, and
+    which side of the counter it came from."""
 
     last_observed_foot: NormPoint | None = None
     was_observed: bool = False
     lines: dict[LineId, _LineState] = field(default_factory=dict)
+    is_staff: bool | None = None
+    """Whether this track was born in a staff zone. `None` until it has been *observed*
+    once — a track first seen coasting has no trustworthy origin yet, and a Kalman guess
+    must not assign somebody a role (algorithms.md §3.4, §11.1).
+
+    Decided once and never revisited. Re-testing per tick would untag a staff member the
+    moment they stepped out from behind the counter, which is most of a shift and exactly
+    when they are inflating the floor's numbers.
+    """
 
 
 class GeometryAnalytics:
@@ -128,6 +139,7 @@ class GeometryAnalytics:
 
         previous_ts = self._last_ts.get(camera_id)
         tick_ts = self._tick_ts(camera_id, tracks, ts)
+        self._classify(camera_id, tracks)
         events = self._line_events(camera_id, tracks)
         events += self._zone_events(camera_id, tracks, tick_ts)
         events += self._occupancy_samples(camera_id, tick_ts, previous_ts)
@@ -161,6 +173,7 @@ class GeometryAnalytics:
                 EventKind.ZONE_EXIT,
                 zone.zone_id,
                 None,
+                is_staff=self._is_staff(camera_id, track_id),
                 departed=(camera_id, track_id, ts),
             )
             for zone in zones
@@ -248,7 +261,7 @@ class GeometryAnalytics:
             track_id=track.track_id,
             line_id=line.line_id,
             direction=1 if sticky < 0 else -1,
-            is_staff=track.is_staff,
+            is_staff=self._is_staff(track.camera_id, track.track_id),
         )
 
     @staticmethod
@@ -284,7 +297,12 @@ class GeometryAnalytics:
             now_inside |= was_inside & coasted
 
             events += [
-                _zone_event(EventKind.ZONE_ENTER, zone.zone_id, by_id[track_id])
+                _zone_event(
+                    EventKind.ZONE_ENTER,
+                    zone.zone_id,
+                    by_id[track_id],
+                    is_staff=self._is_staff(camera_id, track_id),
+                )
                 for track_id in sorted(now_inside - was_inside)
             ]
             events += [
@@ -292,6 +310,9 @@ class GeometryAnalytics:
                     EventKind.ZONE_EXIT,
                     zone.zone_id,
                     by_id.get(track_id),
+                    # Read before `_forget_dead_tracks` runs, which is what lets an exit
+                    # for a track that died inside the zone still know whose it was.
+                    is_staff=self._is_staff(camera_id, track_id),
                     departed=(camera_id, track_id, tick_ts),
                 )
                 for track_id in sorted(was_inside - now_inside)
@@ -354,6 +375,37 @@ class GeometryAnalytics:
             )
         return events
 
+    # --- Staff tagging ------------------------------------------------------
+
+    def _classify(self, camera_id: CameraId, tracks: Sequence[Track]) -> None:
+        """Tag each newly observed track by where it came from (algorithms.md §11.1).
+
+        Origin, never current position. Staff walk out onto the floor and customers walk
+        up to the counter, so where a track *is* says little and where it was *born* says
+        most of what there is to know — and a customer leaning over the counter is inside
+        the staff zone, which is the case a position test gets wrong while looking right.
+
+        Runs before any event is built, so every event in this tick reports the same tag.
+        """
+        for track in tracks:
+            if track.time_since_update != 0:
+                continue
+            state = self._tracks.setdefault((camera_id, track.track_id), _TrackState())
+            if state.is_staff is None:
+                state.is_staff = self._born_in_staff_zone(camera_id, track.foot_point)
+
+    def _born_in_staff_zone(self, camera_id: CameraId, foot_point: NormPoint) -> bool:
+        return any(
+            zone.role is ZoneRole.STAFF and zone.contains(foot_point)
+            for zone in self._geometry.zones_for(camera_id)
+        )
+
+    def _is_staff(self, camera_id: CameraId, track_id: TrackId) -> bool:
+        """The tag as everything downstream sees it. Undecided reads as not staff — a
+        track nobody has observed yet has no origin to have come from."""
+        state = self._tracks.get((camera_id, track_id))
+        return bool(state is not None and state.is_staff)
+
     # --- Sampled state ------------------------------------------------------
 
     def _occupancy_samples(
@@ -375,6 +427,7 @@ class GeometryAnalytics:
         samples = []
         for zone in self._geometry.zones_for(camera_id):
             residents = self._inside.get(zone.zone_id, {})
+            staff = {track_id for track_id in residents if self._is_staff(camera_id, track_id)}
             samples.append(
                 RawEvent(
                     camera_id=camera_id,
@@ -385,6 +438,17 @@ class GeometryAnalytics:
                     value=float(len(residents)),
                     confirmed_value=float(
                         sum(1 for residency in residents.values() if residency.confirmed)
+                    ),
+                    # The staff halves of both counts, each on its own basis: the peak
+                    # series reads the raw count and the mean reads the confirmed one, so
+                    # one staff number could only be right for one of them.
+                    staff_value=float(len(staff)),
+                    staff_confirmed_value=float(
+                        sum(
+                            1
+                            for track_id, residency in residents.items()
+                            if residency.confirmed and track_id in staff
+                        )
                     ),
                     dt_s=dt_s,
                 )
@@ -430,7 +494,7 @@ class GeometryAnalytics:
                         zone_id=zone.zone_id,
                         cell=cell_of(track.foot_point),
                         dt_s=dt_s,
-                        is_staff=track.is_staff,
+                        is_staff=self._is_staff(track.camera_id, track.track_id),
                     )
                 )
         return hits
@@ -462,6 +526,7 @@ def _zone_event(
     zone_id: ZoneId,
     track: Track | None,
     *,
+    is_staff: bool,
     departed: tuple[CameraId, TrackId, datetime | None] | None = None,
 ) -> RawEvent:
     """Build a zone event, for a track that may already be gone.
@@ -477,7 +542,7 @@ def _zone_event(
             kind=kind,
             track_id=track.track_id,
             zone_id=zone_id,
-            is_staff=track.is_staff,
+            is_staff=is_staff,
         )
     if departed is None:  # pragma: no cover - the caller always supplies one of the two
         msg = "a zone event needs either a live track or the identity of a departed one"
@@ -487,7 +552,12 @@ def _zone_event(
         msg = f"no capture time to stamp the exit of track {track_id}"
         raise ValueError(msg)
     return RawEvent(
-        camera_id=camera_id, ts=FrameTs(ts), kind=kind, track_id=track_id, zone_id=zone_id
+        camera_id=camera_id,
+        ts=FrameTs(ts),
+        kind=kind,
+        track_id=track_id,
+        zone_id=zone_id,
+        is_staff=is_staff,
     )
 
 

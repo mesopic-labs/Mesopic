@@ -12,9 +12,13 @@ Implements P2.4.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+from muster.analytics.metrics.staff import staff_only
 from muster.analytics.site_geometry import SiteGeometry
 from muster.types import (
     EventKind,
+    LineId,
     MetricName,
     MetricRow,
     MinuteBucket,
@@ -39,13 +43,7 @@ class LineCrossPlugin:
             for line in self._geometry.lines_for(camera_id):
                 if MetricName.LINE_CROSS not in line.metrics:
                     continue
-                crossings = [
-                    event.direction
-                    for event in events
-                    if event.kind is EventKind.LINE_CROSS
-                    and event.line_id == line.line_id
-                    and event.direction is not None
-                ]
+                crossings = _directions(events, line.line_id)
                 rows.append(
                     MetricRow(
                         camera_id=camera_id,
@@ -53,7 +51,19 @@ class LineCrossPlugin:
                         metric=MetricName.LINE_CROSS,
                         scope_id=ScopeId(line.line_id),
                         value=float(sum(crossings)),
+                        # A count, so no staff is zero rather than absent (staff.py).
+                        staff_value=float(sum(_directions(staff_only(events), line.line_id))),
                         sample_count=len(crossings),
                     )
                 )
         return rows
+
+
+def _directions(events: Sequence[RawEvent], line_id: LineId) -> list[int]:
+    return [
+        event.direction
+        for event in events
+        if event.kind is EventKind.LINE_CROSS
+        and event.line_id == line_id
+        and event.direction is not None
+    ]
