@@ -1,11 +1,17 @@
 # The local development and demo stack.
 #
-#   docker compose up            engine only, against your own camera
-#   docker compose --profile demo up   + a looped sample stream and an MQTT broker
+#   make demo                    THE one command: seeds a config, generates a password,
+#                                and brings up engine + dashboard + sample stream + broker
+#   docker compose up            engine only, against your own camera and your own config
+#   docker compose --profile camera up -d mediamtx    just a stream, to develop ingest against
 #
-# P3.6 turns the demo profile into the one-command bring-up a stranger runs from the
-# README. Until then it is the dev harness: mediamtx gives us a repeatable RTSP source
-# so reconnect, backoff, and stall handling can be tested without a physical camera.
+# `make demo` is the entry point rather than `docker compose up` because two things have
+# to happen before the engine starts and neither belongs in a declarative file: a config
+# has to exist in the volume (the `seed` service below), and a password has to be
+# generated (ADR-0019 — the demo binds every interface, which is exactly when the write
+# surface needs its credential).
+#
+# Implements P3.6.
 
 services:
   engine:
@@ -23,7 +29,34 @@ services:
       MUSTER_RTSP_URL: ${MUSTER_RTSP_URL:-}
       MUSTER_WEBHOOK_SECRET: ${MUSTER_WEBHOOK_SECRET:-}
       MUSTER_SITE_TOKEN: ${MUSTER_SITE_TOKEN:-}
+      # Deliberately a plain default rather than `:?`. Compose interpolates the whole file
+      # at parse time regardless of which services a command selects, so a required
+      # variable here would break `make test-stream`, which starts no engine at all. Unset
+      # is caught at startup instead, by an error that already names the variable.
+      MUSTER_ADMIN_PASSWORD: ${MUSTER_ADMIN_PASSWORD:-}
     # The engine reads a stream and writes one file. Give it nothing more than that.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Puts a config in the volume, once, and then exits. `make demo` runs it before `up`.
+  #
+  # COPIED rather than mounted read-only, because saving geometry rewrites this file
+  # (ADR-0018) and §13.1 makes the copy in the volume the authority — a read-only mount
+  # would render the calibration page and then fail every save made on it. It never
+  # overwrites: a demo brought up twice keeps whatever was drawn the first time.
+  seed:
+    profiles: ["demo"]
+    image: muster-engine:dev
+    build:
+      context: .
+      dockerfile: docker/engine.Dockerfile
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["[ -f /data/muster.yaml ] || cp /seed/demo.yaml /data/muster.yaml"]
+    volumes:
+      - muster-data:/data
+      - ./docker/demo.yaml:/seed/demo.yaml:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
