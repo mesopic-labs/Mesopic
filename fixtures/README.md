@@ -86,13 +86,14 @@ continuous, several people walking a known schedule. See `../../Muster-docs/docs
 §7 and §8; §8's hour-grain-vs-minute-grain question wants an answer *before* that session,
 not after.
 
-> **Gate-eligible is a new property here, and it has a sharp edge.**
-> `score(..., gating=True)` refuses a clip whose provenance or consent fails, and checks
-> nothing else — not the scene class, not the clip length, not whether a human ever
-> verified the labels. While every gate-eligible clip was hypothetical that gap was inert.
-> It is not any more: these three are `hard`, minutes long, and would pass the guard.
-> Until it is closed, "is this clip a legitimate basis for this number?" is a question the
-> code does not yet ask for you.
+> **Gate-eligibility answers permission, not validity.** `gate_eligible()` asks whether we
+> may publish from footage of these people at all — provenance and consent, and nothing
+> else. Committing these three clips armed a gap that had been inert while every
+> gate-eligible clip was hypothetical, so `gate_blockers()` now asks the other question
+> beside it: does the clip measure the scene the gate is specified on, and did a human
+> stand behind the labels. A clip can pass the first and fail the second — these three do.
+> What the code still does not check is clip length or crossing density, so "is this clip
+> a *sufficient* basis for this number?" remains a judgement call.
 
 ### `residential-lobby-01`: the first long clip, and still not the gate clip
 
@@ -107,8 +108,14 @@ clip:
   alone.
 - **Eleven crossings in 40 minutes.** Longer than the `home-*` clips without being denser,
   so a single miscount is still a ~9 % error.
-- **The labels are a draft.** This is the clip the guard's blind spot above was written
-  about: it passes both halves of the derived test and nothing checks the rest.
+- **The labels are a draft**, which the guard now refuses on its own.
+
+`muster truth validate` states both refusals directly:
+
+```
+scene is hard, but this gate is specified on good_doorway
+labels are unverified (draft-unverified)
+```
 
 Two properties of the file a labeller needs to know before opening it:
 
@@ -155,11 +162,11 @@ rather than by watching the video end to end, and nobody has checked them since.
 good enough to iterate a metric against and are **not** good enough to be anybody's
 reference for a published number.
 
-For the two stock clips the gate-eligibility rule already makes that structurally
-impossible. For `residential-lobby-01` it does not: it passes both halves of the derived
-test, so `score(..., gating=True)` accepts it and never asks whether a human verified those
-labels. The draft marker is the only thing standing between that clip and a published
-figure — re-label it in the clicker under your own name before anything rests on it.
+`score(..., gating=True)` refuses all three, so none of them can reach a published number
+by accident: the stock pair fails on provenance, and every one of them fails on
+`labelled_by`. Re-label in the clicker under your own name — the rater field is the
+accountability mechanism, and promoting a draft is meant to be a human act rather than a
+flag someone flips.
 
 Verify them in the clicker and re-save under your own name. The judgement calls worth
 re-checking are the ones a detector will also find hard:
