@@ -29,7 +29,7 @@ from fastapi import Path as PathParam
 from muster.api.auth import WriteGuard
 from muster.api.calibrate import GeometryEdit, merge_geometry
 from muster.api.rows import GeometryRow, count_for
-from muster.config.schema import CameraConfig, MusterConfig
+from muster.config.schema import CameraConfig, FrigateSource, MusterConfig
 from muster.errors import ConfigError, SnapshotUnavailableError
 from muster.types import CameraId
 
@@ -159,7 +159,16 @@ def calibration_router(
         `no-store` is part of the promise, not a nicety: a cached response is a frame on
         the viewer's disk, which is the thing the invariant forbids however it got there.
         """
-        _camera(camera_id)
+        camera = _camera(camera_id)
+        if isinstance(camera.source, FrigateSource):
+            # Refused here rather than sent to a worker that could never answer it. A
+            # Frigate camera has tracks and no frames, so the request would hang until it
+            # timed out and the editor would show a spinner where a reason belongs.
+            raise HTTPException(
+                status_code=422,
+                detail="this camera's video is handled by Frigate, so the engine has no "
+                "frame to draw on — set its zones and lines in muster.yaml",
+            )
         if snapshot is None:
             raise HTTPException(status_code=503, detail="the engine is not running")
         try:

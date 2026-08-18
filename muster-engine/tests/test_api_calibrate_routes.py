@@ -352,3 +352,14 @@ async def test_the_lists_follow_a_save(client: httpx.AsyncClient) -> None:
     await client.post(f"/calibrate/{FRONT_DOOR}", json=AN_EDIT)
 
     assert "redrawn" in (await client.get("/zones")).text
+
+
+async def test_a_frigate_camera_is_refused_a_snapshot_with_a_reason(
+    client: httpx.AsyncClient,
+) -> None:
+    """A Frigate camera has tracks and no frames. Sending the request anyway would hang
+    until it timed out and leave the editor showing a spinner where a reason belongs."""
+    response = await client.get("/api/cameras/till/snapshot")
+
+    assert response.status_code == 422
+    assert "Frigate" in response.json()["detail"]

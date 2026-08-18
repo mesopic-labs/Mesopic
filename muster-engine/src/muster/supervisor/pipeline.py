@@ -20,7 +20,7 @@ from pathlib import Path
 
 from muster.analytics.geometry import GeometryAnalytics
 from muster.analytics.site_geometry import SiteGeometry
-from muster.config.schema import CameraConfig, MusterConfig, RtspSource
+from muster.config.schema import CameraConfig, FrigateSource, MusterConfig, RtspSource
 from muster.detector.detector import Detector
 from muster.detector.model_manager import (
     DEFAULT_MODEL,
@@ -30,8 +30,9 @@ from muster.detector.model_manager import (
 )
 from muster.detector.onnx_detector import OnnxDetector
 from muster.errors import ConfigError
+from muster.ingest.frigate import FrigateObjects, FrigateTrackSource
 from muster.ingest.rtsp import RtspFrameSource
-from muster.ingest.source import FrameSource
+from muster.ingest.source import FrameSource, TrackSource
 from muster.sampler.sampler import FrameSampler
 from muster.tracker.bytetrack import ByteTrackTracker
 from muster.tracker.tracker import Tracker
@@ -50,9 +51,25 @@ class CameraPipeline:
     analytics: GeometryAnalytics
 
 
-def build_pipeline(config: MusterConfig, camera_id: CameraId) -> CameraPipeline:
+@dataclass(frozen=True, slots=True)
+class TrackPipeline:
+    """A camera whose upstream already detected and tracked (P4.3).
+
+    No detector and no tracker, because there is nothing to run them on — the absence is
+    the point, and a pipeline carrying unused ones would invite somebody to use them.
+    """
+
+    camera_id: CameraId
+    source: TrackSource
+    sampler: FrameSampler
+    analytics: GeometryAnalytics
+
+
+def build_pipeline(config: MusterConfig, camera_id: CameraId) -> CameraPipeline | TrackPipeline:
     """Construct one camera's pipeline, or refuse with a reason that names no secret."""
     camera = _camera(config, camera_id)
+    if isinstance(camera.source, FrigateSource):
+        return _frigate_pipeline(config, camera, camera.source)
     cache_dir = Path(os.environ.get(MODEL_CACHE_ENV_VAR, DEFAULT_MODEL_CACHE)).expanduser()
     model = camera.detector.model or DEFAULT_MODEL
     return CameraPipeline(
@@ -76,6 +93,53 @@ def build_pipeline(config: MusterConfig, camera_id: CameraId) -> CameraPipeline:
     )
 
 
+def _frigate_pipeline(
+    config: MusterConfig, camera: CameraConfig, source: FrigateSource
+) -> TrackPipeline:
+    """Wire a Frigate camera. The broker is site-wide; the topic and name are the camera's."""
+    if not config.frigate.broker:  # pragma: no cover - the schema validator rejects this
+        msg = f"camera {camera.camera_id!r}: no frigate.broker is configured"
+        raise ConfigError(msg)
+    width, height = camera.reference_resolution
+    return TrackPipeline(
+        camera_id=camera.camera_id,
+        source=FrigateTrackSource(
+            camera.camera_id,
+            broker=config.frigate.broker,
+            port=config.frigate.port,
+            topic=source.mqtt_topic,
+            credentials=_credentials(config),
+            objects=FrigateObjects(
+                camera.camera_id,
+                # Frigate's own name for the camera, which the shared events topic makes
+                # load-bearing: it is the only thing saying whose a message is.
+                frigate_camera=source.camera or camera.camera_id,
+                width=width,
+                height=height,
+            ),
+        ),
+        sampler=FrameSampler(target_fps=config.budget.fps_max),
+        analytics=GeometryAnalytics(
+            SiteGeometry.compile(config), dwell_min_s=config.thresholds.dwell_min_s
+        ),
+    )
+
+
+def _credentials(config: MusterConfig) -> tuple[str, str] | None:
+    """Broker credentials, by env-var reference. Names a variable, never its value."""
+    if config.frigate.username_env is None or config.frigate.password_env is None:
+        return None
+    username = os.environ.get(config.frigate.username_env)
+    password = os.environ.get(config.frigate.password_env)
+    if not username or not password:
+        msg = (
+            f"frigate broker credentials: ${config.frigate.username_env} or "
+            f"${config.frigate.password_env} is unset or empty"
+        )
+        raise ConfigError(msg)
+    return (username, password)
+
+
 def _camera(config: MusterConfig, camera_id: CameraId) -> CameraConfig:
     for camera in config.cameras:
         if camera.camera_id == camera_id:
@@ -86,6 +150,8 @@ def _camera(config: MusterConfig, camera_id: CameraId) -> CameraConfig:
 
 def _source(camera: CameraConfig) -> FrameSource:
     if not isinstance(camera.source, RtspSource):
+        # ONVIF only: Frigate returned above, and its absence here is what keeps this
+        # branch honest about what is actually unbuilt.
         msg = (
             f"camera {camera.camera_id!r}: source kind {camera.source.kind.value!r} "
             "is not supported by the engine yet"
