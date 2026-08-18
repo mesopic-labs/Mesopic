@@ -59,6 +59,16 @@ EXAMPLE_CONFIG = REPO_ROOT / "examples" / "muster.yaml"
 
 BUCKET_START = datetime(2026, 8, 16, 9, 30, tzinfo=UTC)
 
+_SCRIPTED_EVENTS = 4
+"""How many events one `emit_then_exit(crossings=1, hits=3)` worker puts.
+
+`drain_once(expected=...)` counts **events, not workers** — every other test here emits
+exactly one event per camera, which makes `len(config.cameras)` look like a worker count
+and is a trap for the next test that emits more. Draining too few returns while the rest
+are still in the pipe: green on a fast box, red on a loaded CI runner, and it fails as an
+empty result rather than as a timeout.
+"""
+
 
 class FakeClock:
     """Both clocks the supervisor reads, wound forward together by hand.
@@ -261,7 +271,9 @@ async def test_closing_a_bucket_writes_its_heatmap_grids_too(
     )
 
     await supervisor.start()
-    await supervisor.drain_once(timeout=5.0, expected=len(config.cameras))
+    every_event = _SCRIPTED_EVENTS * len(config.cameras)
+    drained = await supervisor.drain_once(timeout=5.0, expected=every_event)
+    assert len(drained) == every_event
     clock.advance(60 + CLOSE_LAG_S + 1)
     await supervisor.tick()
     await supervisor.stop()
@@ -287,7 +299,9 @@ async def test_a_heatmap_hit_never_reaches_the_raw_event_log(
     )
 
     await supervisor.start()
-    await supervisor.drain_once(timeout=5.0, expected=len(config.cameras))
+    every_event = _SCRIPTED_EVENTS * len(config.cameras)
+    drained = await supervisor.drain_once(timeout=5.0, expected=every_event)
+    assert len(drained) == every_event
     await supervisor.stop()
 
     logged = store._connection.execute(
