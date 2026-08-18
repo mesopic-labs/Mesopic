@@ -232,3 +232,24 @@ async def test_the_dashboard_renders_a_figure_per_heatmap_zone(
     body = (await client.get("/")).text
     assert 'data-zone="shop-floor"' in body
     assert 'class="floor-grid"' in body
+
+
+async def test_the_board_fragment_names_the_window_it_is_showing(
+    client: httpx.AsyncClient,
+) -> None:
+    """The heatmap island lives outside the swapped fragment and has no other way to
+    learn the range changed. Without this attribute the range chips move the board and
+    silently leave the heatmap on whatever range the page was opened with."""
+    for window in ("1h", "6h", "24h"):
+        body = (await client.get("/fragments/board", params={"window": window})).text
+        assert f'data-window="{window}"' in body
+
+
+async def test_the_heatmap_section_keeps_no_window_of_its_own(
+    client: httpx.AsyncClient,
+) -> None:
+    """One element owns the range. A second copy on the island would have to be kept in
+    step by hand, and the copy nobody updates is the one that disagrees."""
+    body = (await client.get("/", params={"window": "24h"})).text
+    section = body[body.index('class="floors"') : body.index('class="floors"') + 200]
+    assert "data-window" not in section

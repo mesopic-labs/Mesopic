@@ -11,8 +11,14 @@
   them here would tear down and rebuild a canvas every 30 seconds and lose the reader's
   place in the process.
 #}
+{# `data-window` is read by the heatmap island, which lives outside this fragment and
+   has no other way to learn that the range changed. It belongs HERE rather than on the
+   island because this element is what the swap replaces: an attribute on the island
+   would have to be kept in step by hand, and the copy that is never updated is the one
+   that silently disagrees. One element owns the range; everything else reads it. #}
 <div id="board"
      class="board"
+     data-window="{{ window.value }}"
      hx-get="/fragments/board?window={{ window.value }}"
      hx-trigger="every 30s"
      hx-swap="outerHTML">
