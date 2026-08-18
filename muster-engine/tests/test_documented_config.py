@@ -143,6 +143,10 @@ def test_no_document_inlines_a_secret(document: str, documents: dict[str, dict[s
         if isinstance(exporter, dict):
             assert "secret" not in exporter, "webhook secrets are `secret_env` references"
 
+    assert "password" not in config.get("api", {}), (
+        "the dashboard password is a `password_env` reference"
+    )
+
     for camera in config["cameras"]:
         url = camera.get("source", {}).get("url", "")
         if url.startswith("rtsp://") and "@" in url:

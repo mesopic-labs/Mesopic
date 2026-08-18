@@ -34,6 +34,7 @@ from typer.testing import CliRunner
 from muster import cli
 from muster.config import load_config
 from muster.config.schema import ApiConfig, MusterConfig, ZoneConfig
+from muster.errors import ConfigError
 from muster.runner import DATA_DIR_ENV_VAR, Engine, build_server, store_path
 from muster.store.store import Store
 from muster.types import (
@@ -393,13 +394,20 @@ async def test_a_saved_zone_reaches_the_store(store: Store, config_file: Path) -
 
 
 async def test_an_engine_with_no_config_file_cannot_save(
-    store: Store, config: MusterConfig
+    store: Store, config: MusterConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A config handed over as an object has no file to write back to, and says so."""
-    engine = Engine(config, store, entry=run_until_stopped)
+    """A config handed over as an object has no file to write back to, and says so.
+
+    Signed in on purpose. Since P3.10 an unauthenticated caller gets a 503 here too, from
+    the write guard rather than from the missing writer — so without a session this would
+    still pass while proving nothing about the thing it names.
+    """
+    monkeypatch.setenv(PASSWORD_VAR, PASSWORD)
+    engine = Engine(_with_credential(config, PASSWORD_VAR), store, entry=run_until_stopped)
 
     transport = httpx.ASGITransport(app=engine.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        await client.post("/login", data={"password": PASSWORD})
         response = await client.post("/calibrate/front-door", json={"zones": [], "lines": []})
 
     assert response.status_code == 503
@@ -432,3 +440,73 @@ def test_the_command_gives_the_engine_the_config_it_was_pointed_at(
 
     assert result.exit_code == 0, result.output
     assert seen["config_path"] == path
+
+
+# --- The local credential (P3.10) --------------------------------------------
+
+PASSWORD_VAR = "MUSTER_TEST_ADMIN_PASSWORD"  # noqa: S105 - the variable's name, not a password
+PASSWORD = "correct-horse-battery-staple"  # noqa: S105 - a fixture, not a credential
+
+
+def _with_credential(config: MusterConfig, env_var: str | None) -> MusterConfig:
+    return config.model_copy(
+        update={"api": config.api.model_copy(update={"password_env": env_var})}
+    )
+
+
+async def test_the_password_is_resolved_from_the_environment_it_names(
+    store: Store, config: MusterConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`api.password_env` names a variable; the composition root is where it is read.
+
+    Same shape as every other secret in this config — the webhook's signing key and the
+    site token are resolved here too, and never held in the parsed document.
+    """
+    monkeypatch.setenv(PASSWORD_VAR, PASSWORD)
+    engine = Engine(_with_credential(config, PASSWORD_VAR), store, entry=run_until_stopped)
+
+    transport = httpx.ASGITransport(app=engine.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        response = await client.post("/login", data={"password": PASSWORD})
+
+    assert response.status_code == 303
+
+
+def test_a_named_password_variable_that_is_unset_fails_loud(
+    store: Store, config: MusterConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Naming a variable and leaving it empty is a misconfiguration, not "no auth".
+
+    Starting anyway would produce an engine whose writes refuse forever, for a reason
+    visible nowhere — the operator asked for a credential and would have no way to tell
+    it never arrived.
+    """
+    monkeypatch.delenv(PASSWORD_VAR, raising=False)
+
+    with pytest.raises(ConfigError, match=PASSWORD_VAR):
+        Engine(_with_credential(config, PASSWORD_VAR), store, entry=run_until_stopped)
+
+
+def test_a_startup_refusal_never_prints_the_password(
+    store: Store, config: MusterConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The message names the variable. Naming its value is how a secret reaches a log."""
+    monkeypatch.setenv(PASSWORD_VAR, "   ")
+
+    with pytest.raises(ConfigError) as raised:
+        Engine(_with_credential(config, PASSWORD_VAR), store, entry=run_until_stopped)
+
+    assert "   " not in str(raised.value).replace(PASSWORD_VAR, "")
+
+
+async def test_without_a_password_env_the_engine_has_no_credential(
+    store: Store, config: MusterConfig
+) -> None:
+    """The default config, and the reason `muster run` still starts without a password."""
+    engine = Engine(_with_credential(config, None), store, entry=run_until_stopped)
+
+    transport = httpx.ASGITransport(app=engine.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        response = await client.get("/login")
+
+    assert response.status_code == 404

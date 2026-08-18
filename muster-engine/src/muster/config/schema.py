@@ -256,17 +256,25 @@ class StorageConfig(ConfigSection):
 class ApiConfig(ConfigSection):
     """Where the local dashboard and its JSON listen (engine-architecture.md §13).
 
-    §13 asks for "minimal and local" auth and this section is the minimal half: the
-    dashboard carries no credential, so the bind address *is* the access control.
+    §13 asks for "minimal and local" auth and this section carries both halves of it: the
+    bind address is the access control for *reads*, and `password_env` is the credential
+    that guards every write (ADR-0019).
     """
 
     enabled: bool = True
     host: Annotated[str, Field(min_length=1)] = "127.0.0.1"
-    """Loopback by default, because the dashboard is unauthenticated and exposes camera
-    topology and occupancy history. Reaching it from another machine is the operator's
-    deliberate act. In a container this is set to `0.0.0.0` and the port published on the
-    host's loopback instead, which keeps the same boundary one layer out (P3.6)."""
+    """Loopback by default, because the read surface carries no credential and exposes
+    camera topology and occupancy history. Reaching it from another machine is the
+    operator's deliberate act. In a container this is set to `0.0.0.0` and the port
+    published on the host's loopback instead, which keeps the same boundary one layer
+    out (P3.6)."""
     port: Annotated[int, Field(gt=0, le=_MAX_TCP_PORT)] = 8080
+    password_env: Annotated[str, Field(min_length=1)] | None = None
+    """Name of the environment variable holding the operator's password (ADR-0019).
+
+    A name, never the value — the rule every other secret in this file follows. Absent is
+    a legitimate config and does not fail startup: it fails *writes*, so an engine with no
+    credential is one nobody can reconfigure over HTTP."""
 
 
 # --- Exporters and sync -----------------------------------------------------

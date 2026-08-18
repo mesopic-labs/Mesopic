@@ -23,6 +23,7 @@
   const still = stage.querySelector(".still");
   const cameraId = stage.dataset.camera;
   const status = document.querySelector(".saved");
+  const signIn = document.querySelector(".needs-sign-in");
 
   /* Shapes already saved are not loaded back into the editor: a save replaces this
      camera's geometry wholesale, so what is on the canvas is what the camera will have.
@@ -175,6 +176,13 @@
       if (response.ok) {
         say("Saved. Reloading the page to show the new geometry.");
         window.location.reload();
+      } else if (response.status === 401) {
+        // Deliberately NOT a redirect. The geometry only exists in this page until a save
+        // lands, so navigating to the sign-in form would throw away the drawing that
+        // triggered the prompt. The link opens in a new tab, the session cookie is shared
+        // across tabs, and clicking Save again works.
+        say("Sign in to save — your drawing stays on this page.");
+        if (signIn) signIn.hidden = false;
       } else {
         say("The engine refused that geometry (" + response.status + ").");
       }
