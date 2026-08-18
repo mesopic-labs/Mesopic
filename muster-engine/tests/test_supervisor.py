@@ -38,12 +38,21 @@ from scripted_worker import (
 )
 
 from muster.aggregator.aggregator import EXIT_GRACE_S
+from muster.analytics.metrics.heatmap import unpack_counts
 from muster.config.schema import MusterConfig
 from muster.exporters.fanout import ExporterFanout
 from muster.store.store import Store
 from muster.supervisor.handle import STALL_AFTER_S, WorkerEntry, WorkerReport
 from muster.supervisor.supervisor import BUCKET_S, CLOSE_LAG_S, Supervisor
-from muster.types import CameraId, CameraState, MetricName, MetricRow, ScopeId
+from muster.types import (
+    CameraId,
+    CameraState,
+    EventKind,
+    MetricName,
+    MetricRow,
+    ScopeId,
+    ZoneId,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_CONFIG = REPO_ROOT / "examples" / "muster.yaml"
@@ -97,7 +106,7 @@ def config() -> MusterConfig:
             "camera_id": camera,
             "role": "area",
             "polygon": [[0.05, 0.30], [0.95, 0.30], [0.95, 0.95], [0.05, 0.95]],
-            "metrics": ["occupancy"],
+            "metrics": ["occupancy", "heatmap"],
         }
         for camera in cameras
     ]
@@ -235,6 +244,57 @@ async def test_a_bucket_is_closed_once_the_lag_has_elapsed(
     await supervisor.stop()
 
     assert _footfall(store) == [1.0] * len(config.cameras)
+
+
+async def test_closing_a_bucket_writes_its_heatmap_grids_too(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """The grids ride a second call on the same close, so this is the test standing
+    between a working accumulator and a heatmap nobody ever stores. A `metrics_minute`
+    assertion cannot catch it: the scalar rows are written either way."""
+    camera = config.cameras[0].camera_id
+    supervisor = _supervisor(
+        config,
+        store,
+        clock,
+        partial(emit_then_exit, crossings=1, hits=3, hit_zone=f"{camera}-zone"),
+    )
+
+    await supervisor.start()
+    await supervisor.drain_once(timeout=5.0, expected=len(config.cameras))
+    clock.advance(60 + CLOSE_LAG_S + 1)
+    await supervisor.tick()
+    await supervisor.stop()
+
+    grids = store.heatmaps_between(
+        start=BUCKET_START, end=BUCKET_START + timedelta(minutes=2), limit=10
+    )
+    assert [grid.zone_id for grid in grids] == [ZoneId(f"{camera}-zone")]
+    assert unpack_counts(grids[0].counts)[4 * grids[0].grid_w + 3] == 30  # 3 hits x 1.0 s
+
+
+async def test_a_heatmap_hit_never_reaches_the_raw_event_log(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """One row per resident per zone per tick, carrying a cell the table has no column
+    for. Logging them would be the densest write in the engine, for nothing."""
+    camera = config.cameras[0].camera_id
+    supervisor = _supervisor(
+        config,
+        store,
+        clock,
+        partial(emit_then_exit, crossings=1, hits=3, hit_zone=f"{camera}-zone"),
+    )
+
+    await supervisor.start()
+    await supervisor.drain_once(timeout=5.0, expected=len(config.cameras))
+    await supervisor.stop()
+
+    logged = store._connection.execute(
+        "SELECT count(*) FROM events WHERE kind = ?", (EventKind.HEATMAP_HIT.value,)
+    ).fetchone()
+    assert logged == (0,)
+    assert supervisor.skipped_untracked_events >= 3
 
 
 async def test_a_closed_bucket_is_not_written_twice(

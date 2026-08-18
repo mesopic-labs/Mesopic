@@ -20,4 +20,30 @@
   </figure>
   {% endfor %}
 </section>
+
+{#
+  Zone heatmaps. Shells here rather than in the fragment for the same reason the plates
+  are: a canvas inside `#board` would be destroyed and repainted every 30 seconds.
+
+  One figure per zone whose config asked for `heatmap`, built from the config rather than
+  from the data — a zone nobody has walked through yet renders cold, which is the true
+  answer, where omitting the figure would read as "this zone is not being watched".
+#}
+{% if heatmaps %}
+<section class="floors" aria-label="Zone heatmaps" data-window="{{ window.value }}">
+  {% for scope in heatmaps %}
+  <figure class="floor"
+          data-camera="{{ scope.camera_id }}"
+          data-zone="{{ scope.zone_id }}">
+    <figcaption>{{ scope.zone_id }} <span class="floor-camera">{{ scope.camera_id }}</span></figcaption>
+    <canvas class="floor-grid" role="img"
+            aria-label="Foot-point density for {{ scope.zone_id }}"></canvas>
+    <p class="floor-scale">
+      <span class="floor-peak">&mdash;</span>
+      <span class="floor-note">busiest cell</span>
+    </p>
+  </figure>
+  {% endfor %}
+</section>
+{% endif %}
 {% endblock %}

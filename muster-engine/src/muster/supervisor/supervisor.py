@@ -29,6 +29,7 @@ from datetime import UTC, datetime, timedelta
 
 from muster.aggregator.aggregator import EXIT_GRACE_S, Aggregator, bucket_of
 from muster.analytics.metrics import build_registry
+from muster.analytics.metrics.heatmap import HeatmapAccumulator
 from muster.analytics.site_geometry import SiteGeometry
 from muster.config.schema import MusterConfig
 from muster.errors import SnapshotUnavailableError
@@ -36,7 +37,17 @@ from muster.exporters.fanout import ExporterFanout
 from muster.store.store import Store
 from muster.supervisor.handle import WorkerEntry, WorkerHandle, WorkerReport
 from muster.supervisor.worker import run_camera_worker
-from muster.types import CameraId, FrameTs, MinuteBucket, RawEvent
+from muster.types import CameraId, EventKind, FrameTs, MinuteBucket, RawEvent
+
+_DENSE_KINDS = frozenset({EventKind.OCCUPANCY_SAMPLE, EventKind.HEATMAP_HIT})
+"""Sampled state, emitted every tick whether or not anything changed — never logged.
+
+`events` is a log of per-track *transitions*, and these two are neither. An occupancy
+sample names no track at all, and a heatmap hit names one but carries a grid cell the
+table has no column for, at one row per resident per zone per tick — the densest kind the
+engine emits. Both are folded in memory and reduced; the raw log would gain nothing from
+them but size (ADR-0016, and P4.1 for the hit).
+"""
 
 BUCKET_S = 60.0
 
@@ -89,9 +100,11 @@ class Supervisor:
         self._entry = entry
         self._now = now
         self._monotonic = monotonic
+        geometry = SiteGeometry.compile(config)
         self._aggregator = Aggregator(
-            build_registry(SiteGeometry.compile(config)),
+            build_registry(geometry),
             dwell_min_s=config.thresholds.dwell_min_s,
+            heatmaps=HeatmapAccumulator(geometry),
         )
         self._handles = [
             WorkerHandle(camera.camera_id, config=config, entry=entry, monotonic=monotonic)
@@ -104,7 +117,8 @@ class Supervisor:
         self._closed_through: MinuteBucket | None = None
         self._stopping = False
         self.skipped_untracked_events = 0
-        """Events the raw log cannot hold — trackless occupancy samples (ADR-0016)."""
+        """Events the raw log deliberately does not hold — the dense sampled-state kinds,
+        plus any event without a track. See `_DENSE_KINDS`."""
         self.late_events = 0
         """Events for a bucket already closed and forgotten. Dropped, never re-folded."""
         self.restarts = 0
@@ -211,7 +225,7 @@ class Supervisor:
         it rides on the same channel.
         """
         geometry = SiteGeometry.compile(config)
-        self._aggregator.retarget(build_registry(geometry))
+        self._aggregator.retarget(build_registry(geometry), heatmaps=HeatmapAccumulator(geometry))
         for handle in self._handles:
             if handle.is_alive():
                 handle.request_reconfigure(geometry)
@@ -278,9 +292,9 @@ class Supervisor:
                 self.late_events += 1
                 continue
             self._aggregator.ingest(event)
-            if event.track_id is None:
-                # The raw log is a log of per-track facts and `events.track_id` is NOT
-                # NULL. Counting the skip is what keeps the omission visible (ADR-0016).
+            if event.kind in _DENSE_KINDS or event.track_id is None:
+                # The raw log is a log of per-track transitions, and `events.track_id` is
+                # NOT NULL. Counting the skip is what keeps the omission visible.
                 self.skipped_untracked_events += 1
             else:
                 loggable.append(event)
@@ -299,6 +313,7 @@ class Supervisor:
     async def _close(self, buckets: list[MinuteBucket]) -> None:
         for bucket in buckets:
             rows = self._aggregator.close_bucket(bucket)
+            grids = self._aggregator.close_grids(bucket)
             if rows:
                 # Written on the loop thread, not in an executor. §9 says the blocking
                 # SQLite calls belong in one, but `sqlite3` connections are thread-affine
@@ -313,6 +328,11 @@ class Supervisor:
                 # believe. The fan-out contains its own failures, so a dead broker cannot
                 # turn into a missed bucket here (§12).
                 self.exporters.on_metrics(rows)
+            if grids:
+                # Not fanned out: an exporter takes scalar rows, and a 2 KB blob per zone
+                # per minute is not something an MQTT topic or a Prometheus gauge has any
+                # use for. The dashboard and the sync client read it from the store.
+                self._store.upsert_heatmaps(grids)
             self._closed_through = bucket
             self._aggregator.forget_before(MinuteBucket(bucket + timedelta(seconds=BUCKET_S)))
 

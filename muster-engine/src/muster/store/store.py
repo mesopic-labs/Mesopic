@@ -36,11 +36,13 @@ from muster.config.schema import MusterConfig
 from muster.errors import StoreError
 from muster.types import (
     CameraId,
+    HeatmapRow,
     MetricName,
     MetricRow,
     MinuteBucket,
     RawEvent,
     ScopeId,
+    ZoneId,
 )
 
 BASELINE_SCHEMA_VERSION = 1
@@ -379,6 +381,79 @@ class Store:
         )
         return [_row_from(record) for record in cursor.fetchall()]
 
+    # --- Heatmaps -----------------------------------------------------------
+
+    def upsert_heatmaps(self, rows: Sequence[HeatmapRow]) -> None:
+        """Idempotent upsert on `(camera_id, zone_id, bucket)`, and un-synced on rewrite.
+
+        A second table rather than a column on `metrics_minute`, for the reason §11 gives:
+        a grid is a blob on a different key, and keeping it out keeps the scalar series
+        queryable. The re-write rule is the same one `upsert_metrics` follows — a
+        corrected grid has to ship, or the cloud keeps the one it replaced.
+        """
+        try:
+            with self._transaction() as connection:
+                connection.executemany(
+                    """INSERT INTO heatmap_minute
+                           (camera_id, zone_id, bucket, grid_w, grid_h, counts, synced_at)
+                       VALUES (?, ?, ?, ?, ?, ?, NULL)
+                       ON CONFLICT(camera_id, zone_id, bucket) DO UPDATE SET
+                           grid_w = excluded.grid_w,
+                           grid_h = excluded.grid_h,
+                           counts = excluded.counts,
+                           synced_at = NULL""",
+                    [
+                        (
+                            row.camera_id,
+                            row.zone_id,
+                            row.bucket.isoformat(),
+                            row.grid_w,
+                            row.grid_h,
+                            row.counts,
+                        )
+                        for row in rows
+                    ],
+                )
+        except sqlite3.Error:
+            msg = "cannot write heatmap grids"
+            raise StoreError(msg) from None
+
+    def heatmaps_between(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        limit: int,
+        camera_id: CameraId | None = None,
+        zone_id: ZoneId | None = None,
+    ) -> list[HeatmapRow]:
+        """The stored minutes a heatmap view sums: `[start, end)`, oldest first.
+
+        Raw and undecayed, as stored. Decay and normalization are the reader's, so any
+        window can be rebuilt from the same rows (algorithms.md §10).
+
+        `limit` has no default for the same reason `metrics_between`'s does not, and it
+        matters more here: these rows are 2 KB each, not 50 bytes.
+        """
+        clauses = ["bucket >= ?", "bucket < ?"]
+        parameters: list[object] = [start.isoformat(), end.isoformat()]
+        if camera_id is not None:
+            clauses.append("camera_id = ?")
+            parameters.append(camera_id)
+        if zone_id is not None:
+            clauses.append("zone_id = ?")
+            parameters.append(zone_id)
+        parameters.append(limit)
+        cursor = self._connection.execute(
+            f"""SELECT camera_id, zone_id, bucket, grid_w, grid_h, counts
+                FROM heatmap_minute
+                WHERE {" AND ".join(clauses)}
+                ORDER BY bucket, camera_id, zone_id
+                LIMIT ?""",  # noqa: S608 - every clause is a fixed string; values are bound
+            parameters,
+        )
+        return [_heatmap_from(record) for record in cursor.fetchall()]
+
     def unsynced_count(self) -> int:
         """How many rows have never reached the cloud. Reported by `/healthz` (§15)."""
         (count,) = self._connection.execute(
@@ -486,4 +561,16 @@ def _row_from(record: tuple[str, str, str, str, float, float | None, int]) -> Me
         value=value,
         staff_value=staff_value,
         sample_count=sample_count,
+    )
+
+
+def _heatmap_from(record: tuple[str, str, str, int, int, bytes]) -> HeatmapRow:
+    camera_id, zone_id, bucket, grid_w, grid_h, counts = record
+    return HeatmapRow(
+        camera_id=CameraId(camera_id),
+        zone_id=ZoneId(zone_id),
+        bucket=MinuteBucket(datetime.fromisoformat(bucket)),
+        grid_w=grid_w,
+        grid_h=grid_h,
+        counts=counts,
     )

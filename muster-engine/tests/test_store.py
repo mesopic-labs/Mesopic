@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from muster.analytics.metrics.heatmap import pack_counts, unpack_counts
 from muster.config.schema import MusterConfig
 from muster.errors import StoreError
 from muster.store.store import BASELINE_SCHEMA_VERSION, Store
@@ -29,6 +30,7 @@ from muster.types import (
     CameraId,
     EventKind,
     FrameTs,
+    HeatmapRow,
     LineId,
     MetricName,
     MetricRow,
@@ -604,3 +606,67 @@ def test_the_metrics_table_columns_are_frozen(store: Store) -> None:
     }
 
     assert columns == expected
+
+
+# --- Heatmaps ---------------------------------------------------------------
+
+
+def _grid(hot: float, *, bucket: MinuteBucket = BUCKET) -> HeatmapRow:
+    cells = [0.0] * 16
+    cells[5] = hot
+    return HeatmapRow(
+        camera_id=FRONT_DOOR,
+        bucket=bucket,
+        zone_id=ZoneId("shop-floor"),
+        grid_w=4,
+        grid_h=4,
+        counts=pack_counts(cells, width=4, height=4),
+    )
+
+
+def test_a_grid_survives_a_round_trip(store: Store) -> None:
+    store.upsert_heatmaps([_grid(120.0)])
+    (read,) = store.heatmaps_between(start=BUCKET, end=LATER + timedelta(minutes=1), limit=10)
+    assert unpack_counts(read.counts)[5] == 120
+    assert (read.grid_w, read.grid_h) == (4, 4)
+    assert read.bucket == BUCKET
+
+
+def test_re_folding_a_minute_replaces_its_grid_rather_than_adding_one(store: Store) -> None:
+    """The same property `upsert_metrics` has, and it matters more here: a bucket is
+    re-folded whenever a late event lands in it (P2.6)."""
+    store.upsert_heatmaps([_grid(120.0)])
+    store.upsert_heatmaps([_grid(300.0)])
+    rows = store.heatmaps_between(start=BUCKET, end=LATER, limit=10)
+    assert len(rows) == 1
+    assert unpack_counts(rows[0].counts)[5] == 300
+
+
+def test_a_rewritten_grid_ships_again(store: Store) -> None:
+    """A corrected grid the cloud already has must re-sync, or it keeps the old one."""
+    store.upsert_heatmaps([_grid(120.0)])
+    store._connection.execute("UPDATE heatmap_minute SET synced_at = '2026-08-18T10:00:00+00:00'")
+    store.upsert_heatmaps([_grid(300.0)])
+    (synced,) = store._connection.execute("SELECT synced_at FROM heatmap_minute").fetchone()
+    assert synced is None
+
+
+def test_a_grid_is_scoped_to_its_zone(store: Store) -> None:
+    store.upsert_heatmaps([_grid(120.0)])
+    assert (
+        store.heatmaps_between(start=BUCKET, end=LATER, limit=10, zone_id=ZoneId("till-queue"))
+        == []
+    )
+
+
+def test_dropping_a_camera_from_config_does_not_delete_its_grids(
+    store: Store, config: MusterConfig
+) -> None:
+    """The same rule the scalar history follows, and for the same reason: `heatmap_minute`
+    cascades from `cameras`, so `apply_config` upserting rather than deleting is the only
+    thing standing between a tidied-up `muster.yaml` and months of lost history."""
+    store.upsert_heatmaps([_grid(120.0)])
+
+    store.apply_config(config.model_copy(update={"cameras": [config.cameras[1]]}))
+
+    assert len(store.heatmaps_between(start=BUCKET, end=LATER, limit=10)) == 1

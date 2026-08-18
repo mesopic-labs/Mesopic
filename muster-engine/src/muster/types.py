@@ -69,6 +69,14 @@ NormPoint = tuple[float, float]
 PixelBox = tuple[int, int, int, int]
 """``(x1, y1, x2, y2)`` in inference-resolution pixels."""
 
+GridCell = tuple[int, int]
+"""``(column, line)`` in a heatmap grid, discretized from a ``NormPoint``.
+
+Frame-normalized, never zone-relative: ``heatmap_minute`` stores ``grid_w``/``grid_h``
+and no origin, so a zone-relative grid could not be rendered back after the calibration
+editor moved the zone (algorithms.md §10, engine-architecture.md §11).
+"""
+
 BgrImage = NDArray[np.uint8]
 """HxWx3 BGR. Its lifetime is one pipeline tick — see ``DecodedFrame``."""
 
@@ -268,9 +276,18 @@ class RawEvent:
     """The wall-clock interval this sample represents, in seconds — the gap since the
     previous sampled frame on the same camera.
 
-    Set on ``OCCUPANCY_SAMPLE`` and nowhere else. It is what makes a state metric
-    honest: the adaptive sampler slows down when the scene is busy, so an estimator that
-    averages over *samples* systematically under-weights the rush (algorithms.md §0.6).
+    Set on ``OCCUPANCY_SAMPLE`` and on ``HEATMAP_HIT``, and nowhere else. It is what
+    makes a state metric honest: the adaptive sampler slows down when the scene is busy,
+    so an estimator that averages over *samples* systematically under-weights the rush
+    (algorithms.md §0.6).
+    """
+    cell: GridCell | None = None
+    """Which heatmap cell the foot-point fell in. Set on ``HEATMAP_HIT`` and nowhere else.
+
+    Analytics discretizes rather than shipping the foot-point, because the grid is a
+    property of the site's geometry and the aggregator has none. The ``events`` table has
+    no column for it — like a dwell's duration, a hit is folded in memory and never
+    appended to the raw log, which is also what keeps the densest event kind off disk.
     """
     is_staff: bool = False
 
@@ -291,3 +308,25 @@ class MetricRow:
     value: float
     staff_value: float | None = None
     sample_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class HeatmapRow:
+    """One zone's density grid for one minute — the other durable unit.
+
+    Deliberately not a ``MetricRow``. A grid is a blob on a different natural key
+    (``camera_id, zone_id, bucket``) in a different table, and widening ``MetricRow`` to
+    carry one would put a case every scalar metric never uses into every plugin's
+    signature. Keeping ``metrics_minute`` scalar is why engine-architecture.md §11 split
+    the tables in the first place.
+
+    ``counts`` is packed little-endian ``uint16``, ``grid_w * grid_h`` cells in row-major
+    order, in **deciseconds of foot-point presence** — never a frame count (§10).
+    """
+
+    camera_id: CameraId
+    bucket: MinuteBucket
+    zone_id: ZoneId
+    grid_w: int
+    grid_h: int
+    counts: bytes

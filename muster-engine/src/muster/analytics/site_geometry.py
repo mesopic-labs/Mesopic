@@ -24,6 +24,7 @@ from muster.config.schema import LineConfig, MusterConfig, ZoneConfig
 from muster.types import (
     CameraId,
     Direction,
+    GridCell,
     LineId,
     MetricName,
     NormPoint,
@@ -33,6 +34,18 @@ from muster.types import (
 
 Bounds = tuple[float, float, float, float]
 """``(min_x, min_y, max_x, max_y)`` — a polygon's axis-aligned bounding box."""
+
+GRID_W = 32
+GRID_H = 32
+"""The heatmap grid, fixed rather than configurable (algorithms.md §10's parameter table
+calls it expert-level, and the plan requires a bounded blob). 32x32 `uint16` is 2 KB per
+zone per minute, which is what the coarse sync cadence is sized against.
+
+The grid spans the **whole frame**, not the zone's bounding box. That is forced by the
+schema rather than chosen: `heatmap_minute` stores `grid_w`/`grid_h` and no origin, so a
+zone-relative grid would silently misrender against every stored minute the moment the
+calibration editor moved the zone. Cells outside the polygon simply stay zero.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,3 +219,20 @@ def _point_in_polygon(point: NormPoint, polygon: tuple[NormPoint, ...]) -> bool:
                 inside = not inside
         previous = current
     return inside
+
+
+def cell_of(point: NormPoint, *, grid_w: int = GRID_W, grid_h: int = GRID_H) -> GridCell:
+    """Which grid cell a normalized foot-point falls in (algorithms.md §10).
+
+    Lives here, with the other normalized-space math, so the emitter (analytics) and the
+    reducer (the heatmap accumulator) discretize identically — a grid built with one
+    convention and rendered with another is off by a cell everywhere and looks plausible.
+
+    The far edge is clamped rather than allowed to overflow: `floor(1.0 * 32)` is `32`,
+    one past the last cell, and a foot-point exactly on the frame's right or bottom edge
+    is a real observation rather than an error.
+    """
+    x, y = point
+    column = min(math.floor(x * grid_w), grid_w - 1)
+    line = min(math.floor(y * grid_h), grid_h - 1)
+    return (max(column, 0), max(line, 0))

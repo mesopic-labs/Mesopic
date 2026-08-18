@@ -26,11 +26,13 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from muster.analytics.metrics.heatmap import HeatmapAccumulator
 from muster.analytics.metrics.registry import MetricRegistry
 from muster.types import (
     CameraId,
     EventKind,
     FrameTs,
+    HeatmapRow,
     MetricRow,
     MinuteBucket,
     RawEvent,
@@ -77,8 +79,10 @@ class Aggregator:
         *,
         dwell_min_s: float,
         exit_grace_s: float = EXIT_GRACE_S,
+        heatmaps: HeatmapAccumulator | None = None,
     ) -> None:
         self._registry = registry
+        self._heatmaps = heatmaps
         self._dwell_min_s = dwell_min_s
         self._exit_grace = timedelta(seconds=exit_grace_s)
         self._buckets: dict[MinuteBucket, list[RawEvent]] = defaultdict(list)
@@ -162,15 +166,36 @@ class Aggregator:
             return []
         return self._registry.reduce_all(list(events), bucket)
 
-    def retarget(self, registry: MetricRegistry) -> None:
+    def close_grids(self, bucket: MinuteBucket) -> list[HeatmapRow]:
+        """The same minute's heatmap grids, folded from the same retained events.
+
+        Separate from `close_bucket` because the two produce different row types bound
+        for different tables, and a `MetricRow` cannot carry a blob. Both fold the same
+        retained events, so both are equally re-foldable — closing twice returns the same
+        grids rather than doubled ones.
+
+        Without an accumulator this is empty rather than an error: a site whose zones
+        never asked for `heatmap` has no grids, which is not a failure to have any.
+        """
+        events = self._buckets.get(bucket)
+        if not events or self._heatmaps is None:
+            return []
+        return self._heatmaps.fold(list(events), bucket)
+
+    def retarget(self, registry: MetricRegistry, *, heatmaps: HeatmapAccumulator | None) -> None:
         """Adopt plugins built from edited geometry (P3.8).
 
         Open buckets keep their events and are reduced by the new registry when they
         close. That is the honest reading: a zone the operator has just drawn should
         count the people already standing in it, and one they deleted should stop
         counting mid-minute rather than emit a final partial value nobody asked for.
+
+        `heatmaps` is not optional-by-omission: a caller that passed an accumulator once
+        and forgets it here would silently stop accumulating on the first geometry edit,
+        which is the kind of failure that shows up as a cold heatmap a week later.
         """
         self._registry = registry
+        self._heatmaps = heatmaps
 
     def pending_buckets(self) -> list[MinuteBucket]:
         """Buckets holding events, oldest first. The supervisor's closing cursor."""
