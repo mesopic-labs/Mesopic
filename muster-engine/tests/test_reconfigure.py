@@ -62,6 +62,7 @@ def _config(zones: list[dict[str, Any]]) -> MusterConfig:
                 },
             ],
             "lines": [],
+            "frigate": {"broker": "mosquitto"},
             "zones": zones,
         }
     )

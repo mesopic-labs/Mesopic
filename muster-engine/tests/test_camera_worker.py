@@ -257,14 +257,26 @@ def test_a_missing_url_env_var_is_refused_without_naming_its_value(
 def test_an_unsupported_source_is_refused_without_leaking_the_url(
     raw_config: dict[str, Any],
 ) -> None:
-    """A Frigate source is P4.3's, and an RTSP URL carries the camera's credentials."""
+    """ONVIF is the one kind still unbuilt, and an RTSP URL carries the camera's
+    credentials — so the refusal names the kind and never a value.
+
+    This asserted Frigate's refusal until P4.3 built it. The camera is switched rather
+    than the test deleted: what is worth keeping is that an unsupported kind refuses
+    *without* printing a URL, and that outlives whichever kind is currently unsupported.
+    """
+    raw_config["cameras"][1]["source"] = {
+        "kind": "onvif",
+        "host": "192.0.2.10",
+        "username_env": "MUSTER_TILL_USER",
+        "password_env": "MUSTER_TILL_PASSWORD",
+    }
     config = MusterConfig.model_validate(raw_config)
 
     with pytest.raises(ConfigError) as exc_info:
         build_pipeline(config, CameraId("till"))
 
     assert "user:pass@" not in str(exc_info.value)
-    assert "frigate" in str(exc_info.value).lower()
+    assert "onvif" in str(exc_info.value).lower()
 
 
 def test_an_unknown_camera_is_refused(raw_config: dict[str, Any]) -> None:

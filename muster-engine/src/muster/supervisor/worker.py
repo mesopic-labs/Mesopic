@@ -23,7 +23,7 @@ from muster.analytics.geometry import GeometryAnalytics
 from muster.config.schema import MusterConfig
 from muster.detector.detector import Detector
 from muster.errors import StreamDropped
-from muster.ingest.source import FrameSource
+from muster.ingest.source import FrameSource, TrackSource
 from muster.sampler.sampler import FrameSampler
 from muster.supervisor.backpressure import Backpressure, Outbox, Sink
 from muster.supervisor.control import (
@@ -35,7 +35,7 @@ from muster.supervisor.control import (
     Stop,
     WorkerChannels,
 )
-from muster.supervisor.pipeline import build_pipeline
+from muster.supervisor.pipeline import TrackPipeline, build_pipeline
 from muster.supervisor.snapshot import encode_snapshot
 from muster.tracker.tracker import Tracker
 from muster.types import CameraId, DecodedFrame, FrameTs, RawEvent
@@ -185,6 +185,68 @@ def camera_loop(
     return stats
 
 
+def track_loop(
+    camera_id: CameraId,
+    *,
+    source: TrackSource,
+    sampler: FrameSampler,
+    analytics: GeometryAnalytics,
+    sink: Sink[RawEvent],
+    fps_min: float,
+    fps_max: float,
+    outbox_size: int = OUTBOX_SIZE,
+    control: Queue[ControlMessage] | None = None,
+    heartbeats: Sink[Heartbeat] | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> LoopStats:
+    """Run one camera whose upstream already detected and tracked (P4.3).
+
+    The same loop as `camera_loop` with the middle removed: no decode, no detect, no
+    track. What is left is the part that was never about frames — sample, run geometry,
+    emit, shed under pressure — so the two share their outbox, their backpressure and
+    their heartbeat rather than growing second versions of each.
+
+    The sampler still applies. Frigate's publish rate is not ours to set, but how often we
+    run geometry is, and that is the CPU the budget is about.
+
+    **A snapshot request is ignored here, because there is no frame to answer it with.**
+    The calibration route refuses a Frigate camera before it ever sends one, so this is
+    the backstop rather than the message: a request that did arrive costs one unanswered
+    reply and never a stalled camera.
+    """
+    stats = LoopStats()
+    outbox: Outbox[RawEvent] = Outbox(maxlen=outbox_size)
+    pressure = Backpressure(sampler, fps_min=fps_min, fps_max=fps_max, start_fps=fps_max)
+    beats = HeartbeatEmitter(heartbeats, monotonic=monotonic)
+    try:
+        for ts, tracks in source.ticks():
+            message = _next_message(control)
+            if isinstance(message, Stop):
+                break
+            if isinstance(message, Reconfigure):
+                for event in analytics.reconfigure(message.geometry, camera_id=camera_id, ts=ts):
+                    outbox.push(event)
+                    stats.events_emitted += 1
+            if not sampler.is_due(ts):
+                continue
+            stats.frames_admitted += 1
+            beats.note_admitted(ts)
+
+            for event in analytics.on_tracks(camera_id, tracks, ts=ts):
+                outbox.push(event)
+                stats.events_emitted += 1
+
+            outbox.flush(sink)
+            pressure.observe(under_pressure=outbox.under_pressure)
+    except StreamDropped:
+        stats.stream_dropped = True
+    finally:
+        outbox.flush(sink)
+        stats.dropped_events = outbox.dropped
+        source.close()
+    return stats
+
+
 def _next_message(control: Queue[ControlMessage] | None) -> ControlMessage | None:
     if control is None:
         return None
@@ -224,8 +286,25 @@ def _reply(snapshots: Queue[SnapshotReply] | None, message: Snapshot, frame: Dec
 
 
 def run_camera_worker(camera_id: CameraId, config: MusterConfig, channels: WorkerChannels) -> None:
-    """Entry point for the per-camera process. Blocks until told to stop."""
+    """Entry point for the per-camera process. Blocks until told to stop.
+
+    Which loop runs is decided by what the source can hand over, not by a flag: a Frigate
+    camera has tracks and no frames, so there is nothing for the detector to be given.
+    """
     pipeline = build_pipeline(config, camera_id)
+    if isinstance(pipeline, TrackPipeline):
+        track_loop(
+            camera_id,
+            source=pipeline.source,
+            sampler=pipeline.sampler,
+            analytics=pipeline.analytics,
+            sink=channels.events,
+            fps_min=config.budget.fps_min,
+            fps_max=config.budget.fps_max,
+            control=channels.control,
+            heartbeats=channels.heartbeats,
+        )
+        return
     camera_loop(
         camera_id,
         source=pipeline.source,

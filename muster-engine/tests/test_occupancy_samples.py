@@ -67,6 +67,7 @@ def _config(zones: list[dict[str, Any]]) -> MusterConfig:
                     "reference_resolution": [1920, 1080],
                 },
             ],
+            "frigate": {"broker": "mosquitto"},
             "zones": zones,
         }
     )

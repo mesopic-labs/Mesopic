@@ -146,7 +146,16 @@ class FrigateSource(ConfigSection):
     """Frigate has already detected; we consume its objects over MQTT (ADR-0006)."""
 
     kind: Literal[SourceKind.FRIGATE]
-    mqtt_topic: str
+    mqtt_topic: str = "frigate/events"
+    """Where Frigate publishes objects. Its default carries **every** camera on the box,
+    which is why `camera` below is what decides whose messages these are."""
+    camera: str | None = None
+    """Frigate's own name for this camera, when it differs from `camera_id`.
+
+    The events topic is shared, so the payload's `camera` field is the only thing that
+    says which camera a message is about — the topic cannot. Defaults to `camera_id`,
+    which is right whenever the two systems were named consistently.
+    """
 
 
 CameraSource = Annotated[RtspSource | OnvifSource | FrigateSource, Field(discriminator="kind")]
@@ -330,6 +339,24 @@ class CsvExporterConfig(ConfigSection):
         return self
 
 
+class FrigateConfig(ConfigSection):
+    """How to reach the Frigate broker (ADR-0006, ADR-0022).
+
+    Site-wide rather than per camera, because a site runs one Frigate; the *topic* stays
+    on the camera because that is the part that differs.
+
+    Deliberately **not** `exporters.mqtt`: a site can consume Frigate without publishing
+    anything, and reading ingest configuration out of an exporter would mean turning on a
+    publisher to make a camera work.
+    """
+
+    broker: str | None = None
+    port: Annotated[int, Field(gt=0, le=65535)] = 1883
+    username_env: str | None = None
+    password_env: str | None = None
+    """By reference, never inline — a broker password is a secret like any other."""
+
+
 class ExportersConfig(ConfigSection):
     mqtt: MqttExporterConfig = Field(default_factory=MqttExporterConfig)
     prometheus: PrometheusExporterConfig = Field(default_factory=PrometheusExporterConfig)
@@ -372,6 +399,7 @@ class MusterConfig(ConfigSection):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     exporters: ExportersConfig = Field(default_factory=ExportersConfig)
+    frigate: FrigateConfig = Field(default_factory=FrigateConfig)
     cloud_sync: CloudSyncConfig = Field(default_factory=CloudSyncConfig)
 
     @model_validator(mode="after")
@@ -380,6 +408,21 @@ class MusterConfig(ConfigSection):
         _reject_duplicates("camera_id", [camera.camera_id for camera in self.cameras])
         _reject_duplicates("line_id", [line.line_id for line in self.lines])
         _reject_duplicates("zone_id", [zone.zone_id for zone in self.zones])
+        return self
+
+    @model_validator(mode="after")
+    def _a_frigate_camera_needs_a_broker(self) -> Self:
+        """Refuse at load rather than let the worker die in a restart loop.
+
+        A `kind: frigate` camera with nowhere to connect is not a camera that degrades —
+        it is one that can never produce a single event, and the honest place to say so is
+        where the operator is still looking at the error.
+        """
+        frigate = [camera for camera in self.cameras if isinstance(camera.source, FrigateSource)]
+        if frigate and not self.frigate.broker:
+            named = ", ".join(sorted(camera.camera_id for camera in frigate))
+            msg = f"camera(s) {named} use Frigate but no frigate.broker is set"
+            raise ValueError(msg)
         return self
 
     @model_validator(mode="after")

@@ -69,6 +69,7 @@ def _config(*, lines: list[dict[str, Any]], zones: list[dict[str, Any]]) -> Must
                     "reference_resolution": [1920, 1080],
                 },
             ],
+            "frigate": {"broker": "mosquitto"},
             "lines": lines,
             "zones": zones,
         }
