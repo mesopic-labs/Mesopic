@@ -283,10 +283,9 @@ def create_app(
 
     def _board_context(window: BoardWindow) -> dict[str, Any]:
         end = clock()
+        uptime_s = monotonic() - started_at
         rows = store.metrics_between(start=end - window.span, end=end, limit=MAX_LIMIT)
-        health = _health(
-            current(), store, reports=camera_reports(), uptime_s=monotonic() - started_at
-        )
+        health = _health(current(), store, reports=camera_reports(), uptime_s=uptime_s)
         return {
             "site_id": current().site.site_id,
             "window": window,
@@ -302,7 +301,8 @@ def create_app(
             "exposure": exposure_of(rows, end=end, window=window),
             "health": health,
             "freshness": freshness_for(health.cameras, now=end),
-            "uptime": human_duration(monotonic() - started_at),
+            "uptime": human_duration(uptime_s),
+            "uptime_s": uptime_s,
             "heatmaps": heatmap_scopes(current()),
         }
 

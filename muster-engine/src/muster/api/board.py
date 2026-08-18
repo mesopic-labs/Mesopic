@@ -204,6 +204,18 @@ class CameraFreshness:
     state: CameraState
     age: str | None
     effective_fps: float | None
+    age_s: float | None = None
+    """The same age as a number, for the board's client-side ticker.
+
+    Rendered text alone freezes: a row saying `0s ago` keeps saying it for the whole
+    30-second poll interval, so a camera that dies a second after a swap still reads as
+    the freshest thing on the page until the next one lands. The browser ages this
+    locally between swaps and re-syncs from the server on each one.
+
+    `None` when `age` is `None`, and the two must stay in step — a ticker handed a number
+    for a camera that has never sent a frame would render `0s` where the server
+    deliberately renders an em dash.
+    """
 
 
 def freshness_for(cameras: Sequence[CameraHealth], *, now: datetime) -> tuple[CameraFreshness, ...]:
@@ -219,6 +231,9 @@ def freshness_for(cameras: Sequence[CameraHealth], *, now: datetime) -> tuple[Ca
             state=camera.state,
             age=None if camera.last_frame_ts is None else _age(camera.last_frame_ts, now),
             effective_fps=camera.effective_fps,
+            age_s=None
+            if camera.last_frame_ts is None
+            else max((now - camera.last_frame_ts).total_seconds(), 0.0),
         )
         for camera in cameras
     )

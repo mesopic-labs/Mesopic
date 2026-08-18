@@ -579,3 +579,119 @@ async def test_the_fragment_names_a_stalled_camera(config: MusterConfig, store: 
 
     assert "stalled" in text
     assert "4m 0s ago" in text
+
+
+# --- The live durations -----------------------------------------------------
+
+
+def test_freshness_carries_the_age_as_a_number_as_well_as_text() -> None:
+    """The board's ticker ages the number between swaps; the text is the first frame."""
+    seen = datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
+    (fresh,) = freshness_for(
+        [
+            CameraHealth(
+                camera_id=CameraId("front-door"),
+                state=CameraState.STREAMING,
+                last_frame_ts=FrameTs(seen),
+                consecutive_failures=0,
+                effective_fps=2.5,
+            )
+        ],
+        now=seen + timedelta(seconds=90),
+    )
+    assert fresh.age == "1m 30s"
+    assert fresh.age_s == pytest.approx(90.0)
+
+
+def test_a_camera_that_never_reported_carries_no_number_to_tick() -> None:
+    """The em dash must not be tickable into `0s`. A ticker handed a number for a camera
+    that has never sent a frame renders the freshest thing on the page out of nothing."""
+    (fresh,) = freshness_for(
+        [
+            CameraHealth(
+                camera_id=CameraId("front-door"),
+                state=CameraState.CONNECT,
+                last_frame_ts=None,
+                consecutive_failures=0,
+                effective_fps=None,
+            )
+        ],
+        now=datetime(2026, 8, 18, 10, 0, tzinfo=UTC),
+    )
+    assert fresh.age is None
+    assert fresh.age_s is None
+
+
+def test_a_clock_skewed_into_the_future_ages_to_zero_not_below() -> None:
+    """Same rule the rendered text already follows: a frame from the future is a skewed
+    camera clock, and `-30s ago` would be a bug report about the dashboard."""
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
+    (fresh,) = freshness_for(
+        [
+            CameraHealth(
+                camera_id=CameraId("front-door"),
+                state=CameraState.STREAMING,
+                last_frame_ts=FrameTs(now + timedelta(seconds=30)),
+                consecutive_failures=0,
+                effective_fps=2.5,
+            )
+        ],
+        now=now,
+    )
+    assert fresh.age_s == 0.0
+
+
+@pytest.mark.parametrize(
+    ("seconds", "rendered"),
+    [
+        (0.0, "0s"),
+        (0.4, "0s"),
+        (59.9, "59s"),
+        (60.0, "1m 0s"),
+        (3599.0, "59m 59s"),
+        (3600.0, "1h 0m"),
+        (51720.4, "14h 22m"),
+    ],
+)
+def test_human_duration_boundaries_the_ticker_mirrors(seconds: float, rendered: str) -> None:
+    """`humanDuration` in `board.js` is a hand copy of this function, because a live
+    ticker cannot call the server every second. These cases pin the contract it copies:
+    if one changes here, the browser starts disagreeing with the frame it was handed.
+    """
+    assert human_duration(seconds) == rendered
+
+
+async def test_the_fragment_carries_the_numbers_the_ticker_needs(
+    config: MusterConfig, store: Store
+) -> None:
+    """Without these attributes the ticker has nothing to age and the durations freeze
+    again — silently, because the page still renders correct-looking numbers once."""
+    seen = datetime.now(UTC) - timedelta(seconds=5)
+
+    def reporting() -> dict[CameraId, WorkerReport]:
+        return {
+            FRONT_DOOR: WorkerReport(
+                state=CameraState.STREAMING,
+                consecutive_failures=0,
+                last_frame_ts=FrameTs(seen),
+                effective_fps=2.5,
+            )
+        }
+
+    app = create_app(config=config, store=store, camera_reports=reporting)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        body = (await client.get("/fragments/board")).text
+
+    assert "data-uptime-s=" in body
+    assert "data-age-s=" in body
+
+
+async def test_a_camera_with_no_frame_yet_carries_no_age_attribute(
+    client: httpx.AsyncClient,
+) -> None:
+    """`_all_streaming` reports no `last_frame_ts`, so both cameras render an em dash.
+    The attribute must be absent, not zero — the ticker keys off its presence."""
+    body = (await client.get("/fragments/board")).text
+    assert "data-age-s=" not in body
+    assert "data-uptime-s=" in body

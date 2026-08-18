@@ -121,7 +121,69 @@
     }
   };
 
+  /* ---------- the live durations ----------
+   *
+   * Uptime and each camera's frame age are durations the server renders once per swap.
+   * Left alone they freeze: a row reading `0s ago` keeps reading `0s ago` for the whole
+   * 30-second poll interval, so a camera that dies a second after a swap stays the
+   * freshest thing on the page until the next one lands. That is the liveness indicator
+   * being least honest exactly when it matters.
+   *
+   * So the server sends the number beside the text and the browser ages it locally. The
+   * browser clock is used ONLY as a stopwatch — elapsed since the last swap — and never
+   * as a calendar, so a skewed client clock cannot invent freshness. Every swap re-seeds
+   * the baseline from the server, so the display cannot drift out of step either. */
+
+  const TICK_MS = 1000;
+
+  /* A faithful mirror of `human_duration` in `api/board.py` — the coarsest two units
+   * that still say something. Kept identical on purpose: the server renders the first
+   * frame of every swap and this renders every one after it, so a divergence would show
+   * up as the number changing format for no reason a second after it appears.
+   * `test_human_duration_boundaries_the_ticker_mirrors` pins the cases below. */
+  const humanDuration = (seconds) => {
+    const whole = Math.max(Math.trunc(seconds), 0);
+    const hours = Math.floor(whole / 3600);
+    const minutes = Math.floor((whole % 3600) / 60);
+    const secs = whole % 60;
+    if (hours) return `${hours}h ${minutes}m`;
+    if (minutes) return `${minutes}m ${secs}s`;
+    return `${secs}s`;
+  };
+
+  /** Elements being aged, with the value and the moment the server vouched for it. */
+  let live = [];
+
+  const reseed = () => {
+    const at = performance.now();
+    const uptime = document.querySelector("[data-uptime-s]");
+    const ages = document.querySelectorAll(".age[data-age-s]");
+
+    live = [];
+    if (uptime) {
+      live.push({ node: uptime, base: Number(uptime.dataset.uptimeS), at, suffix: "" });
+    }
+    for (const node of ages) {
+      /* Only rows the server gave a number to. A camera that has never reported renders
+       * an em dash and carries no `data-age-s`, so it is not in this list and cannot be
+       * ticked into claiming a frame arrived. */
+      live.push({ node, base: Number(node.dataset.ageS), at, suffix: " ago" });
+    }
+  };
+
+  const tick = () => {
+    const now = performance.now();
+    for (const entry of live) {
+      if (!Number.isFinite(entry.base)) continue;
+      const seconds = entry.base + (now - entry.at) / 1000;
+      entry.node.textContent = humanDuration(seconds) + entry.suffix;
+    }
+  };
+
   document.addEventListener("DOMContentLoaded", paint);
   document.addEventListener("htmx:afterSwap", paint);
+  document.addEventListener("DOMContentLoaded", reseed);
+  document.addEventListener("htmx:afterSwap", reseed);
   window.addEventListener("resize", resize);
+  setInterval(tick, TICK_MS);
 })();

@@ -53,7 +53,10 @@
       <span class="lamp{% if camera.state.value != 'streaming' %} is-{{ camera.state.value }}{% endif %}"></span>
       <span class="scope">{{ camera.camera_id }}</span>
       <span class="state">{{ camera.state.value }}</span>
-      <span class="age{% if camera.age is none %} is-absent{% endif %}">
+      {# `data-age-s` is what the ticker in `board.js` ages between swaps. Absent for a
+         camera that has never reported, so the em dash below can never become `0s`. #}
+      <span class="age{% if camera.age is none %} is-absent{% endif %}"
+            {% if camera.age_s is not none %}data-age-s="{{ camera.age_s }}"{% endif %}>
         {%- if camera.age is none %}&mdash;{% else %}{{ camera.age }} ago{% endif -%}
       </span>
       <span class="fps{% if camera.effective_fps is none %} is-absent{% endif %}">
@@ -159,7 +162,7 @@
     <dl class="facts">
       <div>
         <dt>Uptime</dt>
-        <dd>{{ uptime }}</dd>
+        <dd data-uptime-s="{{ uptime_s }}">{{ uptime }}</dd>
       </div>
       <div>
         <dt>Unsynced</dt>
