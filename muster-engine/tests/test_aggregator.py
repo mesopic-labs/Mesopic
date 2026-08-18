@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from muster.aggregator.aggregator import Aggregator, bucket_of
+from muster.aggregator.aggregator import EXIT_GRACE_S, Aggregator, bucket_of
 from muster.analytics.metrics.registry import MetricRegistry
 from muster.config.schema import MusterConfig
 from muster.store.store import Store
@@ -135,11 +135,15 @@ class _DwellPlugin(_CountingPlugin):
         ]
 
 
-def _aggregator(*plugins: _CountingPlugin, dwell_min_s: float = 3.0, **kw: float) -> Aggregator:
+def _aggregator(
+    *plugins: _CountingPlugin,
+    dwell_min_s: float = 3.0,
+    exit_grace_s: float = EXIT_GRACE_S,
+) -> Aggregator:
     registry = MetricRegistry()
     for plugin in plugins or (_CountingPlugin(),):
         registry.register(plugin)
-    return Aggregator(registry, dwell_min_s=dwell_min_s, **kw)
+    return Aggregator(registry, dwell_min_s=dwell_min_s, exit_grace_s=exit_grace_s)
 
 
 # --- Bucketing by capture time ----------------------------------------------

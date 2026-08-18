@@ -58,16 +58,32 @@ def _crossing(camera_id: CameraId, index: int) -> RawEvent:
     )
 
 
+def _hit(camera_id: CameraId, zone_id: ZoneId, index: int) -> RawEvent:
+    return RawEvent(
+        camera_id=camera_id,
+        ts=FrameTs(datetime(2026, 8, 16, 9, 30, index % 60, tzinfo=UTC)),
+        kind=EventKind.HEATMAP_HIT,
+        track_id=TrackId(index),
+        zone_id=zone_id,
+        cell=(3, 4),
+        dt_s=1.0,
+    )
+
+
 def emit_then_exit(
     camera_id: CameraId,
     config: MusterConfig,  # the entry-point contract
     channels: WorkerChannels,
     *,
     crossings: int = 1,
+    hits: int = 0,
+    hit_zone: str = "",
 ) -> None:
-    """Put `crossings` line-cross events, then return normally."""
+    """Put `crossings` line-cross events and `hits` heatmap hits, then return normally."""
     for index in range(crossings):
         channels.events.put(_crossing(camera_id, index))
+    for index in range(hits):
+        channels.events.put(_hit(camera_id, ZoneId(hit_zone), index))
     channels.events.close()
     channels.events.join_thread()
 

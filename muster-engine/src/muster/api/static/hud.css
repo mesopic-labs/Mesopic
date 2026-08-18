@@ -866,3 +866,64 @@ p {
 .readings .scope a:hover {
   color: var(--safelight);
 }
+
+/* ---------- zone heatmaps ---------- */
+
+/* Narrower than the plates: a 32x32 grid gains nothing from more width, and the pair of
+   them reading side by side is what makes two zones comparable at a glance. */
+.floors {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.floor {
+  margin: 0;
+  padding: 0.9rem 1rem 0.7rem;
+  background: var(--panel);
+  border: var(--rule);
+  border-radius: 3px;
+}
+
+.floor figcaption {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--ink);
+  margin-bottom: 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.floor-camera {
+  color: var(--muted);
+}
+
+/* Square, because the grid is: a stretched cell would read as a direction the data does
+   not have. The border is what keeps an empty zone legible as a zone rather than as a
+   gap in the page. */
+.floor-grid {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.floor-scale {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.floor-peak {
+  color: var(--ink);
+  font-size: 0.95rem;
+}

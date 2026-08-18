@@ -25,12 +25,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from muster.analytics.site_geometry import PreparedLine, SiteGeometry, side_of
+from muster.analytics.site_geometry import PreparedLine, SiteGeometry, cell_of, side_of
 from muster.types import (
     CameraId,
     EventKind,
     FrameTs,
     LineId,
+    MetricName,
     NormPoint,
     RawEvent,
     Track,
@@ -130,6 +131,7 @@ class GeometryAnalytics:
         events = self._line_events(camera_id, tracks)
         events += self._zone_events(camera_id, tracks, tick_ts)
         events += self._occupancy_samples(camera_id, tick_ts, previous_ts)
+        events += self._heatmap_hits(camera_id, tracks, tick_ts, previous_ts)
         self._forget_dead_tracks(camera_id, tracks)
         return events
 
@@ -388,6 +390,50 @@ class GeometryAnalytics:
                 )
             )
         return samples
+
+    def _heatmap_hits(
+        self,
+        camera_id: CameraId,
+        tracks: Sequence[Track],
+        tick_ts: datetime | None,
+        previous_ts: datetime | None,
+    ) -> list[RawEvent]:
+        """One hit per resident per heatmap zone per tick, carrying its cell and interval.
+
+        Gated on the clock advancing for the same reason occupancy samples are: a
+        zero-width interval deposits no presence, and the first tick of a run has no
+        previous frame to measure one against.
+
+        **A coasted track deposits nothing** (algorithms.md §3.4(2), which names the
+        heatmap hit explicitly). Heat is evidence that somebody was *seen* on a spot; the
+        Kalman filter's guess about where an occluded person probably is would smear
+        invented heat across the floor, and it would look entirely plausible.
+        """
+        if tick_ts is None or previous_ts is None or tick_ts <= previous_ts:
+            return []
+        dt_s = (tick_ts - previous_ts).total_seconds()
+        observed = {track.track_id: track for track in tracks if track.time_since_update == 0}
+        hits = []
+        for zone in self._geometry.zones_for(camera_id):
+            if MetricName.HEATMAP not in zone.metrics:
+                continue
+            for track_id in sorted(self._inside.get(zone.zone_id, {})):
+                track = observed.get(track_id)
+                if track is None:
+                    continue
+                hits.append(
+                    RawEvent(
+                        camera_id=camera_id,
+                        ts=FrameTs(tick_ts),
+                        kind=EventKind.HEATMAP_HIT,
+                        track_id=track_id,
+                        zone_id=zone.zone_id,
+                        cell=cell_of(track.foot_point),
+                        dt_s=dt_s,
+                        is_staff=track.is_staff,
+                    )
+                )
+        return hits
 
     # --- Bookkeeping --------------------------------------------------------
 
