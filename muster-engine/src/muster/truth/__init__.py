@@ -30,7 +30,14 @@ from muster.truth.clips import (
     resolve_clip,
 )
 from muster.truth.labels import DRAFT_RATER, Crossing, TruthFile, check_pairing, load_truth
-from muster.truth.score import Score, footfall_per_minute, gate_blockers, mape, score
+from muster.truth.score import (
+    Score,
+    footfall_per_minute,
+    gate_blockers,
+    line_crossings_per_minute,
+    mape,
+    score,
+)
 
 __all__ = [
     "DRAFT_RATER",
@@ -48,6 +55,7 @@ __all__ = [
     "footfall_per_minute",
     "gate_blockers",
     "gate_eligible",
+    "line_crossings_per_minute",
     "load_manifest",
     "load_truth",
     "mape",
