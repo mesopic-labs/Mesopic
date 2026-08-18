@@ -102,10 +102,12 @@ first clip here long enough to be read at hour grain and the first with more tha
 person in frame. It is gate-eligible on the derived rule, and it is still not the gate
 clip:
 
-- **The mount was never measured.** `mount_height_m` and `mount_angle_deg` are both `null`
-  and the camera has since moved, so they are unrecoverable. Without a height the clip
-  cannot be placed on the reference table at all; it is recorded `hard` on its lighting
-  alone.
+- **The mount was never measured.** `mount_height_m` and `mount_angle_deg` are both `null`.
+  The camera is fixed and still in place, so both are still measurable — take a tape to it
+  and fill them in rather than leaving the manifest guessing.
+- **The lighting pins it to `hard` whatever the tape says.** A strong backlit doorway is
+  the `hard` column's own example, and the binding axis is always the worst one. Measuring
+  the mount improves the manifest; it cannot promote this clip.
 - **Eleven crossings in 40 minutes.** Longer than the `home-*` clips without being denser,
   so a single miscount is still a ~9 % error.
 - **The labels are a draft**, which the guard now refuses on its own.
