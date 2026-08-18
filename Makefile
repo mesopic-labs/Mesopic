@@ -1,6 +1,6 @@
 # The same gate as CI, one command. If `make check` is green, CI will be too.
 .DEFAULT_GOAL := help
-.PHONY: help setup fmt lint types arch test check cov image run demo test-stream clean
+.PHONY: help setup fmt lint types arch test check cov image run demo compose-check test-stream clean
 
 UV ?= uv
 ALL := muster-engine/src muster-engine/tests
@@ -42,8 +42,27 @@ image:  ## Build the engine container and assert its invariants
 run:  ## Run the engine against ./muster.yaml
 	$(UV) run muster run --config ./muster.yaml
 
-demo:  ## Bring up the engine plus a synthetic camera and an MQTT broker
-	docker compose --profile demo up --build
+demo:  ## THE one command: engine + dashboard + sample stream + broker
+	@command -v openssl >/dev/null || { echo "error: openssl not found; export MUSTER_ADMIN_PASSWORD yourself" >&2; exit 1; }
+	@set -eu; \
+	: "$${MUSTER_ADMIN_PASSWORD:=$$(openssl rand -hex 16)}"; \
+	: "$${MUSTER_RTSP_URL:=rtsp://mediamtx:8554/synthetic}"; \
+	export MUSTER_ADMIN_PASSWORD MUSTER_RTSP_URL; \
+	docker compose --profile demo build; \
+	docker compose --profile demo run --rm seed; \
+	printf '\n  dashboard   http://localhost:8080\n'; \
+	printf '  password    %s\n' "$$MUSTER_ADMIN_PASSWORD"; \
+	printf '  stream      %s\n\n' "$$MUSTER_RTSP_URL"; \
+	printf '  Reading the dashboard needs no password. The password guards changes —\n'; \
+	printf '  drawing zones and lines. It is generated per run unless you export one.\n\n'; \
+	printf '  THE COUNTS WILL READ ZERO. The bundled stream is a test pattern with no\n'; \
+	printf '  people in it, so there is nothing to count; what this shows is the pipeline\n'; \
+	printf '  running end to end. Export MUSTER_RTSP_URL to point it at a real camera.\n\n'; \
+	docker compose --profile demo up
+
+compose-check:  ## Validate the compose file and its demo profile
+	docker compose --profile demo config -q
+	docker compose config -q
 
 test-stream:  ## Serve a synthetic RTSP camera on :8554 (no engine, no clip needed)
 	@docker compose --profile camera up -d mediamtx

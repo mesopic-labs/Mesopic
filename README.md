@@ -73,6 +73,30 @@ Then open **http://localhost:8080** for the local dashboard.
 > A published image, so the first step becomes a single `docker run`, ships with the
 > first release.
 
+### Try it without a camera
+
+No RTSP stream to hand? One command brings up the engine, the dashboard, a synthetic
+camera and an MQTT broker together:
+
+```bash
+make demo                       # engine + dashboard + sample stream + broker
+```
+
+It prints the dashboard URL and a generated password, then runs in the foreground;
+`Ctrl-C` stops it and `docker compose --profile demo down -v` removes it.
+
+**The counts will read zero.** The bundled stream is a test pattern, not footage of a
+room, so there is nobody in it to count — what the demo shows is the pipeline running end
+to end: the stream connects, the dashboard renders live, MQTT publishes retained topics
+and `/metrics` scrapes. Point it at something real to see real numbers:
+
+```bash
+MUSTER_RTSP_URL="rtsp://user:pass@192.168.1.64:554/stream1" make demo
+```
+
+Reading the dashboard never asks for a password. The password guards *changes* — drawing
+zones and lines, and anything else that rewrites your config.
+
 - `MUSTER_RTSP_URL` — the ONVIF/RTSP stream to analyse. That's the only thing you *must* provide.
 - `-p 8080:8080` — the local HUD dashboard + metrics API.
 - `-v muster-data:/data` — persists the SQLite metric store and your `muster.yaml` config.

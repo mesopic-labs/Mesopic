@@ -35,6 +35,14 @@ from muster.config import load_config
 REPO_ROOT = Path(__file__).resolve().parents[2]
 README = REPO_ROOT / "README.md"
 EXAMPLE_CONFIG = REPO_ROOT / "examples" / "muster.yaml"
+DEMO_CONFIG = REPO_ROOT / "docker" / "demo.yaml"
+"""The config `make demo` seeds into the container's volume (P3.6).
+
+Held to the same bar as the documents a reader copies, for a sharper reason: nobody reads
+this one, so drift in it is invisible until the one-command bring-up dies on a fresh
+machine — which is exactly the machine nobody is watching.
+"""
+
 FIXTURE_CONFIG = REPO_ROOT / "fixtures" / "muster.yaml"
 """The geometry the ground-truth clips are labelled against.
 
@@ -76,10 +84,11 @@ def documents(documented: dict[str, Any], example: dict[str, Any]) -> dict[str, 
         "readme": documented,
         "example": example,
         "fixtures": _yaml_document(FIXTURE_CONFIG),
+        "demo": _yaml_document(DEMO_CONFIG),
     }
 
 
-@pytest.mark.parametrize("document", ["readme", "example", "fixtures"])
+@pytest.mark.parametrize("document", ["readme", "example", "fixtures", "demo"])
 def test_every_documented_config_validates(
     document: str, documents: dict[str, dict[str, Any]], tmp_path: Path
 ) -> None:
@@ -110,7 +119,7 @@ def test_readme_and_example_agree_on_structure(
     assert set(documented["zones"][0]) <= set(example["zones"][0])
 
 
-@pytest.mark.parametrize("document", ["readme", "example", "fixtures"])
+@pytest.mark.parametrize("document", ["readme", "example", "fixtures", "demo"])
 def test_every_documented_config_shows_some_geometry(
     document: str, documents: dict[str, dict[str, Any]]
 ) -> None:
@@ -128,7 +137,7 @@ def test_every_documented_config_shows_some_geometry(
 
 
 @pytest.mark.privacy
-@pytest.mark.parametrize("document", ["readme", "example", "fixtures"])
+@pytest.mark.parametrize("document", ["readme", "example", "fixtures", "demo"])
 def test_no_document_inlines_a_secret(document: str, documents: dict[str, dict[str, Any]]) -> None:
     """Secrets are referenced by env-var name, never written into the config file.
 
@@ -151,3 +160,40 @@ def test_no_document_inlines_a_secret(document: str, documents: dict[str, dict[s
         url = camera.get("source", {}).get("url", "")
         if url.startswith("rtsp://") and "@" in url:
             assert "user:pass@" in url, f"{document} embeds real-looking camera credentials"
+
+
+# --- The demo config the container actually boots (P3.6) ----------------------
+
+
+def test_the_demo_config_binds_every_interface(documents: dict[str, dict[str, Any]]) -> None:
+    """A published port cannot reach a loopback bind inside a container.
+
+    The default is loopback for a good reason (§13.1), so the demo overriding it is a
+    deliberate act that belongs in exactly one file and nowhere else. Pinned because the
+    failure it prevents looks like "the dashboard is down" rather than like a bind address.
+    """
+    assert documents["demo"]["api"]["host"] == "0.0.0.0"  # noqa: S104 - the opt-in this key exists for
+
+
+def test_the_demo_config_requires_a_password(documents: dict[str, dict[str, Any]]) -> None:
+    """Binding every interface is exactly when the write surface needs its credential.
+
+    ADR-0019 made this card responsible for the pair: the bring-up that removes the
+    loopback mitigation is the bring-up that must supply the thing replacing it.
+    """
+    assert documents["demo"]["api"]["password_env"] == "MUSTER_ADMIN_PASSWORD"  # noqa: S105 - an env-var name
+
+
+def test_the_demo_camera_takes_its_url_from_the_environment(
+    documents: dict[str, dict[str, Any]],
+) -> None:
+    """One config serves both the sidecar and a real camera, and holds no URL either way.
+
+    `make demo` defaults the variable to the mediamtx sidecar; anyone who exports their own
+    stream gets it through the identical file. An inline URL would carry the camera's
+    credentials into a committed document (hard invariant 6).
+    """
+    source = documents["demo"]["cameras"][0]["source"]
+
+    assert source["url_env"] == "MUSTER_RTSP_URL"
+    assert "url" not in source

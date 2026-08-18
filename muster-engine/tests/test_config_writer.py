@@ -175,3 +175,68 @@ def test_the_error_does_not_quote_the_document(config_path: Path) -> None:
     message = str(caught.value)
     assert "MUSTER_FRONT_DOOR_RTSP" not in message
     assert "acme-camden" not in message
+
+
+# --- Emptying a block that a comment introduces (found by P3.6) ---------------
+
+COMMENTED_DOCUMENT = DOCUMENT.replace(
+    "lines:\n", "lines:\n  # Across the lower third, where feet cross in a doorway view.\n", 1
+)
+"""The same document, with a comment on its own line between `lines:` and its first item.
+
+Nothing in the worked example is shaped this way — its comments sit *inside* items — which
+is why every test above passes while this shape does not. `docker/demo.yaml` is written
+this way, which is how it was found.
+"""
+
+
+@pytest.fixture
+def commented_path(tmp_path: Path) -> Path:
+    path = tmp_path / "muster.yaml"
+    path.write_text(COMMENTED_DOCUMENT, encoding="utf-8")
+    return path
+
+
+def test_emptying_a_block_a_comment_introduces_still_loads(commented_path: Path) -> None:
+    """Deleting the last line from a camera must not corrupt the file.
+
+    An introducing comment has nothing left to introduce once its block is empty, and
+    ruamel keeps emitting it — leaving the comment as the key's value line and the `[]`
+    dangling at column zero, which is not YAML at all. The document the engine wrote then
+    fails to parse on the next start, on a box nobody is watching.
+    """
+    write_geometry(commented_path, zones=[_zone()], lines=[])
+
+    assert load_config(commented_path).lines == []
+
+
+def test_a_comment_introducing_a_block_survives_a_non_empty_save(
+    commented_path: Path,
+) -> None:
+    """The fix must not become "delete the comment on every save".
+
+    Only an *empty* replacement drops it, because only then does it introduce nothing.
+    A redraw that still has lines in it keeps the operator's annotation.
+    """
+    write_geometry(commented_path, zones=[_zone()], lines=[_line()])
+
+    assert "feet cross in a doorway view" in commented_path.read_text(encoding="utf-8")
+
+
+def test_a_document_the_writer_itself_mangles_never_lands(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard validates what would land, so it has to survive invalid *syntax* too.
+
+    It parsed the candidate and caught only `ValidationError`, so a render that was not
+    YAML escaped as a raw `ScannerError` — a 500 out of the save route rather than the
+    refusal the route is built around, and the one case where the engine broke the file
+    itself rather than being handed something bad.
+    """
+    monkeypatch.setattr("muster.config.writer._render", lambda _: "not: [valid: yaml")
+    original = config_path.read_text(encoding="utf-8")
+
+    with pytest.raises(ConfigError):
+        write_geometry(config_path, zones=[_zone()], lines=[_line()])
+
+    assert config_path.read_text(encoding="utf-8") == original

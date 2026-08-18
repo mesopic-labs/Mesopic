@@ -1,0 +1,93 @@
+# The config `make demo` seeds into the container's /data volume (P3.6).
+#
+# NOT a document to copy. `examples/muster.yaml` is the worked example with every option
+# explained; this one is deliberately the smallest site that exercises the whole pipeline
+# — one camera, one line, one zone — so a fresh bring-up has something to count without
+# anyone editing a file first.
+#
+# It is COPIED into the volume rather than mounted read-only, because saving geometry
+# rewrites this file (ADR-0018) and §13.1 makes the copy in the volume the authority. A
+# read-only mount would render the calibration page and fail every save on it.
+#
+# WHAT THE DEMO ACTUALLY SHOWS. Pointed at the mediamtx sidecar's `/synthetic` path, this
+# counts nothing: `testsrc2` is a test pattern with no people in it, so every tile reads
+# zero. What it demonstrates is the pipeline end to end — the stream connects, the
+# dashboard renders live, MQTT publishes retained topics and /metrics scrapes clean.
+# Export MUSTER_RTSP_URL to point the same config at a real camera and the counts become
+# real. A bundled clip of actual people arrives with the first release (P5.1), which is
+# what gives it somewhere to be hosted.
+
+site:
+  site_id: "muster-demo"
+  timezone: "UTC"                   # display-only; everything stored is UTC regardless
+
+budget:
+  cpu_budget: 0.75
+  fps_min: 1.0
+  fps_max: 5.0
+
+cameras:
+  - camera_id: "demo-door"
+    name: "Demo door"
+    source:
+      kind: rtsp
+      # By reference, never inline — an RTSP URL carries the camera's credentials, and
+      # this file is committed. `make demo` defaults it to the sidecar; export your own
+      # stream and this identical config points at your camera instead.
+      url_env: MUSTER_RTSP_URL
+      transport: tcp
+    reference_resolution: [1920, 1080]
+    stall_timeout_s: 5
+    detector:
+      input_size: 640
+      roi_from_geometry: true
+
+lines:
+  # Across the lower third, where feet cross in a doorway view.
+  - line_id: "doorway"
+    camera_id: "demo-door"
+    a: [0.10, 0.80]
+    b: [0.90, 0.80]
+    positive_dir: in
+    metrics: [line_cross, footfall]
+
+zones:
+  - zone_id: "floor"
+    camera_id: "demo-door"
+    role: area
+    polygon: [[0.05, 0.30], [0.95, 0.30], [0.95, 0.95], [0.05, 0.95]]
+    metrics: [occupancy, dwell_seconds]
+
+thresholds:
+  detection_confidence: 0.35
+  track_thresh: 0.5
+  max_cost: 0.4
+  max_cost_low: 0.25
+  track_memory_s: 2.0
+  dwell_min_s: 3.0
+  queue_dwell_weight: true
+
+storage:
+  event_retention_hours: 72
+
+api:
+  # 0.0.0.0 because a published port cannot reach a loopback bind from outside the
+  # container. This is the deliberate override §13.1 describes, and it is why the line
+  # below is not optional: binding every interface is exactly when the write surface
+  # needs its credential (ADR-0019).
+  enabled: true
+  host: "0.0.0.0"
+  port: 8080
+  password_env: MUSTER_ADMIN_PASSWORD
+
+exporters:
+  # Both on, because "MQTT topics publish and /metrics scrapes clean" is half of what the
+  # bring-up is supposed to demonstrate. The webhook and CSV stay off: one needs a signing
+  # secret and a peer, the other writes files nobody asked for.
+  mqtt: { enabled: true, broker: "mosquitto", base_topic: "muster" }
+  prometheus: { enabled: true }
+  webhook: { enabled: false }
+  csv: { enabled: false }
+
+cloud_sync:
+  enabled: false                    # the free path is whole without it
