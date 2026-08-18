@@ -1,8 +1,12 @@
-"""One camera's process, its bounded queue, and its restart policy.
+"""One camera's process, its bounded queues, and its restart policy.
 
 Split out of `Supervisor` because these are three separable concerns with one owner: the
-process lifecycle, the events crossing the boundary, and how long to wait before trying a
-camera again. The supervisor composes handles; it does not reach inside one.
+process lifecycle, the messages crossing the boundary, and how long to wait before trying
+a camera again. The supervisor composes handles; it does not reach inside one.
+
+Since P3.7 a handle also holds the newest thing its worker said about itself, which is
+what makes `STALLED` reachable: process liveness alone cannot tell a camera that is
+counting from one whose stream has wedged.
 
 The start method is pinned to `spawn` rather than inherited from the platform default.
 Two reasons, both of which bite silently otherwise: `fork` copies the parent's threads
@@ -12,7 +16,7 @@ so an argument that is not picklable — a frame, say — would keep working on 
 fail only on someone else's laptop. Under `spawn`, everything crossing the boundary must
 be picklable by construction, and a worker entry point must be importable by name.
 
-Implements P2.7 (engine-architecture.md §9).
+Implements P2.7, extended by P3.7 (engine-architecture.md §9, §15).
 """
 
 from __future__ import annotations
@@ -30,17 +34,16 @@ from muster.analytics.site_geometry import SiteGeometry
 from muster.config.schema import MusterConfig
 from muster.supervisor.control import (
     ControlMessage,
+    Heartbeat,
     Reconfigure,
     Snapshot,
     SnapshotReply,
     Stop,
+    WorkerChannels,
 )
-from muster.types import CameraId, CameraState, RawEvent
+from muster.types import CameraId, CameraState, FrameTs, RawEvent
 
-WorkerEntry = Callable[
-    [CameraId, MusterConfig, "Queue[RawEvent]", "Queue[ControlMessage]", "Queue[SnapshotReply]"],
-    None,
-]
+WorkerEntry = Callable[[CameraId, MusterConfig, WorkerChannels], None]
 """What a camera worker process runs. Must be importable by name — see the module note."""
 
 
@@ -48,13 +51,55 @@ WorkerEntry = Callable[
 class WorkerReport:
     """Everything the supervisor knows about one camera, for `/healthz` (§15).
 
-    Two fields rather than a bare state because the count is what explains the state: a
-    camera in `BACKOFF` with one failure is a stream that hiccuped, and the same camera
-    with forty is a URL that has been wrong since install.
+    The count is what explains the state: a camera in `BACKOFF` with one failure is a
+    stream that hiccuped, and the same camera with forty is a URL that has been wrong
+    since install.
+
+    `last_frame_ts` and `effective_fps` come from the worker's own heartbeat (P3.7) and
+    are `None` until it has sent one. They are deliberately **not** cleared when a worker
+    goes `STALLED`: the time of the last frame is what says when it stopped, and the
+    `state` beside it is what stops the number being read as current.
     """
 
     state: CameraState
     consecutive_failures: int
+    last_frame_ts: FrameTs | None = None
+    effective_fps: float | None = None
+
+
+HEARTBEAT_QUEUE_SIZE = 4
+"""Heartbeats buffered before the worker drops one. A heartbeat is a latest-value
+signal, not a stream: the supervisor drains the whole queue every tick and keeps the
+newest, so a dropped one costs an intermediate reading nobody reads and never a pulse."""
+
+STALL_AFTER_S = 10.0
+"""How long a live worker may say nothing before it is called stalled.
+
+Ten missed heartbeats at `worker.HEARTBEAT_INTERVAL_S`. Generous on purpose: this decides
+whether an operator is told a camera is broken, and a threshold tight enough to trip on a
+loaded box would teach them to ignore it. It is also the grace a freshly spawned worker
+gets to open its RTSP session before silence stops reading as `CONNECT`.
+"""
+
+
+def camera_state(
+    *, alive: bool, since_last_beat_s: float | None, since_start_s: float
+) -> CameraState:
+    """What `/healthz` should say about one worker (§15).
+
+    A free function because it is the whole rule and nothing else: given liveness and two
+    durations it is total, and every branch is reachable without a process in a
+    particular condition.
+
+    `since_last_beat_s` is `None` when this worker has never reported. That is the case
+    that must not collapse into the stale one — a worker still dialling and a worker that
+    wedged after ten minutes are both silent, and only the second is a fault.
+    """
+    if not alive:
+        return CameraState.BACKOFF
+    if since_last_beat_s is None:
+        return CameraState.CONNECT if since_start_s <= STALL_AFTER_S else CameraState.STALLED
+    return CameraState.STREAMING if since_last_beat_s <= STALL_AFTER_S else CameraState.STALLED
 
 
 SNAPSHOT_QUEUE_SIZE = 4
@@ -82,6 +127,7 @@ class WorkerHandle:
         config: MusterConfig,
         entry: WorkerEntry,
         queue_size: int = QUEUE_SIZE,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self.camera_id = camera_id
         self.stopped_cleanly = False
@@ -90,25 +136,39 @@ class WorkerHandle:
         failure rather than one per tick until the backoff lapses."""
         self._config = config
         self._entry = entry
+        self._monotonic = monotonic
         self._events: Queue[RawEvent] = _SPAWN.Queue(maxsize=queue_size)
         self._control: Queue[ControlMessage] = _SPAWN.Queue(maxsize=16)
         self._snapshots: Queue[SnapshotReply] = _SPAWN.Queue(maxsize=SNAPSHOT_QUEUE_SIZE)
+        self._beats: Queue[Heartbeat] = _SPAWN.Queue(maxsize=HEARTBEAT_QUEUE_SIZE)
+        self._channels = WorkerChannels(
+            events=self._events,
+            control=self._control,
+            snapshots=self._snapshots,
+            heartbeats=self._beats,
+        )
         self._process: SpawnProcess | None = None
         self._failures = 0
         self._failed_at: float | None = None
+        self._beat: Heartbeat | None = None
+        self._beat_at: float | None = None
+        """When the newest heartbeat was *drained*, on the monotonic clock. Receipt
+        rather than the frame's own timestamp: a camera whose clock is skewed is not a
+        camera that has stopped, and comparing a `FrameTs` against wall-now conflates the
+        two."""
+        self._started_at = monotonic()
 
     # --- Lifecycle ----------------------------------------------------------
 
     def start(self) -> None:
+        # A heartbeat belongs to a process, not to a camera. Left in place, a respawned
+        # worker would inherit its predecessor's last reading and report a pulse it never
+        # produced — fastest exactly when the camera is flapping.
+        self._forget_heartbeat()
+        self._started_at = self._monotonic()
         self._process = _SPAWN.Process(
             target=self._entry,
-            args=(
-                self.camera_id,
-                self._config,
-                self._events,
-                self._control,
-                self._snapshots,
-            ),
+            args=(self.camera_id, self._config, self._channels),
             name=f"muster-worker-{self.camera_id}",
             daemon=True,
         )
@@ -121,18 +181,16 @@ class WorkerHandle:
     def state(self) -> CameraState:
         """What `/healthz` reports for this camera (engine-architecture.md §15).
 
-        **This is process liveness standing in for stream state, and it over-claims.** A
-        worker whose RTSP connection is reconnecting inside its own loop is still a live
-        process, and is reported here as `STREAMING`. The honest facts — last frame time
-        and effective fps — live inside the worker and are never sent back to the
-        supervisor, so `STALLED` is unreachable from here and `/healthz` serialises those
-        two fields as `null`. A worker→supervisor status heartbeat is what replaces this
-        with the real thing; until then this distinguishes "running" from "not running",
-        which is what the restart policy already knows.
+        Process liveness alone over-claimed: a worker whose RTSP connection had wedged
+        was still a live process and read as `STREAMING`. Since P3.7 the worker reports
+        itself, so silence is visible and `STALLED` is reachable — see `camera_state` for
+        the rule and `drain_heartbeats` for what feeds it.
         """
-        if self.is_alive():
-            return CameraState.STREAMING
-        return CameraState.BACKOFF
+        return camera_state(
+            alive=self.is_alive(),
+            since_last_beat_s=None if self._beat_at is None else self._monotonic() - self._beat_at,
+            since_start_s=self._monotonic() - self._started_at,
+        )
 
     @property
     def consecutive_failures(self) -> int:
@@ -140,7 +198,33 @@ class WorkerHandle:
         return self._failures
 
     def report(self) -> WorkerReport:
-        return WorkerReport(state=self.state, consecutive_failures=self._failures)
+        return WorkerReport(
+            state=self.state,
+            consecutive_failures=self._failures,
+            last_frame_ts=None if self._beat is None else self._beat.last_frame_ts,
+            effective_fps=None if self._beat is None else self._beat.effective_fps,
+        )
+
+    def drain_heartbeats(self) -> None:
+        """Take every heartbeat waiting and keep the newest. Never blocks.
+
+        The whole queue is drained rather than one item taken: a worker beats faster than
+        the supervisor ticks, so taking the first would report a reading that is already
+        superseded — and would do it under exactly the load that makes several pile up.
+        """
+        latest: Heartbeat | None = None
+        while True:
+            try:
+                latest = self._beats.get_nowait()
+            except queue.Empty:
+                break
+        if latest is not None:
+            self._beat = latest
+            self._beat_at = self._monotonic()
+
+    def _forget_heartbeat(self) -> None:
+        self._beat = None
+        self._beat_at = None
 
     def wait_exit(self, timeout: float) -> None:
         if self._process is not None:

@@ -24,6 +24,7 @@ import yaml
 
 from muster.config.schema import MusterConfig
 from muster.errors import ConfigError, StreamDropped
+from muster.supervisor.control import Heartbeat
 from muster.supervisor.pipeline import build_pipeline
 from muster.supervisor.worker import camera_loop
 from muster.types import (
@@ -272,3 +273,49 @@ def test_an_unknown_camera_is_refused(raw_config: dict[str, Any]) -> None:
 
     with pytest.raises(ConfigError, match="no-such-camera"):
         build_pipeline(config, CameraId("no-such-camera"))
+
+
+class _Beats:
+    def __init__(self) -> None:
+        self.sent: list[Heartbeat] = []
+
+    def put_nowait(self, item: Heartbeat) -> None:
+        self.sent.append(item)
+
+
+class _SteppingClock:
+    """Advances a fixed step per reading, so the emitter's window closes every frame."""
+
+    def __init__(self, step_s: float) -> None:
+        self._step_s = step_s
+        self._now = 0.0
+
+    def __call__(self) -> float:
+        now = self._now
+        self._now += self._step_s
+        return now
+
+
+def test_the_loop_reports_every_frame_it_admits() -> None:
+    """The emitter is driven by admission, and this is what proves it is wired to it.
+
+    Without this the heartbeat is a class with tests and no caller — the camera keeps
+    streaming, `/healthz` keeps saying `null`, and nothing anywhere fails.
+    """
+    beats = _Beats()
+
+    camera_loop(
+        FRONT_DOOR,
+        sink=_Sink(capacity=100),
+        fps_min=1.0,
+        fps_max=5.0,
+        heartbeats=beats,
+        monotonic=_SteppingClock(step_s=1.0),
+        **_parts(_Sampler(), _Source(3), _Analytics()),
+    )
+
+    assert [beat.last_frame_ts for beat in beats.sent] == [
+        _frame(0).ts,
+        _frame(1).ts,
+        _frame(2).ts,
+    ]

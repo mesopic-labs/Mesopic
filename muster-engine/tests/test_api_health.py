@@ -7,14 +7,16 @@ tests are mostly about honesty rather than plumbing:
   and must not read as a healthy one either;
 * a camera switched off in config is not a broken camera, and saying so would page
   someone about a decision they made;
-* the two fields the supervisor genuinely does not know — `last_frame_ts` and
-  `effective_fps` — serialise as `null` rather than as a plausible-looking guess.
+* `last_frame_ts` and `effective_fps` are passed through from the worker's own
+  heartbeat (P3.7) and are `null` when it has not sent one — never back-filled from
+  something adjacent that happens to be in reach.
 
-Red-first for P3.1.
+Red-first for P3.1, extended for P3.7.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,13 +34,14 @@ from muster.api.health import (
 )
 from muster.config.schema import MusterConfig
 from muster.supervisor.handle import WorkerReport
-from muster.types import CameraId, CameraState
+from muster.types import CameraId, CameraState, FrameTs
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_CONFIG = REPO_ROOT / "examples" / "muster.yaml"
 
 FRONT_DOOR = CameraId("front-door")
 TILL = CameraId("till")
+LAST_FRAME_TS = FrameTs(datetime(2026, 8, 18, 9, 42, 58, tzinfo=UTC))
 
 
 @pytest.fixture
@@ -205,24 +208,116 @@ def test_the_failure_count_is_reported_not_assumed(config: MusterConfig) -> None
     assert first.consecutive_failures == 7
 
 
-def test_the_fields_the_supervisor_cannot_know_are_none(config: MusterConfig) -> None:
-    """A plausible-looking guess in a health field is worse than an absent one.
+def test_a_camera_reports_the_frame_time_and_fps_its_worker_sent(config: MusterConfig) -> None:
+    """P3.7 fills in the two fields P3.1 could only serialise as `null`.
 
-    `last_frame_ts` and `effective_fps` live inside the worker process and are never
-    reported back (see `WorkerHandle.state`). Until a status heartbeat exists they are
-    `None`, and this test is what stops one being back-filled from something adjacent —
-    the newest metric bucket, say, which is silent for a healthy camera nobody walks past.
+    They are passed through from the worker's own heartbeat and nothing else. The value
+    of that is entirely in where it comes from: back-filling either from the newest
+    metric bucket — the obvious adjacent source — would report a healthy camera nobody
+    walks past as stalled.
     """
     states = {
         config.cameras[0].camera_id: WorkerReport(
-            state=CameraState.STREAMING, consecutive_failures=0
+            state=CameraState.STREAMING,
+            consecutive_failures=0,
+            last_frame_ts=LAST_FRAME_TS,
+            effective_fps=2.5,
         )
+    }
+
+    (first, *_) = camera_health(config, states)
+
+    assert first.last_frame_ts == LAST_FRAME_TS
+    assert first.effective_fps == pytest.approx(2.5)
+
+
+def test_a_camera_whose_worker_has_not_reported_still_says_so(config: MusterConfig) -> None:
+    """`null` remains the right answer before the first heartbeat, and after a restart.
+
+    A guess here would be worse than an absence: this is the field an operator reads to
+    decide whether a camera has stopped, so a plausible number is the one failure mode
+    that matters.
+    """
+    states = {
+        config.cameras[0].camera_id: WorkerReport(state=CameraState.CONNECT, consecutive_failures=0)
     }
 
     (first, *_) = camera_health(config, states)
 
     assert first.last_frame_ts is None
     assert first.effective_fps is None
+
+
+def test_a_box_whose_cameras_are_still_connecting_is_degraded_not_down(
+    config: MusterConfig,
+) -> None:
+    """A box two seconds into startup is not a box that has failed.
+
+    `down` is what an orchestrator and the appliance telemetry page on, and every engine
+    passes through "no camera has reported yet" on its way up. Reading that as `down`
+    would fire an alert on every restart, which is the fastest way to teach an operator
+    to ignore the field. Nothing is counting yet, so it is not `ok` either.
+    """
+    connecting = CameraHealth(
+        camera_id=FRONT_DOOR,
+        state=CameraState.CONNECT,
+        last_frame_ts=None,
+        consecutive_failures=0,
+        effective_fps=None,
+    )
+
+    assert _engine(connecting).status is HealthStatus.DEGRADED
+
+
+def test_a_stalled_camera_degrades_the_engine(config: MusterConfig) -> None:
+    """A wedged camera is exactly as degraded as a dead one, and was invisible before.
+
+    Its process is alive and it has never failed, so `STREAMING` plus a zero failure
+    count — every signal `/healthz` had before P3.7 — would have read `ok`.
+    """
+    stalled = CameraHealth(
+        camera_id=FRONT_DOOR,
+        state=CameraState.STALLED,
+        last_frame_ts=LAST_FRAME_TS,
+        consecutive_failures=0,
+        effective_fps=0.0,
+    )
+
+    assert _engine(_healthy(), stalled).status is HealthStatus.DEGRADED
+
+
+def test_an_engine_whose_every_camera_has_stalled_is_down(config: MusterConfig) -> None:
+    """Nothing is being counted, which is what `down` means (§15)."""
+    stalled = CameraHealth(
+        camera_id=FRONT_DOOR,
+        state=CameraState.STALLED,
+        last_frame_ts=LAST_FRAME_TS,
+        consecutive_failures=0,
+        effective_fps=0.0,
+    )
+
+    assert _engine(stalled).status is HealthStatus.DOWN
+
+
+def test_down_is_still_decided_from_the_cameras_alone(config: MusterConfig) -> None:
+    """The OTHER deliberate silence, which P3.7 does not close.
+
+    §15 also reserves `down` for "store unwritable". That needs a write-failure signal
+    the supervisor does not surface, and probing with a write on every poll is its own
+    small disease. Pinned so filling in `last_frame_ts` is not read as having filled in
+    everything §15 asks for.
+    """
+    unwritable_disk = DiskHealth(free_pct=0, pressure=True)
+
+    engine = engine_health(
+        [_healthy()],
+        uptime_s=1.0,
+        schema_version=1,
+        sync=SyncHealth(enabled=False, unsynced_rows=0),
+        disk=unwritable_disk,
+    )
+
+    assert engine.status is HealthStatus.DEGRADED
 
 
 # --- Disk -------------------------------------------------------------------

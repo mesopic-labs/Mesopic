@@ -297,6 +297,74 @@ p {
   }
 }
 
+/* ---------- per-camera freshness ---------- */
+
+/* One line per camera, under the bar and above everything the cameras produced. The
+   order matters: a reader who does not know whether the box is still seeing anything
+   cannot interpret a single number below it. */
+.cameras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.4rem;
+  margin: 0;
+  padding: 0.7rem 0 0;
+  list-style: none;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.camera {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.camera .scope {
+  color: var(--ink);
+}
+
+.camera .age,
+.camera .fps {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Same rule the readings follow: an em dash is not a measurement, so it is not painted
+   like one. A camera that has never reported must not read as the freshest on the page. */
+.camera .age.is-absent,
+.camera .fps.is-absent {
+  opacity: 0.5;
+}
+
+/* Still dialling — lit but hollow, the same shape `degraded` uses on the engine lamp,
+   because "not yet" and "not right" are both "not counting, and not broken either". */
+.camera .lamp.is-connect {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--safelight);
+  animation: none;
+}
+
+/* A stalled camera is a fault, not a warning: the process is up and it has stopped
+   seeing. It is painted exactly like a dead one because it is exactly as useless. */
+.camera .lamp.is-stalled,
+.camera .lamp.is-backoff {
+  background: var(--fault);
+  box-shadow: none;
+  animation: none;
+}
+
+/* Switched off on purpose is not a fault and must never look like one. */
+.camera .lamp.is-disabled {
+  background: var(--muted);
+  box-shadow: none;
+  animation: none;
+  opacity: 0.6;
+}
+
 .windows {
   display: flex;
   gap: 0.35rem;

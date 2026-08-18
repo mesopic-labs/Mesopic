@@ -4,18 +4,18 @@ This is the only view an operator gets of a box they cannot SSH into, so it repo
 degradation honestly: a camera in BACKOFF is degraded, not fatal — the other cameras keep
 counting and the dead one's metrics simply show a gap.
 
-Two deliberate silences, both of which would be easy to fill with something plausible:
+`last_frame_ts` and `effective_fps` come from the worker's own heartbeat (P3.7), passed
+through and never derived. The obvious adjacent source — the newest metric bucket — would
+report a healthy camera nobody walks past as stalled, which is why they were `None` until
+a worker could report them rather than back-filled from something in reach.
 
-* **`last_frame_ts` and `effective_fps` are `None`.** They are known inside the worker
-  process and never reported back to the supervisor, so there is nothing here to report
-  (see `WorkerHandle.state`). Back-filling them from the newest metric bucket would make
-  a healthy camera nobody walks past look stalled.
-* **`down` is only decided from the cameras.** §15 also reserves it for "store
-  unwritable", which needs a write-failure signal the supervisor does not yet surface — a
-  probe write on every poll would be its own small disease. Named here so the gap is
-  visible rather than assumed closed.
+**One deliberate silence remains**, easy to fill with something plausible: `down` is
+decided from the cameras alone. §15 also reserves it for "store unwritable", which needs
+a write-failure signal the supervisor does not surface — a probe write on every poll
+would be its own small disease. Named here so the gap stays visible rather than assumed
+closed.
 
-Implements P3.1.
+Implements P3.1, extended by P3.7.
 """
 
 from __future__ import annotations
@@ -104,9 +104,9 @@ def camera_health(
         CameraHealth(
             camera_id=camera.camera_id,
             state=_state_of(reports.get(camera.camera_id)),
-            last_frame_ts=None,
+            last_frame_ts=_last_frame_ts_of(reports.get(camera.camera_id)),
             consecutive_failures=_failures_of(reports.get(camera.camera_id)),
-            effective_fps=None,
+            effective_fps=_effective_fps_of(reports.get(camera.camera_id)),
         )
         for camera in config.cameras
     ]
@@ -118,6 +118,14 @@ def _state_of(report: WorkerReport | None) -> CameraState:
 
 def _failures_of(report: WorkerReport | None) -> int:
     return 0 if report is None else report.consecutive_failures
+
+
+def _last_frame_ts_of(report: WorkerReport | None) -> FrameTs | None:
+    return None if report is None else report.last_frame_ts
+
+
+def _effective_fps_of(report: WorkerReport | None) -> float | None:
+    return None if report is None else report.effective_fps
 
 
 def engine_health(
@@ -146,6 +154,13 @@ def _status(cameras: Sequence[CameraHealth], disk: DiskHealth) -> HealthStatus:
     evidence of health nor of failure. An engine whose every camera is disabled is `down`
     — nothing is being counted, however deliberately.
 
+    **A camera still connecting holds the engine off `down`.** Every box passes through
+    "no camera has reported yet" on its way up (P3.7), and `down` is what an orchestrator
+    and the appliance telemetry page on — reading a two-second-old engine as `down` would
+    fire an alert on every restart, which is how an operator learns to ignore the field.
+    It is not `ok` either: nothing is counting yet, and the camera is caught below as
+    faulty for exactly that reason.
+
     **A past failure degrades even a camera that is currently up.** A camera whose URL is
     wrong flaps rather than staying down — start, fail, die, back off, start — and process
     liveness reads as `STREAMING` for most of that cycle, so judging on the current state
@@ -153,8 +168,9 @@ def _status(cameras: Sequence[CameraHealth], disk: DiskHealth) -> HealthStatus:
     until a restart, which is the right direction to be wrong in: it is visible in the
     payload and it never says "fine" about a camera that is not.
     """
-    streaming = [camera for camera in cameras if camera.state is CameraState.STREAMING]
-    if not streaming:
+    trying = (CameraState.STREAMING, CameraState.CONNECT)
+    counting = [camera for camera in cameras if camera.state in trying]
+    if not counting:
         return HealthStatus.DOWN
     faulty = [
         camera

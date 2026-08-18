@@ -35,14 +35,24 @@ from muster.api.board import (
     BoardWindow,
     charts_of,
     exposure_of,
+    freshness_for,
     human_duration,
     scope_slots,
     tiles_for,
 )
+from muster.api.health import CameraHealth
 from muster.config.schema import MusterConfig
 from muster.store.store import Store
 from muster.supervisor.handle import WorkerReport
-from muster.types import CameraId, CameraState, MetricName, MetricRow, MinuteBucket, ScopeId
+from muster.types import (
+    CameraId,
+    CameraState,
+    FrameTs,
+    MetricName,
+    MetricRow,
+    MinuteBucket,
+    ScopeId,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_CONFIG = REPO_ROOT / "examples" / "muster.yaml"
@@ -465,3 +475,107 @@ def test_the_stylesheet_honours_reduced_motion() -> None:
     css = (STATIC_DIR / "hud.css").read_text(encoding="utf-8")
 
     assert "prefers-reduced-motion" in css
+
+
+# --- Per-camera freshness (P3.7) --------------------------------------------
+#
+# Age rather than a wall-clock time, deliberately: what the reader wants is "is this
+# camera current", and an age answers it without picking a timezone. Which clock the
+# dashboard prints times in is still open (P3.9), and a freshness indicator should not
+# quietly decide it.
+
+
+def test_freshness_reports_how_long_ago_a_camera_last_delivered() -> None:
+    now = datetime(2026, 8, 18, 9, 43, tzinfo=UTC)
+    cameras = [
+        CameraHealth(
+            camera_id=FRONT_DOOR,
+            state=CameraState.STREAMING,
+            last_frame_ts=FrameTs(now - timedelta(seconds=8)),
+            consecutive_failures=0,
+            effective_fps=2.5,
+        )
+    ]
+
+    (first,) = freshness_for(cameras, now=now)
+
+    assert first.age == "8s"
+    assert first.effective_fps == pytest.approx(2.5)
+
+
+def test_a_camera_that_has_never_reported_has_no_age() -> None:
+    """Same rule the tiles follow: absent is not zero.
+
+    A `0s` age on a camera that has never sent a frame would read as the freshest thing
+    on the page, which is the exact inversion of the truth.
+    """
+    cameras = [
+        CameraHealth(
+            camera_id=FRONT_DOOR,
+            state=CameraState.CONNECT,
+            last_frame_ts=None,
+            consecutive_failures=0,
+            effective_fps=None,
+        )
+    ]
+
+    (first,) = freshness_for(cameras, now=datetime(2026, 8, 18, 9, 43, tzinfo=UTC))
+
+    assert first.age is None
+
+
+def test_a_frame_timestamped_in_the_future_does_not_report_a_negative_age() -> None:
+    """A camera whose clock runs fast is a skewed clock, not a frame from the future."""
+    now = datetime(2026, 8, 18, 9, 43, tzinfo=UTC)
+    cameras = [
+        CameraHealth(
+            camera_id=FRONT_DOOR,
+            state=CameraState.STREAMING,
+            last_frame_ts=FrameTs(now + timedelta(seconds=30)),
+            consecutive_failures=0,
+            effective_fps=2.5,
+        )
+    ]
+
+    (first,) = freshness_for(cameras, now=now)
+
+    assert first.age == "0s"
+
+
+async def test_the_fragment_shows_each_cameras_freshness(client: httpx.AsyncClient) -> None:
+    text = (await client.get("/fragments/board")).text
+
+    assert FRONT_DOOR in text
+    assert TILL in text
+    assert "streaming" in text
+
+
+async def test_the_fragment_names_a_stalled_camera(config: MusterConfig, store: Store) -> None:
+    """The whole point of P3.7 reaching the dashboard: a wedged camera is visible.
+
+    Its tiles keep rendering — a stalled camera is a gap, not a scope that stopped
+    existing — so without this row the page looks exactly like a quiet shop.
+
+    The clock is pinned rather than read: an age asserted against `datetime.now()` is a
+    test that reads `3m 59s` whenever the machine is a millisecond slow.
+    """
+    now = datetime(2026, 8, 18, 9, 43, tzinfo=UTC)
+
+    def _one_stalled() -> dict[CameraId, WorkerReport]:
+        return {
+            FRONT_DOOR: WorkerReport(
+                state=CameraState.STALLED,
+                consecutive_failures=0,
+                last_frame_ts=FrameTs(now - timedelta(minutes=4)),
+                effective_fps=0.0,
+            ),
+            TILL: WorkerReport(state=CameraState.STREAMING, consecutive_failures=0),
+        }
+
+    app = create_app(config=config, store=store, camera_reports=_one_stalled, clock=lambda: now)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        text = (await client.get("/fragments/board")).text
+
+    assert "stalled" in text
+    assert "4m 0s ago" in text

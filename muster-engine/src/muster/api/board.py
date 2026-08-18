@@ -27,8 +27,9 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
+from muster.api.health import CameraHealth
 from muster.config.schema import MusterConfig
-from muster.types import CameraId, MetricName, MetricRow, MinuteBucket, ScopeId
+from muster.types import CameraId, CameraState, MetricName, MetricRow, MinuteBucket, ScopeId
 
 
 class BoardWindow(StrEnum):
@@ -160,6 +161,50 @@ def human_duration(seconds: float) -> str:
     if minutes:
         return f"{minutes}m {secs}s"
     return f"{secs}s"
+
+
+@dataclass(frozen=True, slots=True)
+class CameraFreshness:
+    """One camera's line on the board: is it current, and how fast is it actually going.
+
+    `age` is a rendered duration rather than a timestamp on purpose. What the reader
+    wants is "is this camera current", which an age answers without picking a timezone —
+    and which clock this page prints times in is still an open decision (P3.9). A
+    freshness indicator should not settle it as a side effect.
+    """
+
+    camera_id: CameraId
+    state: CameraState
+    age: str | None
+    effective_fps: float | None
+
+
+def freshness_for(cameras: Sequence[CameraHealth], *, now: datetime) -> tuple[CameraFreshness, ...]:
+    """Each camera's liveness, as the board renders it.
+
+    A camera that has never reported has `age = None`, which renders as an em dash for
+    the same reason a scope with no rows does: `0s` on a camera that has never sent a
+    frame would read as the freshest thing on the page.
+    """
+    return tuple(
+        CameraFreshness(
+            camera_id=camera.camera_id,
+            state=camera.state,
+            age=None if camera.last_frame_ts is None else _age(camera.last_frame_ts, now),
+            effective_fps=camera.effective_fps,
+        )
+        for camera in cameras
+    )
+
+
+def _age(last_frame_ts: datetime, now: datetime) -> str:
+    """How long ago, never negative.
+
+    A camera whose clock runs fast is a skewed clock, not a frame from the future, and
+    `human_duration` already floors at zero — stated here because the alternative reading
+    ("-30s ago") would be a bug report about the dashboard rather than about the camera.
+    """
+    return human_duration((now - last_frame_ts).total_seconds())
 
 
 def scope_slots(config: MusterConfig) -> dict[str, int]:
@@ -295,11 +340,13 @@ __all__ = [
     "EXPOSURE_CELLS",
     "UNTILED_METRICS",
     "BoardWindow",
+    "CameraFreshness",
     "Exposure",
     "Tile",
     "as_series",
     "charts_of",
     "exposure_of",
+    "freshness_for",
     "human_duration",
     "scope_slots",
     "tiles_for",
