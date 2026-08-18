@@ -55,12 +55,31 @@ def write_geometry(path: Path, *, zones: Sequence[ZoneConfig], lines: Sequence[L
     """
     resolved = path.expanduser().resolve()
     document = _load_round_trip(resolved)
-    document["zones"] = _sequence(_zone_block(zone) for zone in zones)
-    document["lines"] = _sequence(_line_block(line) for line in lines)
+    _replace_block(document, "zones", [_zone_block(zone) for zone in zones])
+    _replace_block(document, "lines", [_line_block(line) for line in lines])
 
     rendered = _render(document)
     _reject_an_invalid_result(rendered, resolved)
     _replace_atomically(resolved, rendered)
+
+
+def _replace_block(document: Any, key: str, blocks: list[CommentedMap]) -> None:
+    """Swap one geometry block, dropping an introducing comment when nothing is left.
+
+    ruamel keeps a comment attached to the key when the value under it is replaced, which
+    is exactly what preserves an operator's annotation across a redraw. An **empty**
+    replacement is the one case where that is wrong: the comment now introduces items that
+    do not exist, and ruamel renders it as the key's own value line with the `[]` dangling
+    at column zero. That is not YAML, so the file the engine just wrote fails to parse at
+    the next start — on a box nobody is watching.
+
+    Dropping the comment loses an operator's note in that one case, which is the same
+    trade ADR-0018 already accepts for a rewritten shape, and strictly better than a
+    config that will not load.
+    """
+    document[key] = _sequence(blocks)
+    if not blocks:
+        document.ca.items.pop(key, None)
 
 
 def _round_trip() -> YAML:
@@ -95,7 +114,16 @@ def _render(document: Any) -> str:
 def _reject_an_invalid_result(rendered: str, path: Path) -> None:
     """Validate what would land, by the same path a user's file takes."""
     try:
-        MusterConfig.model_validate(yaml.safe_load(rendered))
+        candidate = yaml.safe_load(rendered)
+    except yaml.YAMLError:
+        # The engine mangling the document itself, rather than being handed a bad one.
+        # Caught here because this is the last point before the rename: without it the
+        # parser error escapes the save route as a 500, and the guard whose whole job is
+        # "a config the engine broke never lands" would let exactly that through.
+        msg = f"the engine produced a config for {path} that is not valid YAML"
+        raise ConfigError(msg) from None
+    try:
+        MusterConfig.model_validate(candidate)
     except ValidationError as error:
         raise ConfigError(describe_validation_error(path, error)) from None
 
