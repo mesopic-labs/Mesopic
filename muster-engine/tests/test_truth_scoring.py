@@ -563,3 +563,27 @@ def test_scoring_on_a_metric_a_truth_file_cannot_answer_is_refused() -> None:
             gating=False,
             metric=MetricName.DWELL_SECONDS,
         )
+
+
+def test_a_score_carries_the_metric_it_was_measured_on() -> None:
+    """Eleven crossings and two visits are the same clip; a bare total says which.
+
+    `gating` is on the result so an artefact read later still says whether it was a gate
+    run. The metric is load-bearing the same way and for a sharper reason: the two series
+    are different quantities read against different bands, so a `Score` that does not name
+    its metric cannot be interpreted at all once it outlives the call site.
+    """
+    truth = _truth((10.0, "in"), (70.0, "out"))
+
+    footfall = score(truth, _manifest(), [_row(0, 1.0)], stream_start=STREAM_START, gating=False)
+    traffic = score(
+        truth,
+        _manifest(),
+        [_cross_row(0, 1.0), _cross_row(1, 1.0)],
+        stream_start=STREAM_START,
+        gating=False,
+        metric=MetricName.LINE_CROSS,
+    )
+
+    assert footfall.metric is MetricName.FOOTFALL
+    assert traffic.metric is MetricName.LINE_CROSS

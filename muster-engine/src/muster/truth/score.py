@@ -45,6 +45,13 @@ class Score:
 
     clip_id: ClipId
     gating: bool
+    metric: MetricName
+    """Which quantity was measured. Carried for the same reason as ``gating``, and for a
+    sharper one: footfall and ``line_cross`` are different counts read against different
+    bands, so a total that does not name its metric cannot be read once it outlives the
+    call site — a doorway watched while a building empties scores 11 on one and 2 on the
+    other."""
+
     minutes: int
     truth_total: int
     predicted_total: float
@@ -56,7 +63,7 @@ class Score:
     catches an engine that is right overall by being wrong in both directions."""
 
     stray_minutes: int
-    """Minutes the engine attributed footfall to that the clip does not span.
+    """Minutes the engine attributed counts to that the clip does not span.
 
     Counted separately from `minutes` because the clip's length is a fact and this is a
     symptom: a non-zero value means the run emitted counts outside the footage, which is
@@ -221,6 +228,7 @@ def score(
     return Score(
         clip_id=truth.clip_id,
         gating=gating,
+        metric=metric,
         minutes=len(expected),
         truth_total=truth_total,
         predicted_total=predicted_total,
