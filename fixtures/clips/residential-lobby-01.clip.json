@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "clip_id": "residential-lobby-01",
+  "sha256": "123ca9981b94d9fea80199450f37640c499c1d9fc9fd0203f72648eceec451c6",
+  "duration_s": 2410.0,
+  "width": 1918,
+  "height": 1080,
+  "fps": 30.0,
+  "provenance": {
+    "kind": "own_rig",
+    "licence": "Own recording, retained for engine evaluation. No third-party licence applies.",
+    "licence_verified_utc": "2026-08-18",
+    "url": null
+  },
+  "consent": {
+    "model_release": "obtained",
+    "note": "Consent obtained for the identifiable people appearing in this recording"
+  },
+  "scene": {
+    "reference": "hard",
+    "mount_height_m": 2.8,
+    "mount_angle_deg": 45.0,
+    "lighting": "daylight_backlit_doorway"
+  }
+}

@@ -47,6 +47,7 @@ for a published number.
 | `home-hallway-oblique-01` | own_rig | obtained | hard | 3 in, 3 out — emil | yes |
 | `home-hallway-oblique-02` | own_rig | obtained | hard | 1 in, 1 out — emil | yes |
 | `home-kitchen-oblique-01` | own_rig | obtained | hard | n/a — no counting line | yes |
+| `residential-lobby-01` | own_rig | obtained | hard | 2 in, 9 out — markos | yes |
 | `storefront-oblique-01` | stock | unknown | hard | 3 in, 1 out — draft | no |
 | `entrance-headon-01` | stock | unknown | typical | 1 in — draft | no |
 | `entrance-headon-loop30-01` | stock | unknown | typical | none | no |
@@ -85,13 +86,59 @@ continuous, several people walking a known schedule. See `../../Muster-docs/docs
 §7 and §8; §8's hour-grain-vs-minute-grain question wants an answer *before* that session,
 not after.
 
-> **Gate-eligible is a new property here, and it has a sharp edge.**
-> `score(..., gating=True)` refuses a clip whose provenance or consent fails, and checks
-> nothing else — not the scene class, not the clip length, not whether a human ever
-> verified the labels. While every gate-eligible clip was hypothetical that gap was inert.
-> It is not any more: these three are `hard`, minutes long, and would pass the guard.
-> Until it is closed, "is this clip a legitimate basis for this number?" is a question the
-> code does not yet ask for you.
+> **Gate-eligibility answers permission, not validity.** `gate_eligible()` asks whether we
+> may publish from footage of these people at all — provenance and consent, and nothing
+> else. Committing these three clips armed a gap that had been inert while every
+> gate-eligible clip was hypothetical, so `gate_blockers()` now asks the other question
+> beside it: does the clip measure the scene the gate is specified on, and did a human
+> stand behind the labels. A clip can pass the first and fail the second — these three do.
+> What the code still does not check is clip length or crossing density, so "is this clip
+> a *sufficient* basis for this number?" remains a judgement call.
+
+### `residential-lobby-01`: the first long clip, and still not the gate clip
+
+40 minutes of a residential building's entrance hall, own rig, consent obtained. It is the
+first clip here long enough to be read at hour grain and the first with more than one
+person in frame. It is gate-eligible on the derived rule, and it is still not the gate
+clip:
+
+- **The lighting binds it to `hard`, and only the lighting.** The mount is 2.8 m at
+  roughly 45°, which is inside the reference envelope on both axes — angle to the nearest
+  five degrees or so, not instrumented. Everything about the geometry is what the good
+  doorway asks for. A strong backlit doorway is the `hard` column's own named example, and
+  a scene is bound by its worst axis, so the class does not move.
+- **Eleven crossings in 40 minutes.** Longer than the `home-*` clips without being denser,
+  so a single miscount is a ~9 % error. Wide enough to catch a tracker breaking, far too
+  wide to detect drift.
+
+That first point is the useful one. This is the first mount here whose geometry the
+reference envelope actually wants, so the doorway is a candidate for a real gate session
+once the light is dealt with — same rig, even artificial lighting, no re-mounting.
+
+The labels are **not** a draft. `markos` watched the clip end to end against a hand-written
+tally made before the truth file existed, and the two agreed, which makes this the first
+clip here a human has stood behind. So one refusal remains:
+
+```
+scene is hard, but this gate is specified on good_doorway
+```
+
+Gating it on `hard` instead — `gate_scene=SceneReference.HARD`, which is what that
+parameter exists for — passes with nothing misrepresented. It is a deliberately looser bar
+than M1's: the hard scene's band is ≤ 25 % MAPE launch-credible against the good doorway's
+≤ 7 %. Combined with eleven crossings, a number from this clip is a regression tripwire and
+is never an M1 result.
+
+Two properties of the file a labeller needs to know before opening it:
+
+- **The doorway is blown out white for most of the clip**, so everyone crossing it is a
+  silhouette. That is why it is `hard`, and why it is a genuinely useful thing to measure
+  against.
+- **It is eight DVR segments concatenated out of chronological order.** The clock burnt
+  into the top-left jumps backwards at roughly 301, 602, 903, 1204, 1505, 1806, 2107 and
+  2408 s, and the last two seconds are an editor's outro card. Media time is unaffected,
+  which is the whole reason `t_s` is media time — the burnt-in clock is not a timebase and
+  must not be used as one.
 
 ### How the `home-hallway-*` clips were labelled
 
@@ -119,22 +166,39 @@ indefinite loop `docker/mediamtx.yml` already serves. **It is not an accuracy fi
 98 copies of one scene is a single observation repeated, and every loop seam is a hard cut
 that breaks tracks and manufactures crossings that are not in the source.
 
-### The labels here are unverified drafts
+### The stock labels are unverified drafts
 
-Both truth files carry `labelled_by: draft-unverified`. They were derived by stepping
-through sampled frames rather than by watching the video end to end, and nobody has
-checked them since. They are good enough to iterate a metric against and are **not** good
-enough to be anybody's reference for a published number — which the gate-eligibility rule
-already makes structurally impossible for these two clips.
+`storefront-oblique-01` and `entrance-headon-01` carry `labelled_by: draft-unverified`.
+They were derived by stepping through sampled frames rather than by watching the video end
+to end, and nobody has checked them since. They are good enough to iterate a metric against
+and are **not** good enough to be anybody's reference for a published number — which, being
+stock, they can never be anyway.
 
-Verify them in the clicker and re-save under your own name. The judgement calls worth
-re-checking are the ones a detector will also find hard:
+`score(..., gating=True)` refuses both, so neither can reach a published number by accident.
+Verify them in the clicker and re-save under your own name — the rater field is the
+accountability mechanism, and promoting a draft is meant to be a human act rather than a
+flag someone flips. The judgement calls worth re-checking are the ones a detector will also
+find hard:
 
 - **`storefront-oblique-01` @ 0.1–1.9 s** — a man walks right-to-left across the front of
   the store, over the mat, without entering. Recorded as *no crossing*. Whether that is
   right depends entirely on where the `entrance` line is drawn (see below).
 - **`storefront-oblique-01` @ 17.0 s** — a man walks *out*. Recorded as `out`.
 - Timestamps are ±0.3 s throughout.
+
+### The calls `markos` made in `residential-lobby-01`
+
+Verified end to end against a hand-written tally, so these are recorded decisions rather
+than open questions — but they are the ones a detector will get wrong, which is what makes
+the clip worth running:
+
+- **@ 1766.5 s and 2327.4 s** — a woman leaves and later returns with a dog. One person,
+  one crossing, each way. The dog is not a crossing.
+- **@ 365, 449, 527, 601, 1699 and 1805 s** — the camera's own motion overlay fires with
+  nobody in frame: the doorway's exposure swings, and two of those are concatenation seams.
+  All recorded as *no crossing*, and every one is a place a detector can plausibly invent
+  one.
+- Timestamps are ±0.3 s.
 
 ### A gap this surfaced: the labeller cannot see the line
 

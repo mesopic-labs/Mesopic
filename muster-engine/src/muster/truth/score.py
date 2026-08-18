@@ -7,8 +7,10 @@ recording. :func:`score` reconciles the two by subtracting the instant the repla
 and refuses when that instant is not on a minute boundary, because a clip started at
 09:30:20 has a media minute 0 that no wall-clock bucket corresponds to.
 
-Scope is the gate's number and nothing else: footfall count error. Tracking quality,
-dwell and queue are recorded elsewhere and do not gate, so nothing here computes them.
+Scope is count error, on the two quantities a clicker's crossings can answer for:
+``footfall`` (inward visits, what the gate is specified on) and ``line_cross`` (traffic
+in both directions). Tracking quality, dwell and queue need a different observation than
+a truth file carries, so nothing here computes them.
 """
 
 from __future__ import annotations
@@ -43,6 +45,13 @@ class Score:
 
     clip_id: ClipId
     gating: bool
+    metric: MetricName
+    """Which quantity was measured. Carried for the same reason as ``gating``, and for a
+    sharper one: footfall and ``line_cross`` are different counts read against different
+    bands, so a total that does not name its metric cannot be read once it outlives the
+    call site — a doorway watched while a building empties scores 11 on one and 2 on the
+    other."""
+
     minutes: int
     truth_total: int
     predicted_total: float
@@ -54,7 +63,7 @@ class Score:
     catches an engine that is right overall by being wrong in both directions."""
 
     stray_minutes: int
-    """Minutes the engine attributed footfall to that the clip does not span.
+    """Minutes the engine attributed counts to that the clip does not span.
 
     Counted separately from `minutes` because the clip's length is a fact and this is a
     symptom: a non-zero value means the run emitted counts outside the footage, which is
@@ -63,22 +72,53 @@ class Score:
     """
 
 
+def _empty_minutes(truth: TruthFile) -> dict[int, int]:
+    """Every minute the clip spans, at zero.
+
+    **Including the empty ones.** A quiet minute is an observation the engine can get
+    wrong, and dropping it would let a quiet hour score perfectly by default.
+    """
+    minutes = max(1, ceil(truth.duration_s / SECONDS_PER_MINUTE))
+    return dict.fromkeys(range(minutes), 0)
+
+
 def footfall_per_minute(truth: TruthFile) -> dict[int, int]:
     """Reduce labelled crossings to a per-minute footfall series, in media time.
 
-    Keyed by minute index from the start of the clip, and **every minute the clip spans
-    is present**, including the empty ones. A quiet minute is an observation the engine
-    can get wrong, and dropping it would let a quiet hour score perfectly by default.
-
     Footfall counts inward crossings only. An exit is a real event and not a visit; it is
-    carried by the ``line_cross`` metric, which is recorded and does not gate.
+    carried by the ``line_cross`` metric.
     """
-    minutes = max(1, ceil(truth.duration_s / SECONDS_PER_MINUTE))
-    series = dict.fromkeys(range(minutes), 0)
+    series = _empty_minutes(truth)
     for crossing in truth.crossings:
         if crossing.direction is Direction.IN:
             series[int(crossing.t_s // SECONDS_PER_MINUTE)] += 1
     return series
+
+
+def line_crossings_per_minute(truth: TruthFile) -> dict[int, int]:
+    """Reduce labelled crossings to a per-minute traffic series, in media time.
+
+    Both directions, because an exit is traffic even though it is not a visit. This is
+    the series to score a clip on when its crossings are mostly outward — a doorway
+    watched while a building empties has plenty of events and almost no footfall, and
+    scoring it on footfall would measure two of eleven observations.
+    """
+    series = _empty_minutes(truth)
+    for crossing in truth.crossings:
+        series[int(crossing.t_s // SECONDS_PER_MINUTE)] += 1
+    return series
+
+
+_TRUTH_SERIES = {
+    MetricName.FOOTFALL: footfall_per_minute,
+    MetricName.LINE_CROSS: line_crossings_per_minute,
+}
+"""The metrics a truth file can be scored on, and how each reduces to minute buckets.
+
+Only these two: a truth file records line crossings, so it can answer for visits and for
+traffic and for nothing else. Dwell, queue and occupancy need a different observation
+than a clicker produces.
+"""
 
 
 def mape(predicted: Mapping[int, float], truth: Mapping[int, int]) -> float:
@@ -138,8 +178,9 @@ def score(
     stream_start: MinuteBucket,
     gating: bool,
     gate_scene: SceneReference = DEFAULT_GATE_SCENE,
+    metric: MetricName = MetricName.FOOTFALL,
 ) -> Score:
-    """Measure the engine's footfall against a labelled clip.
+    """Measure the engine's count against a labelled clip.
 
     ``gating`` is explicit and unforgiving: asking to gate on a clip that may not back a
     published number raises rather than returning one. Measuring the same clip with
@@ -148,6 +189,13 @@ def score(
 
     ``gate_scene`` names which reference scene is being gated, because a target quoted
     outside its scene is void and the scene differs by milestone.
+
+    ``metric`` selects **both** sides of the comparison — which crossings the truth series
+    counts, and which of the run's rows are read. It defaults to footfall because that is
+    what the gate is specified on; ``line_cross`` scores traffic instead, which is the
+    honest choice for a clip whose crossings are mostly outward. The two are different
+    quantities and the band each is read against differs, so a result carries the metric
+    it was measured on.
 
     What is *not* checked, and is left to the caller: clip length. The gate is stated at
     hour grain, so a three-minute clip cannot produce it — but whether a given run needs
@@ -159,8 +207,13 @@ def score(
         message = f"clip {manifest.clip_id} may not back a published number: " + "; ".join(blockers)
         raise TruthError(message)
 
-    expected = footfall_per_minute(truth)
-    predicted = _predicted_per_minute(metrics, stream_start)
+    if metric not in _TRUTH_SERIES:
+        supported = ", ".join(sorted(name.value for name in _TRUTH_SERIES))
+        message = f"a truth file cannot answer for {metric.value}; it records {supported}"
+        raise TruthError(message)
+
+    expected = _TRUTH_SERIES[metric](truth)
+    predicted = _predicted_per_minute(metrics, stream_start, metric)
 
     # Every minute the engine spoke about is a window it can be wrong in, including the
     # ones outside the clip. Reading only the truth's minutes would score a run that
@@ -175,6 +228,7 @@ def score(
     return Score(
         clip_id=truth.clip_id,
         gating=gating,
+        metric=metric,
         minutes=len(expected),
         truth_total=truth_total,
         predicted_total=predicted_total,
@@ -185,9 +239,9 @@ def score(
 
 
 def _predicted_per_minute(
-    metrics: Iterable[MetricRow], stream_start: MinuteBucket
+    metrics: Iterable[MetricRow], stream_start: MinuteBucket, metric: MetricName
 ) -> dict[int, float]:
-    """Fold footfall rows onto media-time minute indices. The one UTC conversion."""
+    """Fold one metric's rows onto media-time minute indices. The one UTC conversion."""
     if stream_start.tzinfo is None:
         message = "stream_start must be timezone-aware UTC"
         raise TruthError(message)
@@ -198,18 +252,18 @@ def _predicted_per_minute(
         message = "stream_start must fall on a minute boundary for media time to align"
         raise TruthError(message)
 
-    footfall = [row for row in metrics if row.metric is MetricName.FOOTFALL]
-    _refuse_mixed_scopes(footfall)
+    selected = [row for row in metrics if row.metric is metric]
+    _refuse_mixed_scopes(selected)
 
     predicted: dict[int, float] = {}
-    for row in footfall:
+    for row in selected:
         minute = int((row.bucket - stream_start).total_seconds() // SECONDS_PER_MINUTE)
         predicted[minute] = predicted.get(minute, 0.0) + row.value
     return predicted
 
 
-def _refuse_mixed_scopes(footfall: list[MetricRow]) -> None:
-    """One footfall series per run, and the caller says which.
+def _refuse_mixed_scopes(rows: list[MetricRow]) -> None:
+    """One series per run, and the caller says which.
 
     Rows scoped to different lines sum correctly — two doors on one camera are two rows
     and one visit count. A camera-wide row is that same quantity counted a second way, so
@@ -217,11 +271,11 @@ def _refuse_mixed_scopes(footfall: list[MetricRow]) -> None:
     camera-wide row, or both is P2.4's decision; what must not happen is a mix being
     scored and the doubling being reported as an engine accuracy failure.
     """
-    scoped = any(row.scope_id is not None for row in footfall)
-    camera_wide = any(row.scope_id is None for row in footfall)
+    scoped = any(row.scope_id is not None for row in rows)
+    camera_wide = any(row.scope_id is None for row in rows)
     if scoped and camera_wide:
         message = (
-            "footfall rows mix per-scope and camera-wide totals; these are the same count "
+            "metric rows mix per-scope and camera-wide totals; these are the same count "
             "measured twice, so scoring both would double it — pass one series"
         )
         raise TruthError(message)
