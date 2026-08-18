@@ -94,7 +94,7 @@ class Supervisor:
             dwell_min_s=config.thresholds.dwell_min_s,
         )
         self._handles = [
-            WorkerHandle(camera.camera_id, config=config, entry=entry)
+            WorkerHandle(camera.camera_id, config=config, entry=entry, monotonic=monotonic)
             for camera in config.cameras
             if camera.enabled
         ]
@@ -222,7 +222,12 @@ class Supervisor:
     # --- The tick -----------------------------------------------------------
 
     async def tick(self) -> None:
-        """One pass: take what the workers produced, advance the clock, close what is due."""
+        """One pass: take what the workers said, advance the clock, close what is due."""
+        for handle in self._handles:
+            # Heartbeats are drained on the tick because the tick is the only thing that
+            # runs unattended. Draining them where `/healthz` is served instead would
+            # make a camera's freshness depend on someone loading the dashboard.
+            handle.drain_heartbeats()
         await self.drain_once(timeout=0.0)
         now = self._now()
         # The aggregator advances on the timestamps it is fed, so a zone the last person

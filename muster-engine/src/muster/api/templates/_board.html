@@ -39,6 +39,31 @@
   </div>
 
   {#
+    Per-camera freshness. The tiles below say what was counted; this says whether anyone
+    is still counting. A camera that wedges keeps its tiles — a stall is a gap, not a
+    scope that stopped existing — so without this row a dead camera and a quiet shop
+    render identically.
+
+    An age rather than a clock time: it answers "is this current" without picking a
+    timezone, and which clock this page prints times in is still open (P3.9).
+  #}
+  <ul class="cameras">
+    {% for camera in freshness %}
+    <li class="camera is-{{ camera.state.value }}">
+      <span class="lamp{% if camera.state.value != 'streaming' %} is-{{ camera.state.value }}{% endif %}"></span>
+      <span class="scope">{{ camera.camera_id }}</span>
+      <span class="state">{{ camera.state.value }}</span>
+      <span class="age{% if camera.age is none %} is-absent{% endif %}">
+        {%- if camera.age is none %}&mdash;{% else %}{{ camera.age }} ago{% endif -%}
+      </span>
+      <span class="fps{% if camera.effective_fps is none %} is-absent{% endif %}">
+        {%- if camera.effective_fps is none %}&mdash;{% else %}{{ camera.effective_fps | round(1) }} fps{% endif -%}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+
+  {#
     The exposure strip. Every other panel on this page answers "what happened"; this one
     answers the question underneath it — has the box been seeing anything at all, and for
     how long. A quiet zone and a dead camera draw the same flat chart, and only this tells

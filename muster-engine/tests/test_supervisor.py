@@ -17,6 +17,7 @@ Red-first for P2.7.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Iterator
 from dataclasses import fields
@@ -28,6 +29,7 @@ from typing import Any
 import pytest
 import yaml
 from scripted_worker import (
+    SCRIPTED_FRAME_TS,
     emit_occupancy_sample,
     emit_then_die,
     emit_then_exit,
@@ -39,9 +41,9 @@ from muster.aggregator.aggregator import EXIT_GRACE_S
 from muster.config.schema import MusterConfig
 from muster.exporters.fanout import ExporterFanout
 from muster.store.store import Store
-from muster.supervisor.handle import WorkerEntry
+from muster.supervisor.handle import STALL_AFTER_S, WorkerEntry, WorkerReport
 from muster.supervisor.supervisor import BUCKET_S, CLOSE_LAG_S, Supervisor
-from muster.types import CameraState, MetricName, MetricRow, ScopeId
+from muster.types import CameraId, CameraState, MetricName, MetricRow, ScopeId
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_CONFIG = REPO_ROOT / "examples" / "muster.yaml"
@@ -124,6 +126,20 @@ def _supervisor(
 def _footfall(store: Store) -> list[float]:
     rows = store.unsynced_metrics(limit=50)
     return sorted(row.value for row in rows if row.metric is MetricName.FOOTFALL)
+
+
+async def _await_reports(
+    supervisor: Supervisor, within_s: float = 5.0
+) -> dict[CameraId, WorkerReport]:
+    """Tick until every worker has reported itself, or fail saying one never did."""
+    deadline = time.monotonic() + within_s
+    while time.monotonic() < deadline:
+        await supervisor.tick()
+        reports = supervisor.camera_reports()
+        if all(report.last_frame_ts is not None for report in reports.values()):
+            return reports
+        await asyncio.sleep(0.02)
+    pytest.fail("a worker never sent a heartbeat")
 
 
 def _wait_all_dead(supervisor: Supervisor, within_s: float) -> None:
@@ -552,14 +568,82 @@ async def test_exporters_are_only_told_about_rows_the_store_accepted(
 async def test_a_running_worker_reports_streaming(
     config: MusterConfig, store: Store, clock: FakeClock
 ) -> None:
-    """`/healthz` has to distinguish a working camera from a flapping one (§15)."""
+    """`/healthz` has to distinguish a working camera from a flapping one (§15).
+
+    Since P3.7 `STREAMING` means the worker said so, not merely that its process exists,
+    so this waits for the heartbeat rather than reading the state the instant it spawns.
+    """
     supervisor = _supervisor(config, store, clock, run_until_stopped)
 
     await supervisor.start()
-    reports = supervisor.camera_reports()
+    reports = await _await_reports(supervisor)
 
     assert set(reports) == {camera.camera_id for camera in config.cameras}
     assert {report.state for report in reports.values()} == {CameraState.STREAMING}
+    await supervisor.stop()
+
+
+async def test_a_worker_that_has_not_reported_yet_is_connecting_not_streaming(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """The seconds a camera spends dialling are not a stall and are not streaming either.
+
+    Before P3.7 this window read `STREAMING`, which is the same answer the endpoint gave
+    for a camera that had been counting for a week.
+    """
+    supervisor = _supervisor(config, store, clock, run_until_stopped)
+
+    await supervisor.start()
+
+    assert {report.state for report in supervisor.camera_reports().values()} == {
+        CameraState.CONNECT
+    }
+    await supervisor.stop()
+
+
+async def test_a_tick_picks_up_what_the_workers_reported(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """The heartbeat has to be drained by the loop that already runs, or it is never read.
+
+    `tick()` is the only thing that runs unattended, so a heartbeat drained anywhere else
+    would arrive exactly when a human happened to load the dashboard.
+    """
+    supervisor = _supervisor(config, store, clock, run_until_stopped)
+
+    await supervisor.start()
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        await supervisor.tick()
+        reports = supervisor.camera_reports()
+        if all(report.last_frame_ts is not None for report in reports.values()):
+            break
+
+    assert {report.last_frame_ts for report in supervisor.camera_reports().values()} == {
+        SCRIPTED_FRAME_TS
+    }
+    await supervisor.stop()
+
+
+async def test_a_camera_that_goes_quiet_is_reported_as_stalled(
+    config: MusterConfig, store: Store, clock: FakeClock
+) -> None:
+    """The wedged stream, end to end.
+
+    The worker is alive and has never failed, so process liveness and the failure count
+    both say this camera is fine. `run_until_stopped` beats once and then says nothing,
+    which is precisely the shape of a camera whose RTSP session has hung.
+    """
+    supervisor = _supervisor(config, store, clock, run_until_stopped)
+
+    await supervisor.start()
+    await _await_reports(supervisor)
+    clock.advance(STALL_AFTER_S + 1.0)
+
+    reports = supervisor.camera_reports()
+
+    assert {report.state for report in reports.values()} == {CameraState.STALLED}
+    assert {report.consecutive_failures for report in reports.values()} == {0}
     await supervisor.stop()
 
 

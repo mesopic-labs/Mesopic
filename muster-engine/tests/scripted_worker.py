@@ -19,8 +19,23 @@ from datetime import UTC, datetime
 from multiprocessing.queues import Queue
 
 from muster.config.schema import MusterConfig
-from muster.supervisor.control import ControlMessage, SnapshotReply, Stop
+from muster.supervisor.control import ControlMessage, Heartbeat, Stop, WorkerChannels
 from muster.types import CameraId, EventKind, FrameTs, LineId, RawEvent, TrackId, ZoneId
+
+SCRIPTED_FRAME_TS = FrameTs(datetime(2026, 8, 18, 9, 30, tzinfo=UTC))
+"""The frame time every scripted heartbeat claims. Fixed so a test can assert on it."""
+
+SCRIPTED_FPS = 2.5
+"""The rate every scripted heartbeat claims to have achieved."""
+
+
+def _beat(fps: float = SCRIPTED_FPS) -> Heartbeat:
+    return Heartbeat(last_frame_ts=SCRIPTED_FRAME_TS, effective_fps=fps)
+
+
+def _idle_until_stopped(control: Queue[ControlMessage]) -> None:
+    while not isinstance(control.get(), Stop):
+        time.sleep(0.01)
 
 
 def line_of(camera_id: CameraId) -> LineId:
@@ -46,45 +61,39 @@ def _crossing(camera_id: CameraId, index: int) -> RawEvent:
 def emit_then_exit(
     camera_id: CameraId,
     config: MusterConfig,  # the entry-point contract
-    events_out: Queue[RawEvent],
-    control_in: Queue[ControlMessage],
-    snapshots_out: Queue[SnapshotReply] | None = None,
+    channels: WorkerChannels,
     *,
     crossings: int = 1,
 ) -> None:
     """Put `crossings` line-cross events, then return normally."""
     for index in range(crossings):
-        events_out.put(_crossing(camera_id, index))
-    events_out.close()
-    events_out.join_thread()
+        channels.events.put(_crossing(camera_id, index))
+    channels.events.close()
+    channels.events.join_thread()
 
 
 def emit_then_die(
     camera_id: CameraId,
-    config: MusterConfig,
-    events_out: Queue[RawEvent],
-    control_in: Queue[ControlMessage],
-    snapshots_out: Queue[SnapshotReply] | None = None,
+    config: MusterConfig,  # the entry-point contract
+    channels: WorkerChannels,
     *,
     crossings: int = 1,
 ) -> None:
     """Put events, then `SIGKILL` itself — the crash the supervisor must survive."""
     for index in range(crossings):
-        events_out.put(_crossing(camera_id, index))
-    events_out.close()
-    events_out.join_thread()
+        channels.events.put(_crossing(camera_id, index))
+    channels.events.close()
+    channels.events.join_thread()
     os.kill(os.getpid(), signal.SIGKILL)
 
 
 def emit_occupancy_sample(
     camera_id: CameraId,
-    config: MusterConfig,
-    events_out: Queue[RawEvent],
-    control_in: Queue[ControlMessage],
-    snapshots_out: Queue[SnapshotReply] | None = None,
+    config: MusterConfig,  # the entry-point contract
+    channels: WorkerChannels,
 ) -> None:
     """One trackless occupancy sample — the kind the raw event log cannot hold."""
-    events_out.put(
+    channels.events.put(
         RawEvent(
             camera_id=camera_id,
             ts=FrameTs(datetime(2026, 8, 16, 9, 30, 5, tzinfo=UTC)),
@@ -95,19 +104,53 @@ def emit_occupancy_sample(
             dt_s=0.4,
         )
     )
-    events_out.close()
-    events_out.join_thread()
+    channels.events.close()
+    channels.events.join_thread()
 
 
 def run_until_stopped(
     camera_id: CameraId,
-    config: MusterConfig,
-    events_out: Queue[RawEvent],
-    control_in: Queue[ControlMessage],
-    snapshots_out: Queue[SnapshotReply] | None = None,
+    config: MusterConfig,  # the entry-point contract
+    channels: WorkerChannels,
 ) -> None:
-    """Idle until told to stop — the shape a real worker has."""
-    while not isinstance(control_in.get(), Stop):
-        time.sleep(0.01)
-    events_out.close()
-    events_out.join_thread()
+    """Idle until told to stop — the shape a real worker has, heartbeat included.
+
+    A real worker reports itself (P3.7), so one that did not would read as `CONNECT`
+    forever and quietly change what every supervisor test using this is asserting.
+    """
+    channels.heartbeats.put(_beat())
+    _idle_until_stopped(channels.control)
+    channels.events.close()
+    channels.events.join_thread()
+
+
+def beat_then_idle(
+    camera_id: CameraId,
+    config: MusterConfig,  # the entry-point contract
+    channels: WorkerChannels,
+) -> None:
+    """Report once, then idle — a worker that is streaming and has nothing to say."""
+    channels.heartbeats.put(_beat())
+    _idle_until_stopped(channels.control)
+
+
+def beat_ramp_then_idle(
+    camera_id: CameraId,
+    config: MusterConfig,  # the entry-point contract
+    channels: WorkerChannels,
+    *,
+    beats: int = 4,
+) -> None:
+    """Report `beats` times with a rising fps, so "newest" is distinguishable from "first"."""
+    for index in range(beats):
+        channels.heartbeats.put(_beat(SCRIPTED_FPS + float(index)))
+    _idle_until_stopped(channels.control)
+
+
+def silent_until_stopped(
+    camera_id: CameraId,
+    config: MusterConfig,  # the entry-point contract
+    channels: WorkerChannels,
+) -> None:
+    """Alive and saying nothing — the wedged stream `/healthz` could not see before P3.7."""
+    _idle_until_stopped(channels.control)

@@ -56,6 +56,7 @@ from muster.api.board import (
     as_series,
     charts_of,
     exposure_of,
+    freshness_for,
     human_duration,
     scope_slots,
     tiles_for,
@@ -220,6 +221,9 @@ def create_app(
     def _board_context(window: BoardWindow) -> dict[str, Any]:
         end = clock()
         rows = store.metrics_between(start=end - window.span, end=end, limit=MAX_LIMIT)
+        health = _health(
+            current(), store, reports=camera_reports(), uptime_s=monotonic() - started_at
+        )
         return {
             "site_id": current().site.site_id,
             "window": window,
@@ -233,9 +237,8 @@ def create_app(
             "charts": charts_of(current(), rows=rows),
             "slots": scope_slots(current()),
             "exposure": exposure_of(rows, end=end, window=window),
-            "health": _health(
-                current(), store, reports=camera_reports(), uptime_s=monotonic() - started_at
-            ),
+            "health": health,
+            "freshness": freshness_for(health.cameras, now=end),
             "uptime": human_duration(monotonic() - started_at),
         }
 

@@ -38,6 +38,7 @@ from muster.runner import DATA_DIR_ENV_VAR, Engine, build_server, store_path
 from muster.store.store import Store
 from muster.types import (
     CameraId,
+    CameraState,
     MetricName,
     MetricRow,
     MinuteBucket,
@@ -124,7 +125,13 @@ async def test_the_server_is_given_the_configured_bind(config: MusterConfig, sto
 async def test_healthz_sees_the_running_supervisors_cameras(
     config: MusterConfig, store: Store
 ) -> None:
-    """Proves the app holds `camera_states` itself, not a copy read once at startup."""
+    """Proves the app holds `camera_states` itself, not a copy read once at startup.
+
+    The status asserted here is `degraded`, not `ok`, and that is the honest answer since
+    P3.7: the API is served the instant the supervisor starts, before any worker has had
+    time to report a frame, so every camera is still `CONNECT`. `ok` would mean cameras
+    are counting, which at this point in the run is not yet true of any of them.
+    """
     engine = Engine(config, store, entry=run_until_stopped)
     seen: dict[str, Any] = {}
 
@@ -139,7 +146,8 @@ async def test_healthz_sees_the_running_supervisors_cameras(
     assert {camera["camera_id"] for camera in seen["cameras"]} == {
         camera.camera_id for camera in config.cameras
     }
-    assert seen["status"] == "ok"
+    assert seen["status"] == "degraded"
+    assert {camera["state"] for camera in seen["cameras"]} == {CameraState.CONNECT.value}
 
 
 async def test_the_api_can_be_switched_off(config: MusterConfig, store: Store) -> None:

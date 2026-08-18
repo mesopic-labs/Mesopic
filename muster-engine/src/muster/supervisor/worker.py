@@ -13,6 +13,8 @@ Implements P2.7 (engine-architecture.md §9).
 from __future__ import annotations
 
 import queue
+import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from multiprocessing.queues import Queue
@@ -26,19 +28,83 @@ from muster.sampler.sampler import FrameSampler
 from muster.supervisor.backpressure import Backpressure, Outbox, Sink
 from muster.supervisor.control import (
     ControlMessage,
+    Heartbeat,
     Reconfigure,
     Snapshot,
     SnapshotReply,
     Stop,
+    WorkerChannels,
 )
 from muster.supervisor.pipeline import build_pipeline
 from muster.supervisor.snapshot import encode_snapshot
 from muster.tracker.tracker import Tracker
-from muster.types import CameraId, DecodedFrame, RawEvent
+from muster.types import CameraId, DecodedFrame, FrameTs, RawEvent
 
 OUTBOX_SIZE = 256
 """Events buffered locally before the oldest is dropped. Small on purpose: this is a
 stall absorber, not a store, and everything in it is at risk if the process dies."""
+
+
+HEARTBEAT_INTERVAL_S = 1.0
+"""How often a worker reports itself. Ten of these make `handle.STALL_AFTER_S`.
+
+Not per admitted frame: the heartbeat queue holds four, the supervisor drains once a
+second, and a beat per frame at `fps_max` would overrun the queue on every tick to say
+the same thing four times.
+"""
+
+
+class HeartbeatEmitter:
+    """Reports the rate a worker *achieved*, at most once per interval.
+
+    Achieved, not targeted: `Backpressure.target_fps` is what the loop asked the sampler
+    for, and the two diverge exactly when something is wrong. A camera delivering half
+    what it promises is the case this exists to make visible.
+
+    **Silence is the signal.** Nothing here is driven by a clock — only by a frame being
+    admitted — so a worker blocked inside `source.frames()` on a wedged connection emits
+    nothing at all. Emitting a zero-fps beat on a timer instead would keep the camera
+    reading `STREAMING` forever with a number beside it saying it was doing nothing.
+    """
+
+    def __init__(
+        self,
+        sink: Sink[Heartbeat] | None,
+        *,
+        interval_s: float = HEARTBEAT_INTERVAL_S,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._sink = sink
+        self._interval_s = interval_s
+        self._monotonic = monotonic
+        self._window_start = monotonic()
+        self._admitted = 0
+        self._latest: FrameTs | None = None
+
+    def note_admitted(self, ts: FrameTs) -> None:
+        """Count one admitted frame, and report the window if it has closed."""
+        self._admitted += 1
+        self._latest = ts
+        elapsed = self._monotonic() - self._window_start
+        if elapsed < self._interval_s:
+            return
+        self._emit(self._admitted / elapsed)
+        self._window_start = self._monotonic()
+        self._admitted = 0
+
+    def _emit(self, effective_fps: float) -> None:
+        """Send, or drop it — never die of it.
+
+        Same rule as a snapshot reply: a supervisor that stopped draining must not turn
+        a status message into a dropped stream. An unreported camera is a far better
+        outcome than one that stops counting because nobody was listening.
+        """
+        if self._sink is None or self._latest is None:
+            return
+        with suppress(queue.Full):
+            self._sink.put_nowait(
+                Heartbeat(last_frame_ts=self._latest, effective_fps=effective_fps)
+            )
 
 
 @dataclass(slots=True)
@@ -65,6 +131,8 @@ def camera_loop(
     outbox_size: int = OUTBOX_SIZE,
     control: Queue[ControlMessage] | None = None,
     snapshots: Queue[SnapshotReply] | None = None,
+    heartbeats: Sink[Heartbeat] | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> LoopStats:
     """Run one camera until its stream drops or it is told to stop.
 
@@ -79,6 +147,7 @@ def camera_loop(
     stats = LoopStats()
     outbox: Outbox[RawEvent] = Outbox(maxlen=outbox_size)
     pressure = Backpressure(sampler, fps_min=fps_min, fps_max=fps_max, start_fps=fps_max)
+    beats = HeartbeatEmitter(heartbeats, monotonic=monotonic)
     try:
         for frame in source.frames():
             message = _next_message(control)
@@ -96,6 +165,7 @@ def camera_loop(
             if not sampler.is_due(frame.ts):
                 continue
             stats.frames_admitted += 1
+            beats.note_admitted(frame.ts)
 
             detections = detector.detect(frame)
             tracks = tracker.update(frame, detections)
@@ -153,13 +223,7 @@ def _reply(snapshots: Queue[SnapshotReply] | None, message: Snapshot, frame: Dec
         )
 
 
-def run_camera_worker(
-    camera_id: CameraId,
-    config: MusterConfig,
-    events_out: Queue[RawEvent],
-    control_in: Queue[ControlMessage],
-    snapshots_out: Queue[SnapshotReply] | None = None,
-) -> None:
+def run_camera_worker(camera_id: CameraId, config: MusterConfig, channels: WorkerChannels) -> None:
     """Entry point for the per-camera process. Blocks until told to stop."""
     pipeline = build_pipeline(config, camera_id)
     camera_loop(
@@ -169,9 +233,10 @@ def run_camera_worker(
         detector=pipeline.detector,
         tracker=pipeline.tracker,
         analytics=pipeline.analytics,
-        sink=events_out,
+        sink=channels.events,
         fps_min=config.budget.fps_min,
         fps_max=config.budget.fps_max,
-        control=control_in,
-        snapshots=snapshots_out,
+        control=channels.control,
+        snapshots=channels.snapshots,
+        heartbeats=channels.heartbeats,
     )
