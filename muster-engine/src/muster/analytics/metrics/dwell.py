@@ -17,6 +17,9 @@ Implements P2.4.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+from muster.analytics.metrics.staff import staff_only
 from muster.analytics.site_geometry import SiteGeometry
 from muster.types import (
     EventKind,
@@ -25,6 +28,7 @@ from muster.types import (
     MinuteBucket,
     RawEvent,
     ScopeId,
+    ZoneId,
 )
 
 
@@ -44,13 +48,8 @@ class DwellPlugin:
             for zone in self._geometry.zones_for(camera_id):
                 if MetricName.DWELL_SECONDS not in zone.metrics:
                     continue
-                durations = [
-                    event.value
-                    for event in events
-                    if event.kind is EventKind.DWELL_SAMPLE
-                    and event.zone_id == zone.zone_id
-                    and event.value is not None
-                ]
+                durations = _durations(events, zone.zone_id)
+                staff = _durations(staff_only(events), zone.zone_id)
                 if not durations:
                     # Most minutes close no dwell at all — a stay is attributed to the
                     # minute it ended in, not to every minute it spanned.
@@ -62,7 +61,21 @@ class DwellPlugin:
                         metric=MetricName.DWELL_SECONDS,
                         scope_id=ScopeId(zone.zone_id),
                         value=sum(durations) / len(durations),
+                        # A MEAN, not a count: with no staff dwell there is nothing to
+                        # average, and `0.0` would claim staff stayed for no time at all
+                        # rather than that none of them stayed (staff.py).
+                        staff_value=sum(staff) / len(staff) if staff else None,
                         sample_count=len(durations),
                     )
                 )
         return rows
+
+
+def _durations(events: Sequence[RawEvent], zone_id: ZoneId) -> list[float]:
+    return [
+        event.value
+        for event in events
+        if event.kind is EventKind.DWELL_SAMPLE
+        and event.zone_id == zone_id
+        and event.value is not None
+    ]

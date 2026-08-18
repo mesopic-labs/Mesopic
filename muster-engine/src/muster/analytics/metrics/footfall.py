@@ -16,6 +16,7 @@ Implements P2.4.
 
 from __future__ import annotations
 
+from muster.analytics.metrics.staff import staff_only
 from muster.analytics.site_geometry import PreparedLine, PreparedZone, SiteGeometry
 from muster.types import (
     CameraId,
@@ -41,18 +42,26 @@ class FootfallPlugin:
         return frozenset({MetricName.FOOTFALL})
 
     def reduce(self, events: list[RawEvent], bucket: MinuteBucket) -> list[MetricRow]:
-        return [
-            MetricRow(
-                camera_id=camera_id,
-                bucket=bucket,
-                metric=MetricName.FOOTFALL,
-                scope_id=scope_id,
-                value=float(len(entrants)),
-                sample_count=len(entrants),
-            )
-            for camera_id in sorted(self.cameras_in(events))
-            for scope_id, entrants in self._arrivals(camera_id, events)
-        ]
+        rows = []
+        for camera_id in sorted(self.cameras_in(events)):
+            # The same fold over the staff subset rather than a second rule: `_arrivals`
+            # decides which scopes exist and what counts as an arrival, and a hand-written
+            # staff variant would eventually disagree with it about one of those.
+            staff = dict(self._arrivals(camera_id, staff_only(events)))
+            rows += [
+                MetricRow(
+                    camera_id=camera_id,
+                    bucket=bucket,
+                    metric=MetricName.FOOTFALL,
+                    scope_id=scope_id,
+                    value=float(len(entrants)),
+                    # A count, so no staff is zero rather than absent (staff.py).
+                    staff_value=float(len(staff.get(scope_id, set()))),
+                    sample_count=len(entrants),
+                )
+                for scope_id, entrants in self._arrivals(camera_id, events)
+            ]
+        return rows
 
     @staticmethod
     def cameras_in(events: list[RawEvent]) -> set[CameraId]:

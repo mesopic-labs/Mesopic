@@ -63,6 +63,14 @@ class _DwellState:
 
     entered_at: FrameTs
     pending_exit_ts: FrameTs | None = None
+    is_staff: bool = False
+    """Carried from the entry that opened this dwell.
+
+    A completed dwell is synthesised here rather than by geometry, so without this the
+    sample is built fresh with the default and every dwell in the building reads as a
+    customer's — including the eight hours a barista spends behind the counter, which is
+    the single largest thing the staff split exists to remove.
+    """
 
 
 def bucket_of(ts: datetime) -> MinuteBucket:
@@ -124,7 +132,7 @@ class Aggregator:
 
         if event.kind is EventKind.ZONE_ENTER:
             if state is None:
-                self._open[key] = _DwellState(entered_at=event.ts)
+                self._open[key] = _DwellState(entered_at=event.ts, is_staff=event.is_staff)
             elif state.pending_exit_ts is not None:
                 # A re-entry against a still-open dwell bridges the gap. It can only be
                 # inside the grace window: `ingest` flushed at this event's timestamp
@@ -151,6 +159,7 @@ class Aggregator:
             track_id=track_id,
             zone_id=zone_id,
             value=seconds,
+            is_staff=state.is_staff,
         )
 
     # --- Fold ---------------------------------------------------------------

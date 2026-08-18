@@ -81,7 +81,9 @@ def test_a_raw_event_carries_no_pixels() -> None:
     for P2.4's occupancy samples and is a duration in seconds, which cannot encode a
     frame however it is abused. `cell` was added for P4.1 and is the grid coordinate a
     foot-point fell in — two integers bounded by a 32x32 grid, so it locates a person to
-    a thirty-second of the frame and has nowhere to put a pixel even in principle.
+    a thirty-second of the frame and has nowhere to put a pixel even in principle. The
+    two staff counts were added for P4.2 and are headcounts of a zone, which say nothing
+    about who was in it.
     """
     assert {field.name for field in dataclasses.fields(RawEvent)} == {
         "camera_id",
@@ -95,6 +97,8 @@ def test_a_raw_event_carries_no_pixels() -> None:
         "confirmed_value",
         "dt_s",
         "cell",
+        "staff_value",
+        "staff_confirmed_value",
         "is_staff",
     }
 
@@ -112,7 +116,10 @@ def test_a_track_reports_a_normalized_foot_point() -> None:
     x, y = track.foot_point
     assert 0.0 <= x <= 1.0
     assert 0.0 <= y <= 1.0
-    assert not track.is_staff, "staff is a per-track boolean, defaulted off, never an identity"
+    assert not hasattr(track, "is_staff"), (
+        "the staff tag is a polygon test and belongs to geometry, not to the tracker's "
+        "output — a field here could only ever have read False (ADR-0021)"
+    )
 
 
 def test_track_defaults_to_observed() -> None:

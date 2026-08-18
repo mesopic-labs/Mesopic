@@ -233,7 +233,11 @@ class Track:
     path continuity but must refuse to emit an event from a segment whose endpoints
     are *both* unobserved (algorithms.md §3.4, engine-architecture.md §8).
     """
-    is_staff: bool = False
+
+    # There is deliberately no `is_staff` here. The staff tag is a polygon test, and the
+    # import-linter contract keeps the tracker away from geometry — so a field on the
+    # tracker's own output could never be anything but `False`, which is worse than
+    # absent for whoever reads it next. `GeometryAnalytics` owns the tag (ADR-0021).
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +275,22 @@ class RawEvent:
     zone have been there for at least ``dwell_min_s``. Both travel on one event because
     algorithms.md §6.1 needs both — the peak reads the raw count, the mean reads this one
     — and two events could disagree about the same instant.
+    """
+    staff_value: float | None = None
+    """How many of ``value`` were staff. Set on ``OCCUPANCY_SAMPLE`` only.
+
+    A sampled state is the one shape the ``is_staff`` flag cannot express: the sample
+    counts a *zone* and names no track, so there is nothing to filter on and the split
+    has to ride the sample itself. Every other kind is a fact about one track and carries
+    ``is_staff`` instead (ADR-0016, ADR-0021).
+    """
+    staff_confirmed_value: float | None = None
+    """The staff half of ``confirmed_value``.
+
+    A second field rather than a ratio applied to one, because occupancy is two series on
+    two different bases — the peak reads the raw count and the mean reads the confirmed
+    one — and a staff sub-count has to sit on the same basis as the series it belongs to
+    or it is a number derived from a different population.
     """
     dt_s: float | None = None
     """The wall-clock interval this sample represents, in seconds — the gap since the
