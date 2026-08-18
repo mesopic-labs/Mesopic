@@ -102,15 +102,18 @@ first clip here long enough to be read at hour grain and the first with more tha
 person in frame. It is gate-eligible on the derived rule, and it is still not the gate
 clip:
 
-- **The mount was never measured.** `mount_height_m` and `mount_angle_deg` are both `null`.
-  The camera is fixed and still in place, so both are still measurable — take a tape to it
-  and fill them in rather than leaving the manifest guessing.
-- **The lighting pins it to `hard` whatever the tape says.** A strong backlit doorway is
-  the `hard` column's own example, and the binding axis is always the worst one. Measuring
-  the mount improves the manifest; it cannot promote this clip.
+- **The lighting binds it to `hard`, and only the lighting.** The mount is 2.8 m at
+  roughly 45°, which is inside the reference envelope on both axes — angle to the nearest
+  five degrees or so, not instrumented. Everything about the geometry is what the good
+  doorway asks for. A strong backlit doorway is the `hard` column's own named example, and
+  a scene is bound by its worst axis, so the class does not move.
 - **Eleven crossings in 40 minutes.** Longer than the `home-*` clips without being denser,
   so a single miscount is still a ~9 % error.
 - **The labels are a draft**, which the guard now refuses on its own.
+
+That first point is the useful one. This is the first mount here whose geometry the
+reference envelope actually wants, so the doorway is a candidate for a real gate session
+once the light is dealt with — same rig, even artificial lighting, no re-mounting.
 
 `muster truth validate` states both refusals directly:
 

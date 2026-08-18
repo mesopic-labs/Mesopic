@@ -18,8 +18,8 @@
   },
   "scene": {
     "reference": "hard",
-    "mount_height_m": null,
-    "mount_angle_deg": null,
+    "mount_height_m": 2.8,
+    "mount_angle_deg": 45.0,
     "lighting": "daylight_backlit_doorway"
   }
 }
