@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 import uvicorn
 
 from muster.api.app import create_app
+from muster.api.auth import Credential
 from muster.config import load_config
 from muster.config.schema import ApiConfig, LineConfig, MusterConfig, ZoneConfig
 from muster.config.writer import write_geometry
@@ -143,6 +144,7 @@ class Engine:
             render_prometheus=_prometheus_renderer(self.supervisor),
             snapshot=self.supervisor.snapshot,
             save_geometry=self.save_geometry if config_path is not None else None,
+            credential=_credential(config.api),
         )
 
     async def save_geometry(
@@ -196,6 +198,24 @@ async def _first_to_finish(
             await server
     for task in done:
         task.result()
+
+
+def _credential(api: ApiConfig) -> Credential | None:
+    """Resolve `api.password_env`, or `None` when the config names no variable.
+
+    Refusing at startup rather than at the first write is the point of doing this here: an
+    operator who named a variable and left it unset has asked for a credential, and an
+    engine that started anyway would refuse every write forever for a reason visible
+    nowhere. The message names the variable and never its value — the rule that keeps an
+    RTSP URL out of a log line, applied to the one secret a human chose.
+    """
+    if api.password_env is None:
+        return None
+    password = os.environ.get(api.password_env, "")
+    if not password.strip():
+        msg = f"${api.password_env} is unset or empty, and the engine's write surface needs it"
+        raise ConfigError(msg)
+    return Credential(password)
 
 
 def _prometheus_renderer(supervisor: Supervisor) -> Callable[[], str] | None:

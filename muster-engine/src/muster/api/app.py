@@ -50,6 +50,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from muster.api.auth import (
+    Credential,
+    LoginThrottle,
+    SessionStore,
+    WriteGuard,
+    auth_router,
+)
 from muster.api.board import (
     DEFAULT_WINDOW,
     BoardWindow,
@@ -153,6 +160,7 @@ def create_app(
     render_prometheus: Callable[[], str] | None = None,
     snapshot: Snapshotter | None = None,
     save_geometry: GeometrySaver | None = None,
+    credential: Credential | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     clock: Callable[[], datetime] = _utc_now,
 ) -> FastAPI:
@@ -166,6 +174,10 @@ def create_app(
     `snapshot` and `save_geometry` are the calibration view's two halves, and both are
     `None` for an app built without a supervisor behind it. Their routes still exist in
     that case and answer 503: the surface is real, the engine behind it is not running.
+
+    `credential` is `None` when `api.password_env` is unset, and every write then answers
+    503 for the same reason and in the same shape — a surface that exists with nothing
+    behind it to satisfy it (ADR-0019).
     """
     started_at = monotonic()
     live_config = config
@@ -263,6 +275,20 @@ def create_app(
             request=request, name="_board.html", context=_board_context(window)
         )
 
+    guard = WriteGuard(
+        credential=credential,
+        sessions=SessionStore(monotonic=monotonic),
+        throttle=LoginThrottle(monotonic=monotonic),
+    )
+    """Sessions and the throttle are per-app, so they die with the process by
+    construction. The app's own `monotonic` drives both, for the reason it drives uptime:
+    a test that waits twelve real hours for a session to lapse is a test nobody runs."""
+
+    if credential is not None:
+        app.include_router(
+            auth_router(guard=guard, templates=templates, site_id=lambda: current().site.site_id)
+        )
+
     app.include_router(
         calibration_router(
             current=current,
@@ -270,6 +296,7 @@ def create_app(
             templates=templates,
             snapshot=snapshot,
             save_geometry=save_geometry,
+            guard=guard,
         )
     )
 

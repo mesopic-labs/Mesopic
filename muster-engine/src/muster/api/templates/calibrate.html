@@ -53,6 +53,12 @@ never uploaded, and never stored — what you save is the geometry, not the pict
     quiet moment over a busy one.
   </p>
   <p class="saved" role="status" aria-live="polite" hidden></p>
+  {# Revealed by a 401 from the save, never on load. A new tab rather than a link away:
+     the drawing lives in this page until a save lands, so navigating off it would discard
+     exactly the work the operator is trying to keep. #}
+  <p class="needs-sign-in" hidden>
+    <a href="/login" target="_blank" rel="noopener">Sign in</a>, then click Save again.
+  </p>
 </section>
 
 <section class="readings" aria-label="Saved geometry">

@@ -370,3 +370,52 @@ def test_an_empty_api_host_is_rejected(valid_config: dict[str, Any], tmp_path: P
 
     with pytest.raises(ConfigError, match=r"api\.host"):
         load_config(path)
+
+
+def test_the_api_password_is_referenced_by_env_var_name(
+    valid_config: dict[str, Any], tmp_path: Path
+) -> None:
+    """P3.10's credential is a `*_env` reference like every other secret in this file."""
+    valid_config["api"] = {"password_env": "MUSTER_ADMIN_PASSWORD"}
+    path = _write(tmp_path, valid_config)
+
+    config = load_config(path)
+
+    assert config.api.password_env == "MUSTER_ADMIN_PASSWORD"  # noqa: S105 - an env-var name
+
+
+def test_the_api_password_is_absent_by_default(
+    valid_config: dict[str, Any], tmp_path: Path
+) -> None:
+    """No credential is a legitimate config — it is writes, not startup, that then refuse."""
+    path = _write(tmp_path, valid_config)
+
+    config = load_config(path)
+
+    assert config.api.password_env is None
+
+
+def test_an_inline_api_password_is_rejected(valid_config: dict[str, Any], tmp_path: Path) -> None:
+    """The rule that makes this fail is `extra="forbid"`, and it is worth pinning here.
+
+    Nothing in the schema names `password`, so it is refused for being unknown rather
+    than by a check somebody remembered to write — the same reason an inline webhook
+    secret is refused. Pinned because the day this stops being true is the day an
+    operator's password is readable in a file people paste into issues.
+    """
+    valid_config["api"] = {"password": "hunter2"}
+    path = _write(tmp_path, valid_config)
+
+    with pytest.raises(ConfigError, match=r"api"):
+        load_config(path)
+
+
+def test_an_empty_api_password_env_is_rejected(
+    valid_config: dict[str, Any], tmp_path: Path
+) -> None:
+    """`password_env: ""` names no variable, and would otherwise read as "auth configured"."""
+    valid_config["api"] = {"password_env": ""}
+    path = _write(tmp_path, valid_config)
+
+    with pytest.raises(ConfigError, match=r"api\.password_env"):
+        load_config(path)

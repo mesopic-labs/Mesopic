@@ -13,7 +13,7 @@ Three rules hold across every route below:
 * **A refusal says nothing about the camera.** An RTSP URL carries credentials, so the
   detail goes to the log and the browser gets a generic body (the P2.1 rule).
 
-Implements P3.3.
+Implements P3.3. P3.10 put the save behind a session (ADR-0019).
 """
 
 from __future__ import annotations
@@ -23,9 +23,10 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Annotated, Any
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi import Path as PathParam
 
+from muster.api.auth import WriteGuard
 from muster.api.calibrate import GeometryEdit, merge_geometry
 from muster.api.rows import GeometryRow, count_for
 from muster.config.schema import CameraConfig, MusterConfig
@@ -51,8 +52,11 @@ def _same_origin(request: Request) -> bool:
     the operator did not make from the page they are looking at. A missing header is not
     a browser and therefore not a CSRF vector — `curl` and the tests land there.
 
-    This is a floor, not authentication. §13 describes a local credential posture that
-    nothing implements yet; until it exists, this is what the surface has.
+    This is a floor, not authentication, and since P3.10 it no longer has to be: the
+    session guard is what establishes the caller is the operator. ADR-0018 item 8 said
+    this check should be re-described rather than deleted once that landed, because the
+    two fail independently — a stolen session still cannot be spent from another host's
+    page, and a same-origin request still cannot be made without one.
     """
     origin = request.headers.get("origin")
     if origin is None:
@@ -67,6 +71,7 @@ def calibration_router(
     templates: Jinja2Templates,
     snapshot: Snapshotter | None,
     save_geometry: GeometrySaver | None,
+    guard: WriteGuard,
 ) -> APIRouter:
     """The calibration routes, bound to one app's config cell.
 
@@ -183,11 +188,11 @@ def calibration_router(
                 "camera": camera,
                 "zones": [zone for zone in site.zones if zone.camera_id == camera.camera_id],
                 "lines": [line for line in site.lines if line.camera_id == camera.camera_id],
-                "can_save": save_geometry is not None,
+                "can_save": save_geometry is not None and guard.configured,
             },
         )
 
-    @router.post("/calibrate/{camera_id}", status_code=204)
+    @router.post("/calibrate/{camera_id}", status_code=204, dependencies=[Depends(guard)])
     async def save_calibration(
         request: Request,
         camera_id: Annotated[str, PathParam(max_length=MAX_ID_LENGTH)],
@@ -195,9 +200,12 @@ def calibration_router(
     ) -> Response:
         """Merge the edit into the site's geometry, write it, and hot-reload.
 
-        The engine has no authentication yet — §13 describes the posture and nothing
-        implements it — so the origin check is the only thing between a page served by
-        another host on the LAN and this site's geometry.
+        Two independent guards stand in front of this, and neither subsumes the other.
+        The session (P3.10, ADR-0019) establishes that the caller is the operator at all;
+        the origin check establishes that the request came from the page they are looking
+        at rather than from another host's page driving their browser. ADR-0018 item 8
+        promised the second would be re-described rather than deleted once the first
+        existed, which is what this is.
         """
         camera = _camera(camera_id)
         if not _same_origin(request):

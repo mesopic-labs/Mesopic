@@ -6,10 +6,10 @@ tests here cover the HTTP half of that promise — the filesystem half is assert
 `test_frame_lifetime.py`, which drives the same path under a recorder.
 
 The save route is the engine's first state-changing endpoint, so it carries the checks
-that go with that: a body parsed strictly, a camera named by the path, and a same-origin
-guard. There is no authentication in the engine yet (§13 describes the posture, nothing
-implements it), which makes the origin check the only thing standing between a page on
-another LAN host and this site's geometry.
+that go with that: a body parsed strictly, a camera named by the path, a session, and a
+same-origin guard. The session arrived with P3.10 and the origin check now sits behind it
+as belt-and-braces (ADR-0018 item 8, discharged by ADR-0019) rather than as the only
+thing standing between another LAN host's page and this site's geometry.
 
 Red-first for P3.3.
 """
@@ -25,6 +25,7 @@ import pytest
 import yaml
 
 from muster.api.app import create_app
+from muster.api.auth import Credential
 from muster.config.schema import LineConfig, MusterConfig, ZoneConfig
 from muster.errors import SnapshotUnavailableError
 from muster.store.store import Store
@@ -38,6 +39,13 @@ FRONT_DOOR = CameraId("front-door")
 TILL = CameraId("till")
 
 A_JPEG = b"\xff\xd8\xff\xe0 not really a jpeg, but bytes that came from a worker \xff\xd9"
+
+PASSWORD = "correct-horse-battery-staple"  # noqa: S105 - a fixture, not a credential
+"""P3.10 put the save route behind a session, so the client here logs in once.
+
+What that guard does — and what happens without it — is `test_api_auth_routes.py`. These
+tests are about the save itself, so they start from an operator who is already signed in.
+"""
 
 AN_EDIT: dict[str, Any] = {
     "zones": [
@@ -119,9 +127,11 @@ async def client(
         camera_reports=_reports,
         snapshot=engine.snapshot,
         save_geometry=engine.save_geometry,
+        credential=Credential(PASSWORD),
     )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        await client.post("/login", data={"password": PASSWORD})
         yield client
 
 
