@@ -79,7 +79,9 @@ def test_a_raw_event_carries_no_pixels() -> None:
     moment's thought about whether the new field could carry image data. `value` was
     added for P2.6's completed dwell durations and earned that moment; `dt_s` was added
     for P2.4's occupancy samples and is a duration in seconds, which cannot encode a
-    frame however it is abused.
+    frame however it is abused. `cell` was added for P4.1 and is the grid coordinate a
+    foot-point fell in — two integers bounded by a 32x32 grid, so it locates a person to
+    a thirty-second of the frame and has nowhere to put a pixel even in principle.
     """
     assert {field.name for field in dataclasses.fields(RawEvent)} == {
         "camera_id",
@@ -92,6 +94,7 @@ def test_a_raw_event_carries_no_pixels() -> None:
         "value",
         "confirmed_value",
         "dt_s",
+        "cell",
         "is_staff",
     }
 

@@ -29,7 +29,15 @@ from typing import Any
 
 from muster.api.health import CameraHealth
 from muster.config.schema import MusterConfig
-from muster.types import CameraId, CameraState, MetricName, MetricRow, MinuteBucket, ScopeId
+from muster.types import (
+    CameraId,
+    CameraState,
+    MetricName,
+    MetricRow,
+    MinuteBucket,
+    ScopeId,
+    ZoneId,
+)
 
 
 class BoardWindow(StrEnum):
@@ -145,6 +153,25 @@ def exposure_of(
         # strip's final cell, not off the end of it.
         lit[min(int((row.bucket - start) / span), cells - 1)] = True
     return Exposure(cells=tuple(lit))
+
+
+@dataclass(frozen=True, slots=True)
+class HeatmapScope:
+    """One zone the config asked for a heatmap on. The overlay's shell is built from
+    these rather than from returned rows, for the reason the tiles are: a zone with no
+    traffic yet is a zone with no heat, not a zone that stopped existing."""
+
+    camera_id: CameraId
+    zone_id: ZoneId
+
+
+def heatmap_scopes(config: MusterConfig) -> tuple[HeatmapScope, ...]:
+    """Every `(camera, zone)` whose config lists `heatmap`, in config order."""
+    return tuple(
+        HeatmapScope(camera_id=zone.camera_id, zone_id=zone.zone_id)
+        for zone in config.zones
+        if MetricName.HEATMAP in zone.metrics
+    )
 
 
 def human_duration(seconds: float) -> str:

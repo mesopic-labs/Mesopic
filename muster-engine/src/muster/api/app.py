@@ -64,6 +64,7 @@ from muster.api.board import (
     charts_of,
     exposure_of,
     freshness_for,
+    heatmap_scopes,
     human_duration,
     scope_slots,
     tiles_for,
@@ -76,9 +77,10 @@ from muster.api.health import (
     camera_health,
     engine_health,
 )
+from muster.api.heatmap import roll_up
 from muster.config.schema import LineConfig, MusterConfig, ZoneConfig
 from muster.supervisor.handle import WorkerReport
-from muster.types import CameraId, MetricName
+from muster.types import CameraId, MetricName, ZoneId
 
 Snapshotter = Callable[[CameraId], Awaitable[bytes]]
 """`Supervisor.snapshot` — one frame from the worker that already owns the stream."""
@@ -113,6 +115,11 @@ MAX_ID_LENGTH = 128
 into a log line or a query."""
 
 PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+
+HEATMAP_LIMIT = 24 * 60
+"""At most a day of stored minutes per read. A grid is 2 KB where a scalar row is tens of
+bytes, so the ceiling that keeps `/api/metrics` responsive is far too high here: this is
+about 2 MB across every zone in the widest window the board offers."""
 
 
 def _utc_now() -> datetime:
@@ -150,6 +157,16 @@ class MetricsQuery(BaseModel):
             msg = "the window is too wide"
             raise ValueError(msg)
         return self
+
+
+class HeatmapQuery(BaseModel):
+    """The `/api/heatmap` query string. Same edge-parsing rule as `MetricsQuery`."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    camera_id: Annotated[str, Field(max_length=MAX_ID_LENGTH)] | None = None
+    zone_id: Annotated[str, Field(max_length=MAX_ID_LENGTH)] | None = None
+    window: BoardWindow = DEFAULT_WINDOW
 
 
 def create_app(
@@ -230,12 +247,45 @@ def create_app(
         )
         return {"series": as_series(rows), "truncated": len(rows) >= query.limit}
 
+    @app.get("/api/heatmap")
+    async def api_heatmap(query: Annotated[HeatmapQuery, Query()]) -> dict[str, Any]:
+        """One rolled-up, decayed, normalized grid per zone (algorithms.md §10).
+
+        The window is a `BoardWindow` rather than a free `from`/`to` pair, unlike
+        `/api/metrics`: these rows are 2 KB each, so an unbounded window is a request to
+        read a day of blobs per zone and normalize them for a canvas that is 32 cells
+        wide. The closed set is what bounds the read.
+        """
+        end = clock()
+        rows = store.heatmaps_between(
+            start=end - query.window.span,
+            end=end,
+            limit=HEATMAP_LIMIT,
+            camera_id=CameraId(query.camera_id) if query.camera_id else None,
+            zone_id=ZoneId(query.zone_id) if query.zone_id else None,
+        )
+        views = roll_up(rows, end=end)
+        return {
+            "zones": [
+                {
+                    "camera_id": view.camera_id,
+                    "zone_id": view.zone_id,
+                    "grid_w": view.grid_w,
+                    "grid_h": view.grid_h,
+                    "cells": list(view.cells),
+                    "peak_ds": round(view.peak_ds),
+                    "minutes": view.minutes,
+                }
+                for view in views
+            ],
+            "truncated": len(rows) >= HEATMAP_LIMIT,
+        }
+
     def _board_context(window: BoardWindow) -> dict[str, Any]:
         end = clock()
+        uptime_s = monotonic() - started_at
         rows = store.metrics_between(start=end - window.span, end=end, limit=MAX_LIMIT)
-        health = _health(
-            current(), store, reports=camera_reports(), uptime_s=monotonic() - started_at
-        )
+        health = _health(current(), store, reports=camera_reports(), uptime_s=uptime_s)
         return {
             "site_id": current().site.site_id,
             "window": window,
@@ -251,8 +301,9 @@ def create_app(
             "exposure": exposure_of(rows, end=end, window=window),
             "health": health,
             "freshness": freshness_for(health.cameras, now=end),
-            "uptime": human_duration(monotonic() - started_at),
-            "uptime_s": monotonic() - started_at,
+            "uptime": human_duration(uptime_s),
+            "uptime_s": uptime_s,
+            "heatmaps": heatmap_scopes(current()),
         }
 
     @app.get("/")
