@@ -252,6 +252,7 @@ def create_app(
             "health": health,
             "freshness": freshness_for(health.cameras, now=end),
             "uptime": human_duration(monotonic() - started_at),
+            "uptime_s": monotonic() - started_at,
         }
 
     @app.get("/")
