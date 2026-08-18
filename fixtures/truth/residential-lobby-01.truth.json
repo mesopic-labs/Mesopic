@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "clip_id": "residential-lobby-01",
-  "labelled_by": "draft-unverified",
-  "labelled_at_utc": "2026-08-18T01:31:09Z",
+  "labelled_by": "markos",
+  "labelled_at_utc": "2026-08-18T12:46:45Z",
   "duration_s": 2410.0,
   "crossings": [
     { "t_s": 58.9, "line_id": "entrance", "direction": "out" },
