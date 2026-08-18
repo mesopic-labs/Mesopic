@@ -30,7 +30,7 @@
   answer, where omitting the figure would read as "this zone is not being watched".
 #}
 {% if heatmaps %}
-<section class="floors" aria-label="Zone heatmaps" data-window="{{ window.value }}">
+<section class="floors" aria-label="Zone heatmaps">
   {% for scope in heatmaps %}
   <figure class="floor"
           data-camera="{{ scope.camera_id }}"
