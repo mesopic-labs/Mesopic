@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "clip_id": "residential-lobby-01",
+  "labelled_by": "draft-unverified",
+  "labelled_at_utc": "2026-08-18T01:31:09Z",
+  "duration_s": 2410.0,
+  "crossings": [
+    { "t_s": 58.9, "line_id": "entrance", "direction": "out" },
+    { "t_s": 338.5, "line_id": "entrance", "direction": "out" },
+    { "t_s": 510.0, "line_id": "entrance", "direction": "out" },
+    { "t_s": 624.8, "line_id": "entrance", "direction": "out" },
+    { "t_s": 644.5, "line_id": "entrance", "direction": "out" },
+    { "t_s": 1068.8, "line_id": "entrance", "direction": "out" },
+    { "t_s": 1325.5, "line_id": "entrance", "direction": "out" },
+    { "t_s": 1524.7, "line_id": "entrance", "direction": "out" },
+    { "t_s": 1766.5, "line_id": "entrance", "direction": "out" },
+    { "t_s": 2040.4, "line_id": "entrance", "direction": "in" },
+    { "t_s": 2327.4, "line_id": "entrance", "direction": "in" }
+  ]
+}

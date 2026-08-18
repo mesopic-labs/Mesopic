@@ -47,6 +47,7 @@ for a published number.
 | `home-hallway-oblique-01` | own_rig | obtained | hard | 3 in, 3 out — emil | yes |
 | `home-hallway-oblique-02` | own_rig | obtained | hard | 1 in, 1 out — emil | yes |
 | `home-kitchen-oblique-01` | own_rig | obtained | hard | n/a — no counting line | yes |
+| `residential-lobby-01` | own_rig | obtained | hard | 2 in, 9 out — draft | yes |
 | `storefront-oblique-01` | stock | unknown | hard | 3 in, 1 out — draft | no |
 | `entrance-headon-01` | stock | unknown | typical | 1 in — draft | no |
 | `entrance-headon-loop30-01` | stock | unknown | typical | none | no |
@@ -93,6 +94,33 @@ not after.
 > Until it is closed, "is this clip a legitimate basis for this number?" is a question the
 > code does not yet ask for you.
 
+### `residential-lobby-01`: the first long clip, and still not the gate clip
+
+40 minutes of a residential building's entrance hall, own rig, consent obtained. It is the
+first clip here long enough to be read at hour grain and the first with more than one
+person in frame. It is gate-eligible on the derived rule, and it is still not the gate
+clip:
+
+- **The mount was never measured.** `mount_height_m` and `mount_angle_deg` are both `null`
+  and the camera has since moved, so they are unrecoverable. Without a height the clip
+  cannot be placed on the reference table at all; it is recorded `hard` on its lighting
+  alone.
+- **Eleven crossings in 40 minutes.** Longer than the `home-*` clips without being denser,
+  so a single miscount is still a ~9 % error.
+- **The labels are a draft.** This is the clip the guard's blind spot above was written
+  about: it passes both halves of the derived test and nothing checks the rest.
+
+Two properties of the file a labeller needs to know before opening it:
+
+- **The doorway is blown out white for most of the clip**, so everyone crossing it is a
+  silhouette. That is why it is `hard`, and why it is a genuinely useful thing to measure
+  against.
+- **It is eight DVR segments concatenated out of chronological order.** The clock burnt
+  into the top-left jumps backwards at roughly 301, 602, 903, 1204, 1505, 1806, 2107 and
+  2408 s, and the last two seconds are an editor's outro card. Media time is unaffected,
+  which is the whole reason `t_s` is media time — the burnt-in clock is not a timebase and
+  must not be used as one.
+
 ### How the `home-hallway-*` clips were labelled
 
 Rater `emil`, 2026-08-17, watching the normalised 1080p25 clips end to end — not the
@@ -121,11 +149,17 @@ that breaks tracks and manufactures crossings that are not in the source.
 
 ### The labels here are unverified drafts
 
-Both truth files carry `labelled_by: draft-unverified`. They were derived by stepping
-through sampled frames rather than by watching the video end to end, and nobody has
-checked them since. They are good enough to iterate a metric against and are **not** good
-enough to be anybody's reference for a published number — which the gate-eligibility rule
-already makes structurally impossible for these two clips.
+`storefront-oblique-01`, `entrance-headon-01` and `residential-lobby-01` carry
+`labelled_by: draft-unverified`. They were derived by stepping through sampled frames
+rather than by watching the video end to end, and nobody has checked them since. They are
+good enough to iterate a metric against and are **not** good enough to be anybody's
+reference for a published number.
+
+For the two stock clips the gate-eligibility rule already makes that structurally
+impossible. For `residential-lobby-01` it does not: it passes both halves of the derived
+test, so `score(..., gating=True)` accepts it and never asks whether a human verified those
+labels. The draft marker is the only thing standing between that clip and a published
+figure — re-label it in the clicker under your own name before anything rests on it.
 
 Verify them in the clicker and re-save under your own name. The judgement calls worth
 re-checking are the ones a detector will also find hard:
@@ -134,6 +168,12 @@ re-checking are the ones a detector will also find hard:
   the store, over the mat, without entering. Recorded as *no crossing*. Whether that is
   right depends entirely on where the `entrance` line is drawn (see below).
 - **`storefront-oblique-01` @ 17.0 s** — a man walks *out*. Recorded as `out`.
+- **`residential-lobby-01` @ 1766.5 s and 2327.4 s** — a woman leaves and later returns
+  with a dog. One person, one crossing, each way. The dog is not a crossing.
+- **`residential-lobby-01` @ 365, 449, 527, 601, 1699 and 1805 s** — the camera's own
+  motion overlay fires with nobody in frame: the doorway's exposure swings, and two of
+  those are concatenation seams. All recorded as *no crossing*, and every one of them is a
+  place a detector can plausibly invent one.
 - Timestamps are ±0.3 s throughout.
 
 ### A gap this surfaced: the labeller cannot see the line
