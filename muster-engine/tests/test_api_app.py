@@ -12,6 +12,7 @@ Red-first for P3.1.
 from __future__ import annotations
 
 import inspect
+import re
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ from muster.types import CameraId, CameraState
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_CONFIG = REPO_ROOT / "examples" / "muster.yaml"
 STATIC_DIR = REPO_ROOT / "muster-engine" / "src" / "muster" / "api" / "static"
+TEMPLATES_DIR = REPO_ROOT / "muster-engine" / "src" / "muster" / "api" / "templates"
 
 FRONT_DOOR = CameraId("front-door")
 TILL = CameraId("till")
@@ -248,6 +250,33 @@ def test_the_hud_stylesheet_defines_both_themes() -> None:
     assert "prefers-color-scheme: dark" in css
     assert '[data-theme="dark"]' in css
     assert '[data-theme="light"]' in css
+
+
+def test_every_hud_token_used_is_a_token_that_exists() -> None:
+    """The failure mode a renamed design token has: none.
+
+    An undefined custom property does not error and does not fall back to something
+    neutral — `var(--gone)` inherits, so a stale reference renders a plausible wrong
+    colour and looks like a design choice. P3.2 renamed rather than aliased
+    (`--signal` to `--safelight`, `--closed` to `--fault`, `--scene` and `--stream`
+    removed), and P5.3, P5.4, and C7 each build another surface on this same file.
+    Grepping for the four names that happen to be dead today would not catch the fifth
+    rename; resolving every reference does.
+    """
+    css = (STATIC_DIR / "hud.css").read_text(encoding="utf-8")
+    defined = set(re.findall(r"(--[a-z0-9-]+)\s*:", css))
+
+    stale: dict[str, set[str]] = {}
+    for source in [STATIC_DIR / "hud.css", *sorted(TEMPLATES_DIR.glob("*.html"))]:
+        text = source.read_text(encoding="utf-8")
+        # A template may define its own token inline; that is a definition, not a stale
+        # reference, so it counts alongside the stylesheet's.
+        local = defined | set(re.findall(r"(--[a-z0-9-]+)\s*:", text))
+        for token in re.findall(r"var\(\s*(--[a-z0-9-]+)", text):
+            if token not in local:
+                stale.setdefault(token, set()).add(source.name)
+
+    assert not stale, f"tokens referenced but never defined: {stale}"
 
 
 def test_the_hud_stylesheet_honours_reduced_motion() -> None:
