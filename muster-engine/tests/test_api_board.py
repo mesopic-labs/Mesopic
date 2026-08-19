@@ -36,6 +36,7 @@ from muster.api.board import (
     Cohort,
     Tile,
     charts_of,
+    clock_label,
     exposure_of,
     freshness_for,
     human_duration,
@@ -969,3 +970,44 @@ async def test_an_unsplittable_reading_renders_an_em_dash(
     assert "40" in everyone, "the total is measured and must still render"
     assert customers.count("&mdash;") > everyone.count("&mdash;")
     assert "is-absent" in customers
+
+
+# --- The site's clock (P3.9) --------------------------------------------------
+
+
+def test_a_rendered_time_is_the_sites_local_time() -> None:
+    """P3.9's decision: the operator reads their own clock, not the storage layer's.
+
+    09:30 UTC in July is 10:30 in London, and a shop owner asked whether that was the
+    lunch rush should not have to do the arithmetic.
+    """
+    moment = datetime(2026, 7, 15, 9, 30, tzinfo=UTC)
+
+    assert clock_label(moment, "Europe/London") == "10:30 BST"
+
+
+def test_the_label_names_the_offset_it_is_in() -> None:
+    """The same zone, six months apart, is an hour apart and says so.
+
+    Without the abbreviation the two readings are indistinguishable on the page, which is
+    the whole failure mode of rendering a local time with no label.
+    """
+    winter = datetime(2026, 1, 15, 9, 30, tzinfo=UTC)
+
+    assert clock_label(winter, "Europe/London") == "09:30 GMT"
+
+
+def test_a_site_that_is_utc_still_says_so() -> None:
+    """The default is not a special case: `UTC` is a zone like any other, and a label
+    that vanished for it would leave the reader guessing on exactly the sites that never
+    configured one."""
+    moment = datetime(2026, 7, 15, 9, 30, tzinfo=UTC)
+
+    assert clock_label(moment, "UTC") == "09:30 UTC"
+
+
+def test_the_label_converts_rather_than_relabels() -> None:
+    """A zone west of UTC crosses a date boundary, which relabelling would not."""
+    moment = datetime(2026, 7, 15, 2, 30, tzinfo=UTC)
+
+    assert clock_label(moment, "America/Los_Angeles") == "19:30 PDT"

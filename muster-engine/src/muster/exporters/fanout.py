@@ -115,7 +115,16 @@ def build_exporters(config: MusterConfig) -> ExporterFanout:
             msg = "mqtt exporter is enabled but has no broker"
             raise ConfigError(msg)
         exporters["mqtt"] = MqttExporter(
-            settings.mqtt.broker, base_topic=settings.mqtt.base_topic, port=settings.mqtt.port
+            settings.mqtt.broker,
+            base_topic=settings.mqtt.base_topic,
+            port=settings.mqtt.port,
+            # The only place that has both the broker settings and the site. Without the
+            # site id every Muster on one broker would announce the same unique_ids, and
+            # Home Assistant would show one set of entities flickering between them.
+            site_id=config.site.site_id,
+            camera_names={camera.camera_id: camera.name for camera in config.cameras},
+            discovery=settings.mqtt.discovery,
+            discovery_prefix=settings.mqtt.discovery_prefix,
         )
 
     return ExporterFanout(exporters)

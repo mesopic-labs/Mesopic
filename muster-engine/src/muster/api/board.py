@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from muster.api.health import CameraHealth
 from muster.config.schema import MusterConfig
@@ -238,6 +239,21 @@ def heatmap_scopes(config: MusterConfig) -> tuple[HeatmapScope, ...]:
         for zone in config.zones
         if MetricName.HEATMAP in zone.metrics
     )
+
+
+def clock_label(moment: datetime, timezone: str) -> str:
+    """One rendered time, in the site's own zone, labelled with the offset it is in.
+
+    **The single conversion boundary for display.** Everything stored, synced and served
+    as JSON stays UTC (`muster.types`); `site.timezone` exists so the operator reads the
+    clock on their wall, and P3.9 decided it should — a shop owner asked whether 09:30 was
+    the lunch rush should not be doing the arithmetic.
+
+    The abbreviation is not decoration. The same zone is an hour apart in July and
+    January, and two readings six months apart are otherwise indistinguishable on the
+    page — which is the failure mode of rendering a local time with no label at all.
+    """
+    return moment.astimezone(ZoneInfo(timezone)).strftime("%H:%M %Z")
 
 
 def human_duration(seconds: float) -> str:
@@ -492,6 +508,7 @@ __all__ = [
     "Tile",
     "as_series",
     "charts_of",
+    "clock_label",
     "exposure_of",
     "freshness_for",
     "human_duration",
