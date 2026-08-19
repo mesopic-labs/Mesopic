@@ -59,19 +59,28 @@ If you never want the cloud, you never need it. The engine and a local dashboard
 Point Muster at any RTSP camera and watch it count. No account, no cloud, no config file to start.
 
 ```bash
-make image                      # build the engine container
-
 docker run -d --name muster \
   -e MUSTER_RTSP_URL="rtsp://user:pass@192.168.1.64:554/stream1" \
   -p 8080:8080 \
   -v muster-data:/data \
-  muster-engine:dev
+  ghcr.io/emil1j/muster-engine:latest
 ```
 
 Then open **http://localhost:8080** for the local dashboard.
 
-> A published image, so the first step becomes a single `docker run`, ships with the
-> first release.
+The image is multi-arch (`linux/amd64`, `linux/arm64`), so the same command works on a
+mini-PC and on an ARM board. It ships with **no model weights baked in** — the first
+start downloads the detector, quantizes it to INT8, and caches it in `/data`, so give
+that first run a minute longer than later ones. Every release is signed; if you want to
+check that before running it:
+
+```bash
+cosign verify ghcr.io/emil1j/muster-engine:latest \
+  --certificate-identity-regexp '^https://github\.com/.+/Muster/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Prefer to build it yourself? `make image` does exactly what CI does.
 
 ### Try it without a camera
 
@@ -101,7 +110,7 @@ zones and lines, and anything else that rewrites your config.
 - `-p 8080:8080` — the local HUD dashboard + metrics API.
 - `-v muster-data:/data` — persists the SQLite metric store and your `muster.yaml` config.
 
-By default the engine samples ~2–5 effective FPS and runs an INT8-quantized YOLO model on CPU — sized
+By default the engine samples ~2–5 effective FPS and runs an INT8-quantized YOLOX-nano model on CPU — sized
 so an **Intel N100-class mini-PC (4 cores, no GPU)** handles a couple of cameras. A GPU, Coral TPU, or
 NPU is an **optional** speed-up, never a requirement.
 
@@ -187,14 +196,66 @@ open, on hardware you already own.
 
 ## Integrations
 
-Day-one, first-class:
+### Home Assistant (MQTT)
 
-- **[Frigate](https://frigate.video/)** — run alongside your existing Frigate NVR; consume the same
-  cameras. Muster adds the business-analytics layer on top of the detection an NVR already does.
-- **[Home Assistant](https://www.home-assistant.io/) (MQTT)** — Muster publishes live occupancy,
-  counts, and queue state to MQTT for automations and Lovelace dashboards.
+Turn on the MQTT exporter and Muster announces itself to Home Assistant — no YAML on the
+HA side:
 
-Exports, everywhere:
+```yaml
+exporters:
+  mqtt:
+    enabled: true
+    broker: "192.168.1.10"
+    port: 1883
+    base_topic: "muster"
+    discovery: true                # publish HA discovery configs
+    discovery_prefix: "homeassistant"
+```
+
+Each minute's value is published **retained** to `muster/<camera_id>/<metric>`, with a
+fourth segment for anything scoped to a zone or line
+(`muster/entrance/dwell_seconds/waiting_area`). Retained is the point: a sensor shows its
+last known value the moment HA restarts, instead of `unknown` until the next minute ticks.
+
+Discovery configs go to `homeassistant/sensor/<unique_id>/config`, where `unique_id` is
+`muster_<site>_<camera>_<metric>[_<scope>]`. Each entity is declared
+`state_class: measurement`, so HA's statistics average it as a level rather than
+differencing it as a counter.
+
+Liveness rides on `muster/status` (`online` / `offline`), set as the MQTT will, and every
+entity points its `availability_topic` at it. If the engine dies, its sensors go
+unavailable in HA rather than freezing on a stale number that looks current.
+
+> **Known limitation:** renaming or deleting a zone leaves its retained discovery config
+> on the broker, so the old entity lingers in HA until you clear that topic by hand.
+
+### Frigate
+
+Already running [Frigate](https://frigate.video/)? Muster can read its object stream
+instead of decoding the camera a second time — no second detector, no second decode
+budget:
+
+```yaml
+frigate:                           # site-wide: one Frigate per site
+  broker: "192.168.1.10"
+  port: 1883
+  username_env: "FRIGATE_MQTT_USER"     # by reference; never inline
+  password_env: "FRIGATE_MQTT_PASSWORD"
+
+cameras:
+  - camera_id: entrance
+    source:
+      kind: frigate
+      mqtt_topic: "frigate/events"      # default carries every camera on the box
+      camera: "front_door"              # Frigate's name, when it differs
+```
+
+Geometry, metrics, and storage are identical to the RTSP path — the adapter produces the
+same tracks, so nothing downstream can tell the difference. A `kind: frigate` camera with
+no `frigate.broker` is rejected when the config loads, rather than starting up and
+silently counting nothing.
+
+### Exports, everywhere
 
 | Channel        | Use it for                                        |
 | -------------- | ------------------------------------------------- |
@@ -202,6 +263,10 @@ Exports, everywhere:
 | **Webhook**    | push events/rollups to your own backend           |
 | **MQTT**       | Home Assistant, Node-RED, and the broader IoT bus |
 | **Prometheus** | `/metrics` scrape endpoint for Grafana/alerting   |
+
+Prometheus scrapes `:8080/metrics` with no extra configuration. Metric values arrive as
+`muster_metric`, labelled by camera, metric, and scope; the engine's own health gauges
+share the `muster_` prefix.
 
 ---
 
@@ -360,6 +425,8 @@ things most people want next are:
 |---|---|
 | How do I run it? | [Quickstart](#quickstart) above |
 | How do I configure cameras, lines, and zones? | [Example config](#example-config), and `examples/muster.yaml` |
+| How do I connect Home Assistant or Frigate? | [Integrations](#integrations) above |
+| What licence is the model under? | [License](#license) below, and `/healthz` on a running engine |
 | How do I contribute? | [CONTRIBUTING.md](./CONTRIBUTING.md) |
 | I found a security issue | [SECURITY.md](./SECURITY.md) |
 | What does it store about people? | [Privacy](#privacy) above |
@@ -387,6 +454,18 @@ domain values, and static-analysis-clean code. Significant decisions are recorde
 Muster's engine is released under the **[MIT License](./LICENSE)** — use it, fork it, ship it. The
 hosted cloud service is a separate, optional, paid offering; running your own engine and dashboard
 never requires it.
+
+**The model is a separate artefact from the engine, on purpose.** No weights are baked
+into the image; the detector is downloaded at first run, which keeps its licence its own
+rather than something the image inherits. The default install is free of AGPL end to
+end — MIT engine, MIT runtime, and **Apache-2.0** weights (YOLOX-nano) — so nothing here
+creates a combined work for the AGPL's network clause to attach to. The licence of the
+model you are actually running is reported at `/healthz`, because "which licence is on
+the box" should be a question you can answer by curling it rather than by reading source.
+
+If you want an Ultralytics YOLO model instead, it is available through the opt-in
+`[ultralytics]` extra. That package is **AGPL-3.0**, installing it is your own deliberate
+act, and the CLI says so the first time you use it. It is never pulled in by default.
 
 <div align="center">
 <sub>Muster · started 13 July 2026 · open core, video-intelligence for cameras you already own.</sub>
