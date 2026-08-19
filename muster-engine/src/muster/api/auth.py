@@ -27,10 +27,11 @@ import secrets
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
+
+from muster.api.forms import bounded_body, declared_too_large, form_field
 
 if TYPE_CHECKING:
     from fastapi.templating import Jinja2Templates
@@ -249,7 +250,7 @@ def auth_router(
     @router.post("/login")
     async def login(request: Request) -> Any:
         """Verify a password and open a session, or refuse without saying why."""
-        if _declared_too_large(request):
+        if declared_too_large(request, MAX_LOGIN_BODY_BYTES):
             raise HTTPException(status_code=413, detail="that request was too large")
         if guard.throttle.blocked():
             # Not recorded as a failure: counting attempts made *during* a cooldown would
@@ -258,11 +259,11 @@ def auth_router(
             logger.warning("refused a login attempt during the cooldown")
             return _page(request, error=GENERIC_LOGIN_REFUSAL, status_code=401)
 
-        body = await _bounded_body(request)
+        body = await bounded_body(request, MAX_LOGIN_BODY_BYTES)
         if body is None:
             raise HTTPException(status_code=413, detail="that request was too large")
 
-        submitted = _password_field(request, body)
+        submitted = form_field(request, body, "password")
         if submitted is None or guard.credential is None:
             guard.throttle.record_failure()
             logger.info("refused a login carrying no password field")
@@ -285,53 +286,6 @@ def auth_router(
         return response
 
     return router
-
-
-def _declared_too_large(request: Request) -> bool:
-    declared = request.headers.get("content-length")
-    if declared is None or not declared.isdigit():
-        return False
-    return int(declared) > MAX_LOGIN_BODY_BYTES
-
-
-async def _bounded_body(request: Request) -> bytes | None:
-    """At most `MAX_LOGIN_BODY_BYTES`, or `None` — read from the stream, not into memory.
-
-    `request.body()` accumulates the whole stream before anything can measure it, and a
-    chunked request carries no `content-length` for the pre-check to read. Between them
-    that would make the ceiling advisory: enforced only once the bytes it was meant to
-    refuse were already allocated. Reading the stream is what makes it true.
-    """
-    chunks: list[bytes] = []
-    size = 0
-    async for chunk in request.stream():
-        size += len(chunk)
-        if size > MAX_LOGIN_BODY_BYTES:
-            return None
-        chunks.append(chunk)
-    return b"".join(chunks)
-
-
-def _password_field(request: Request, body: bytes) -> str | None:
-    """The one field this form carries, parsed from an already-bounded body.
-
-    Deliberately not FastAPI's `Form`, and not Starlette's `request.form()`: both require
-    `python-multipart` — the second asserts on it before it even looks at the content
-    type — and this is one field in one encoding that `urllib.parse` has handled since
-    forever. A dependency for that is the wrong trade in an MIT engine.
-
-    Anything that is not exactly one `password` field is `None`, and the caller treats
-    that identically to a wrong password: a request that is malformed in a way only a
-    non-browser produces gets no more information than one that simply guessed wrong.
-    """
-    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if media_type != "application/x-www-form-urlencoded":
-        return None
-    fields = parse_qs(body.decode("utf-8", errors="replace"), keep_blank_values=True)
-    submitted = fields.get("password", [])
-    if len(submitted) != 1:
-        return None
-    return submitted[0]
 
 
 def _session_response(url: str, *, token: str, request: Request) -> Response:

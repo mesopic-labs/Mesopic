@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from multiprocessing.queues import Queue
 
 from muster.config.schema import MusterConfig
-from muster.supervisor.control import ControlMessage, Heartbeat, Stop, WorkerChannels
+from muster.supervisor.control import ControlMessage, Heartbeat, Retarget, Stop, WorkerChannels
 from muster.types import CameraId, EventKind, FrameTs, LineId, RawEvent, TrackId, ZoneId
 
 SCRIPTED_FRAME_TS = FrameTs(datetime(2026, 8, 18, 9, 30, tzinfo=UTC))
@@ -170,3 +170,36 @@ def silent_until_stopped(
 ) -> None:
     """Alive and saying nothing — the wedged stream `/healthz` could not see before P3.7."""
     _idle_until_stopped(channels.control)
+
+
+def report_retarget_then_stop(
+    camera_id: CameraId,
+    config: MusterConfig,  # the entry-point contract
+    channels: WorkerChannels,
+) -> None:
+    """Answer each `Retarget` with an event carrying the ceiling it was handed.
+
+    A control message is only useful if it survives the `spawn` pickler and arrives with
+    its numbers intact, and neither is observable from the parent — the queue accepts
+    anything and `put_nowait` returns before the child has read it. So this worker says
+    what it heard the only way a worker can, on the events queue.
+    """
+    channels.heartbeats.put(_beat())
+    while True:
+        message = channels.control.get()
+        if isinstance(message, Stop):
+            break
+        if isinstance(message, Retarget):
+            channels.events.put(
+                RawEvent(
+                    camera_id=camera_id,
+                    ts=SCRIPTED_FRAME_TS,
+                    kind=EventKind.OCCUPANCY_SAMPLE,
+                    track_id=None,
+                    zone_id=ZoneId(f"{camera_id}-zone"),
+                    value=message.fps_max,
+                    dt_s=1.0,
+                )
+            )
+    channels.events.close()
+    channels.events.join_thread()

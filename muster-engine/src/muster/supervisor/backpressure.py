@@ -104,6 +104,19 @@ class Backpressure:
         self._clear_ticks = 0
         self.target_fps = start_fps
 
+    def set_envelope(self, *, fps_min: float, fps_max: float) -> None:
+        """Adopt a budget saved while this camera was already running (P3.4).
+
+        The current target is clamped into the new bounds rather than left where it was,
+        because the bounds alone only constrain where the *next* shed or recovery may
+        land. A camera at 5 fps under a ceiling that just dropped to 2 would otherwise sit
+        there until something put it under pressure — on an idle box, never — and the
+        operator would be looking at a saved config the engine appears to ignore.
+        """
+        self._fps_min = fps_min
+        self._fps_max = fps_max
+        self._retarget(min(max(self.target_fps, fps_min), fps_max))
+
     def observe(self, *, under_pressure: bool) -> None:
         if under_pressure:
             self._clear_ticks = 0

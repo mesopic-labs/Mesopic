@@ -11,6 +11,7 @@ Red-first for P4.3.
 from __future__ import annotations
 
 import inspect
+import queue
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -23,6 +24,7 @@ from muster.config.schema import MusterConfig
 from muster.errors import ConfigError
 from muster.ingest.frigate import FrigateObjects
 from muster.sampler.sampler import FrameSampler
+from muster.supervisor.control import Retarget
 from muster.supervisor.pipeline import CameraPipeline, TrackPipeline, build_pipeline
 from muster.supervisor.worker import track_loop
 from muster.types import CameraId, EventKind, FrameTs, RawEvent, Track, TrackId
@@ -200,3 +202,49 @@ def test_the_adapter_and_the_loop_agree_on_the_tick_shape() -> None:
     sink, _ = _loop([(ts, tracks), (FrameTs(ts + timedelta(seconds=1)), tracks)])
 
     assert [e for e in sink.events if e.kind is EventKind.OCCUPANCY_SAMPLE]
+
+
+# --- The budget reaching a Frigate camera (P3.4) -----------------------------
+
+
+class _RecordingSampler:
+    def __init__(self) -> None:
+        self.rates: list[float] = []
+
+    def is_due(self, _ts: FrameTs) -> bool:
+        return True
+
+    def set_target_fps(self, target_fps: float) -> None:
+        self.rates.append(target_fps)
+
+
+class _Control:
+    def __init__(self, *items: object) -> None:
+        self._items = list(items)
+
+    def get_nowait(self) -> object:
+        if not self._items:
+            raise queue.Empty
+        return self._items.pop(0)
+
+
+def test_a_retarget_reaches_a_camera_whose_upstream_is_frigate() -> None:
+    """Two loops now exist and must not drift.
+
+    Frigate's publish rate is not ours to set, but how often we run geometry is — which
+    is the CPU the budget is about — so a saved budget has to bite here exactly as it does
+    on the RTSP path.
+    """
+    sampler = _RecordingSampler()
+    # Untyped for the reason `test_worker_control.py` gives: the loop takes protocols,
+    # and what is under test here is its plumbing rather than the parts' conformance.
+    parts: dict[str, Any] = {
+        "source": _ScriptedSource([(FrameTs(T0), []), (FrameTs(T0 + timedelta(seconds=1)), [])]),
+        "sampler": sampler,
+        "analytics": GeometryAnalytics(SiteGeometry.compile(_config(broker="m"))),
+        "sink": _Sink(),
+        "control": _Control(Retarget(fps_min=1.0, fps_max=2.0)),
+    }
+    track_loop(TILL, fps_min=1.0, fps_max=5.0, **parts)
+
+    assert sampler.rates == [2.0]

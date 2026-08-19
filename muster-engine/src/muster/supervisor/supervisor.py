@@ -221,14 +221,16 @@ class Supervisor:
         only die. Each worker then closes what its old geometry had open and adopts the
         new — see `GeometryAnalytics.reconfigure` for why closing is not optional.
 
-        **This is the geometry half only.** Pushing new budgets to workers is P3.4's, and
-        it rides on the same channel.
+        The budget rides the same channel, in the same pass and for the same reason: a
+        camera that adopted new geometry but kept the old fps envelope would be running
+        half the config an operator just saved, and nothing on the dashboard would say so.
         """
         geometry = SiteGeometry.compile(config)
         self._aggregator.retarget(build_registry(geometry), heatmaps=HeatmapAccumulator(geometry))
         for handle in self._handles:
             if handle.is_alive():
                 handle.request_reconfigure(geometry)
+                handle.request_retarget(config.budget.fps_min, config.budget.fps_max)
 
     def _handle_for(self, camera_id: CameraId) -> WorkerHandle | None:
         return next((h for h in self._handles if h.camera_id == camera_id), None)

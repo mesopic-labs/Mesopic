@@ -72,7 +72,8 @@ from muster.api.board import (
     staff_is_configured,
     tiles_for,
 )
-from muster.api.calibration import calibration_router
+from muster.api.calibration import _same_origin, calibration_router
+from muster.api.config_view import ConfigDocument, ConfigSaver, config_router
 from muster.api.health import (
     DiskHealth,
     EngineHealth,
@@ -180,6 +181,8 @@ def create_app(
     render_prometheus: Callable[[], str] | None = None,
     snapshot: Snapshotter | None = None,
     save_geometry: GeometrySaver | None = None,
+    config_document: ConfigDocument | None = None,
+    save_config: ConfigSaver | None = None,
     credential: Credential | None = None,
     monotonic: Callable[[], float] = time.monotonic,
     clock: Callable[[], datetime] = _utc_now,
@@ -194,6 +197,11 @@ def create_app(
     `snapshot` and `save_geometry` are the calibration view's two halves, and both are
     `None` for an app built without a supervisor behind it. Their routes still exist in
     that case and answer 503: the surface is real, the engine behind it is not running.
+
+    `config_document` and `save_config` are `/config`'s two halves and follow the same
+    rule, with one difference: they are `None` whenever the engine was handed a config
+    object rather than a file, because there is then nothing to render and nowhere to
+    write back to.
 
     `credential` is `None` when `api.password_env` is unset, and every write then answers
     503 for the same reason and in the same shape — a surface that exists with nothing
@@ -366,6 +374,18 @@ def create_app(
             snapshot=snapshot,
             save_geometry=save_geometry,
             guard=guard,
+        )
+    )
+
+    app.include_router(
+        config_router(
+            current=current,
+            adopt=_adopt,
+            templates=templates,
+            config_document=config_document,
+            save_config=save_config,
+            guard=guard,
+            same_origin=_same_origin,
         )
     )
 

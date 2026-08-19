@@ -176,3 +176,61 @@ def test_a_steady_state_does_not_touch_the_sampler() -> None:
         policy.observe(under_pressure=False)
 
     assert sampler.rates == []
+
+
+# --- A new envelope arriving mid-run (P3.4) ---------------------------------
+
+
+def test_a_new_envelope_lowers_a_target_that_is_now_above_it() -> None:
+    """The budget an operator just saved has to bite now, not after the next shed.
+
+    Without the clamp, `set_envelope` would only bound where recovery may climb *to*: a
+    camera already running at 5 fps when the ceiling drops to 2 keeps running at 5 until
+    something puts it under pressure, which on an idle box is never. The operator sees a
+    saved config the engine is visibly ignoring.
+    """
+    sampler = RecordingSampler()
+    policy = Backpressure(sampler, fps_min=1.0, fps_max=5.0, start_fps=5.0)
+
+    policy.set_envelope(fps_min=1.0, fps_max=2.0)
+
+    assert policy.target_fps == pytest.approx(2.0)
+    assert sampler.rates == [2.0]
+
+
+def test_a_new_envelope_raises_a_target_that_is_now_below_it() -> None:
+    """The floor moving up is the same promise in the other direction."""
+    sampler = RecordingSampler()
+    policy = Backpressure(sampler, fps_min=1.0, fps_max=5.0, start_fps=5.0)
+    for _ in range(20):
+        policy.observe(under_pressure=True)
+
+    policy.set_envelope(fps_min=4.0, fps_max=5.0)
+
+    assert policy.target_fps == pytest.approx(4.0)
+
+
+def test_a_new_envelope_leaves_a_target_that_still_fits_alone() -> None:
+    """A budget save that did not move this camera must not disturb its shed state."""
+    sampler = RecordingSampler()
+    policy = Backpressure(sampler, fps_min=1.0, fps_max=5.0, start_fps=5.0)
+    policy.observe(under_pressure=True)
+    shed = policy.target_fps
+    sampler.rates.clear()
+
+    policy.set_envelope(fps_min=1.0, fps_max=5.0)
+
+    assert policy.target_fps == pytest.approx(shed)
+    assert sampler.rates == []
+
+
+def test_recovery_after_a_new_envelope_stops_at_the_new_ceiling() -> None:
+    """The clamp is not enough on its own: the bounds themselves have to move."""
+    sampler = RecordingSampler()
+    policy = Backpressure(sampler, fps_min=1.0, fps_max=5.0, start_fps=5.0)
+    policy.set_envelope(fps_min=1.0, fps_max=2.0)
+
+    for _ in range(Backpressure.RELIEF_TICKS * 10):
+        policy.observe(under_pressure=False)
+
+    assert policy.target_fps == pytest.approx(2.0)
