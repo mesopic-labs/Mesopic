@@ -3,9 +3,10 @@
 # The Muster engine image (implements P0.6, published by CI at P5.1).
 #
 # Two properties this file exists to guarantee:
-#   1. NO MODEL WEIGHTS ARE BAKED IN. They are fetched, exported, and quantized at
-#      runtime into the cache volume — which is what keeps the model's licence a
-#      separate artefact from this MIT image (ADR-0008, ADR-0013). A test asserts it.
+#   1. NO MODEL WEIGHTS ARE BAKED IN. They are fetched and exported at runtime into
+#      `/data/models` on the volume — which is what keeps the model's licence a separate
+#      artefact from this MIT image (ADR-0008, ADR-0013). A test asserts both halves:
+#      that nothing is baked in, and that what is fetched lands somewhere it survives.
 #   2. The dependency graph is exactly the one CI resolved. `uv sync --frozen` fails
 #      rather than re-resolving, because a build we cannot reproduce is a build we
 #      cannot debug on a box we cannot SSH into (tech-stack.md §7).
@@ -52,10 +53,17 @@ RUN useradd --create-home --uid 10001 muster \
  && mkdir -p /data \
  && chown muster:muster /data
 
+# The model cache belongs on the volume, not in the container's writable layer. Its
+# default is `~/.cache/muster/models`, which is right for a developer and wrong here: the
+# home directory dies with the container, so every recreate re-downloads and re-exports
+# the graph. Measured before this was set — `docker compose down && up` against the same
+# volume kept the store and fetched the model again. On an airgapped box that is not a
+# cost but a failure, because the second start has nowhere to fetch from.
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    MUSTER_DATA_DIR=/data
+    MUSTER_DATA_DIR=/data \
+    MUSTER_MODEL_CACHE=/data/models
 
 COPY --from=builder --chown=muster:muster /app/.venv /app/.venv
 COPY --from=builder --chown=muster:muster /app/muster-engine /app/muster-engine
