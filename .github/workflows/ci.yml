@@ -88,6 +88,24 @@ jobs:
           path: coverage.xml
           retention-days: 7
 
+  soak:
+    name: reliability soaks (flapping camera, full disk, dead broker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv sync --frozen
+      # These are `slow`, so the job above deselects them — and a soak nothing runs is a
+      # soak that rots. Scoped to the one file rather than `-m slow`, which would also
+      # pull in the model-download and golden-clip tests: those need the network and an
+      # accelerator, and a merge gate that depends on either is a gate that goes red for
+      # reasons unrelated to the change. This file spawns local processes and nothing else.
+      - run: uv run pytest muster-engine/tests/test_reliability_soak.py -m slow
+        timeout-minutes: 10
+
   secrets:
     name: gitleaks
     runs-on: ubuntu-latest
