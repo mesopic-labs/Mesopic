@@ -484,3 +484,86 @@ def test_tracks_from_the_wrong_camera_are_refused() -> None:
 
     with pytest.raises(ValueError, match="camera"):
         analytics.on_tracks(CAMERA, [_track((0.5, 0.5), camera=OTHER_CAMERA)])
+
+
+# --- The band must not swallow the crossing it is meant to confirm (P4.5) ----
+#
+# Found by the M2 gate, not by this file: two cameras watching one clip, our own decode
+# path counting ZERO crossings at 5 fps while the Frigate path counted 23 at 1.7 fps on
+# identical geometry. Every crossing test above jumps a long way across the line in one
+# step, which is exactly the case that works. A person walking at a normal pace, sampled
+# often enough, moves less than the band's width between frames — and never counts.
+
+
+def test_a_crossing_counts_when_the_step_across_lands_inside_the_band() -> None:
+    """The failure the gate found, at its smallest.
+
+    Each step here is 0.015 — under `HYSTERESIS_DELTA` — so the sample that first sits on
+    the far side is still inside the band. The band's job is to withhold *judgement* until
+    the walker commits, not to discard the evidence that they crossed: the segment already
+    proved it. Withholding the event and then letting the next segment (which no longer
+    intersects the line) move the sticky side is what loses it forever.
+    """
+    analytics = _analytics(lines=[_line()])
+
+    events = _walk(
+        analytics,
+        _track((0.5, 0.470), second=0),
+        _track((0.5, 0.485), second=1),
+        _track((0.5, 0.500 + 1e-4), second=2),  # across, and 0.0001 past — inside the band
+        _track((0.5, 0.515), second=3),
+        _track((0.5, 0.530), second=4),  # clear of the band: the crossing is committed
+    )
+
+    assert _kinds(events) == [EventKind.LINE_CROSS]
+    assert events[0].direction == 1
+
+
+def test_a_walking_pace_crossing_counts_exactly_once() -> None:
+    """Not once per frame spent on the far side. The commit is a single edge."""
+    analytics = _analytics(lines=[_line()])
+
+    events = _walk(
+        analytics,
+        *[_track((0.5, 0.40 + 0.01 * step), second=step) for step in range(21)],
+    )
+
+    assert _kinds(events) == [EventKind.LINE_CROSS]
+
+
+def test_a_step_over_the_line_and_straight_back_is_not_a_crossing() -> None:
+    """What the band is actually for, and it still works.
+
+    The walker never leaves the band on the far side, so nothing is committed — the case
+    that produced a burst of spurious crossings before the band existed, and the reason
+    the fix withholds rather than emits.
+    """
+    analytics = _analytics(lines=[_line()], crossing_debounce_s=0.0)
+
+    events = _walk(
+        analytics,
+        _track((0.5, 0.490), second=0),
+        _track((0.5, 0.505), second=1),
+        _track((0.5, 0.490), second=2),
+        _track((0.5, 0.495), second=3),
+    )
+
+    assert _kinds(events) == []
+
+
+def test_a_crossing_pending_in_the_band_survives_the_walker_pausing() -> None:
+    """Someone stopping in the doorway has still walked through it once they move on."""
+    analytics = _analytics(lines=[_line()])
+
+    events = _walk(
+        analytics,
+        _track((0.5, 0.490), second=0),
+        _track((0.5, 0.502), second=1),
+        _track((0.5, 0.503), second=2),
+        _track((0.5, 0.502), second=3),
+        _track((0.5, 0.504), second=4),
+        _track((0.5, 0.560), second=5),
+    )
+
+    assert _kinds(events) == [EventKind.LINE_CROSS]
+    assert events[0].direction == 1

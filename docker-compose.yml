@@ -4,6 +4,8 @@
 #                                and brings up engine + dashboard + sample stream + broker
 #   docker compose up            engine only, against your own camera and your own config
 #   docker compose --profile camera up -d mediamtx    just a stream, to develop ingest against
+#   make gate                    the M2 gate (P4.5): the above plus a real Frigate on the
+#                                same clip, so both ingest paths can be compared
 #
 # `make demo` is the entry point rather than `docker compose up` because two things have
 # to happen before the engine starts and neither belongs in a declarative file: a config
@@ -40,6 +42,25 @@ services:
     cap_drop:
       - ALL
 
+  # Frigate, only ever in the `gate` profile. It exists so P4.5 can watch real Frigate
+  # objects become our Tracks — ADR-0022 shipped that path with its wire format checked
+  # against our own fixtures and never against a running Frigate.
+  frigate:
+    profiles: ["gate"]
+    image: ghcr.io/blakeblackshear/frigate:stable
+    restart: unless-stopped
+    ports:
+      - "5000:5000"        # Frigate's own UI, for looking at what it thinks it sees
+    volumes:
+      - ./docker/frigate.yml:/config/config.yml:ro
+      - frigate-data:/media/frigate
+    # Frigate keeps decoded frames in shared memory and dies with an opaque error if
+    # there is not enough. 128m is generous for one 1280x720 detect stream.
+    shm_size: "128mb"
+    environment:
+      # No UI login for a throwaway gate instance. It publishes to a broker on a laptop.
+      FRIGATE_ALLOW_UNAUTHENTICATED: "true"
+
   # Puts a config in the volume, once, and then exits. `make demo` runs it before `up`.
   #
   # COPIED rather than mounted read-only, because saving geometry rewrites this file
@@ -47,16 +68,20 @@ services:
   # would render the calibration page and then fail every save made on it. It never
   # overwrites: a demo brought up twice keeps whatever was drawn the first time.
   seed:
-    profiles: ["demo"]
+    profiles: ["demo", "gate"]
     image: muster-engine:dev
     build:
       context: .
       dockerfile: docker/engine.Dockerfile
     entrypoint: ["/bin/sh", "-c"]
-    command: ["[ -f /data/muster.yaml ] || cp /seed/demo.yaml /data/muster.yaml"]
+    # `MUSTER_SEED` is `demo.yaml` unless the gate profile asked for its own.
+    command: ["[ -f /data/muster.yaml ] || cp /seed/$${MUSTER_SEED:-demo.yaml} /data/muster.yaml"]
+    environment:
+      MUSTER_SEED: ${MUSTER_SEED:-demo.yaml}
     volumes:
       - muster-data:/data
       - ./docker/demo.yaml:/seed/demo.yaml:ro
+      - ./docker/gate.yaml:/seed/gate.yaml:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -66,7 +91,7 @@ services:
   # In the `camera` profile as well as `demo`, so `make test-stream` can bring up just a
   # stream to develop ingest against without building or running the engine.
   mediamtx:
-    profiles: ["demo", "camera"]
+    profiles: ["demo", "camera", "gate"]
     # The plain tag is distroless — no shell, no ffmpeg — so `runOnInit` silently
     # does nothing. The -ffmpeg variant is the one that can serve a looped clip.
     image: bluenviron/mediamtx:latest-ffmpeg
@@ -79,7 +104,7 @@ services:
 
   # For exercising the MQTT exporter and the Home Assistant discovery path locally.
   mosquitto:
-    profiles: ["demo"]
+    profiles: ["demo", "gate"]
     image: eclipse-mosquitto:2
     restart: unless-stopped
     ports:
@@ -89,3 +114,4 @@ services:
 
 volumes:
   muster-data:
+  frigate-data:

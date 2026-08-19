@@ -66,6 +66,16 @@ class _LineState:
     """Last *non-zero* side. A graze must not move it, or one step onto the line and
     back becomes two half-crossings (§5c)."""
 
+    pending_side: int | None = None
+    """The side of a crossing that has happened but is not yet committed (§5d).
+
+    A segment that intersects the line is proof the track crossed it. The hysteresis band
+    decides *when to believe it*, not whether it happened — so a crossing whose first
+    sample on the far side is still inside the band waits here until the walker clears the
+    band or steps back. While it waits, the sticky side must not move: advancing it is
+    what used to erase the transition, and the next segment no longer intersects, so the
+    crossing could never be recovered."""
+
     debounced_until: datetime | None = None
 
 
@@ -230,6 +240,7 @@ class GeometryAnalytics:
         """One track against one line, following algorithms.md §5 step for step."""
         line_state = state.lines.setdefault(line.line_id, _LineState())
         current_side = line.side_of(track.foot_point)
+        clear_of_band = line.distance_to(track.foot_point) >= self._hysteresis_delta
 
         previous = state.last_observed_foot
         if previous is None:
@@ -237,6 +248,9 @@ class GeometryAnalytics:
             # track's first real crossing has nothing to flip from and is swallowed.
             self._update_sticky(line_state, current_side)
             return None
+
+        if line_state.pending_side is not None:
+            return self._resolve_pending(track, line, line_state, current_side, clear_of_band)
 
         if not _segments_intersect(previous, track.foot_point, line.a, line.b):
             self._update_sticky(line_state, current_side)
@@ -247,11 +261,67 @@ class GeometryAnalytics:
             self._update_sticky(line_state, current_side)
             return None
 
-        if line.distance_to(track.foot_point) < self._hysteresis_delta:
+        if not clear_of_band:
+            # Crossed, but not yet committed. Held rather than dropped, and the sticky
+            # side deliberately stays where it was.
+            line_state.pending_side = current_side
             return None
-        if line_state.debounced_until is not None and track.ts < line_state.debounced_until:
-            return None
+        return self._commit(track, line, line_state, current_side, crossed_from=sticky)
 
+    def _resolve_pending(
+        self,
+        track: Track,
+        line: PreparedLine,
+        line_state: _LineState,
+        current_side: int,
+        clear_of_band: bool,
+    ) -> RawEvent | None:
+        """Commit a held crossing, abandon it, or keep waiting.
+
+        No segment test here: the intersection that created the pending crossing is the
+        proof, and the walker is now inside the band where consecutive samples straddle
+        the line constantly. Re-testing would make committing depend on which side of the
+        line the last sample happened to sit.
+        """
+        pending = line_state.pending_side
+        if pending is None:  # pragma: no cover - the caller checked
+            return None
+        if current_side != 0 and (current_side > 0) != (pending > 0) and clear_of_band:
+            # Back on the side they came from, and clear of the band: they stepped over
+            # and returned. Nothing happened, and this is the jitter case §5(d) exists for.
+            line_state.pending_side = None
+            self._update_sticky(line_state, current_side)
+            return None
+        if not clear_of_band or current_side == 0:
+            return None
+        line_state.pending_side = None
+        # The pending side is the far side, so the walker came from its opposite. Reading
+        # `sticky_side` here would work today and break the moment anything else moves it.
+        return self._commit(track, line, line_state, current_side, crossed_from=-pending)
+
+    def _commit(
+        self,
+        track: Track,
+        line: PreparedLine,
+        line_state: _LineState,
+        current_side: int,
+        *,
+        crossed_from: int,
+    ) -> RawEvent | None:
+        """Emit the crossing, unless this track is still inside its debounce window.
+
+        `crossed_from` is the side the track came from, passed in rather than read off
+        `line_state` because committing overwrites it — and because a pending crossing
+        commits one or more frames after the side that produced it was current.
+
+        Stamped with the committing frame's capture time rather than the intersecting
+        one. The difference is a frame or two in the ordinary case, and using the earlier
+        stamp would let a walker who paused in the doorway emit into a minute bucket that
+        has already been closed and written (§10).
+        """
+        if line_state.debounced_until is not None and track.ts < line_state.debounced_until:
+            line_state.sticky_side = current_side
+            return None
         line_state.sticky_side = current_side
         line_state.debounced_until = track.ts + timedelta(seconds=self._crossing_debounce_s)
         return RawEvent(
@@ -260,7 +330,7 @@ class GeometryAnalytics:
             kind=EventKind.LINE_CROSS,
             track_id=track.track_id,
             line_id=line.line_id,
-            direction=1 if sticky < 0 else -1,
+            direction=1 if crossed_from < 0 else -1,
             is_staff=self._is_staff(track.camera_id, track.track_id),
         )
 
