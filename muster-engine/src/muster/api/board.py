@@ -37,6 +37,7 @@ from muster.types import (
     MinuteBucket,
     ScopeId,
     ZoneId,
+    ZoneRole,
 )
 
 
@@ -66,6 +67,28 @@ _SPANS = {
 
 DEFAULT_WINDOW = BoardWindow.SIX_HOURS
 
+
+class Cohort(StrEnum):
+    """Which population the board's numbers describe.
+
+    A closed set for the reason `BoardWindow` is one: this is the page's own control, and
+    the three answers the stored split can actually support are all it offers.
+
+    `value` is the total and `staff_value` the staff portion (ADR-0021), so `customers` is
+    a subtraction — done here at the presentation boundary and never in the store, because
+    making `value` mean customers would silently change what every row already in
+    `metrics_minute` means and what the ADR-0010 sync contract has been shipping.
+    """
+
+    ALL = "all"
+    CUSTOMERS = "customers"
+    STAFF = "staff"
+
+
+DEFAULT_COHORT = Cohort.ALL
+"""Everyone, so a board nobody has filtered renders exactly what it did before this
+control existed."""
+
 COUNTING_METRICS = frozenset({MetricName.FOOTFALL, MetricName.LINE_CROSS})
 """Metrics whose tile is the window's total. Everything else is a level, and a level is
 shown as its newest bucket — summing occupancy would report a quiet afternoon as a
@@ -74,6 +97,28 @@ crowd."""
 UNTILED_METRICS = frozenset({MetricName.HEATMAP})
 """`heatmap` is a packed grid blob, not a number, and has no scalar to put on a tile.
 Rendering it is P4.1's overlay."""
+
+COHORT_EXEMPT_METRICS = frozenset({MetricName.CONVERSION})
+"""Metrics rendered unchanged under every cohort.
+
+Conversion's denominator is still total footfall — ADR-0021 leaves that open, and it is
+P3.5's to revisit — so it has no staff portion to subtract. Blanking it under a filter
+would read as a metric that stopped working, which is worse than one that visibly ignores
+the control."""
+
+UNSPLITTABLE_METRICS = frozenset(
+    {MetricName.DWELL_SECONDS, MetricName.OCCUPANCY_RAW, MetricName.QUEUE_LEN_RAW}
+)
+"""Metrics whose stored split cannot answer a cohort question, so a cohort renders them
+absent rather than wrong.
+
+A mean and a peak fail differently and both fail. `dwell_seconds` holds a mean over every
+dwell beside a mean over staff dwells, and `n_staff` is stored nowhere, so the difference
+of two averages is not the customers' mean. The `_raw` metrics are independent maxima, and
+`max(a) - max(b)` understates `max(a - b)`: five customers at one moment and three staff at
+another would render as two. Wrong in a known direction is still wrong, and neither is
+fixable without storing more than a row currently carries.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,10 +136,20 @@ class Tile:
     def total(self) -> bool:
         return self.metric in COUNTING_METRICS
 
+    @property
+    def cohort_exempt(self) -> bool:
+        """Whether this reading ignores the cohort control, so the page can say so.
 
-def tiles_for(config: MusterConfig, *, rows: Sequence[MetricRow]) -> tuple[Tile, ...]:
+        A number that silently refuses a filter is indistinguishable from one the filter
+        did not change."""
+        return self.metric in COHORT_EXEMPT_METRICS
+
+
+def tiles_for(
+    config: MusterConfig, *, rows: Sequence[MetricRow], cohort: Cohort = DEFAULT_COHORT
+) -> tuple[Tile, ...]:
     """Every configured scope, in config order, filled from the window's rows."""
-    readings = _fold(rows)
+    readings = _fold(rows, cohort=cohort)
     return tuple(
         Tile(
             camera_id=camera_id,
@@ -105,6 +160,17 @@ def tiles_for(config: MusterConfig, *, rows: Sequence[MetricRow]) -> tuple[Tile,
         )
         for camera_id, metric, scope_id in _configured_scopes(config)
     )
+
+
+def staff_is_configured(config: MusterConfig) -> bool:
+    """Whether any zone is a staff zone, which is what makes the cohort control answerable.
+
+    Without one, every `staff_value` is `0.0` or `None` (ADR-0021), so the control could
+    only ever answer zero — and a control that cannot answer is worse than no control. The
+    board's chrome therefore knows about zone roles, which is a coupling worth naming: it
+    is here rather than in the template because the config is the only thing that knows.
+    """
+    return any(zone.role is ZoneRole.STAFF for zone in config.zones)
 
 
 EXPOSURE_CELLS = 60
@@ -287,7 +353,9 @@ def as_series(rows: Sequence[MetricRow]) -> list[dict[str, Any]]:
     return list(series.values())
 
 
-def charts_of(config: MusterConfig, *, rows: Sequence[MetricRow]) -> list[dict[str, Any]]:
+def charts_of(
+    config: MusterConfig, *, rows: Sequence[MetricRow], cohort: Cohort = DEFAULT_COHORT
+) -> list[dict[str, Any]]:
     """One chart per configured metric, in uPlot's `[xs, ys…]` shape.
 
     Built from the config for the same reason the tiles are: a metric the operator asked
@@ -305,15 +373,22 @@ def charts_of(config: MusterConfig, *, rows: Sequence[MetricRow]) -> list[dict[s
 
     slots = scope_slots(config)
     return [
-        _chart(metric, by_metric.get(metric, []), slots) for metric in _configured_metrics(config)
+        _chart(metric, by_metric.get(metric, []), slots, cohort=cohort)
+        for metric in _configured_metrics(config)
     ]
 
 
-def _chart(metric: MetricName, rows: Sequence[MetricRow], slots: dict[str, int]) -> dict[str, Any]:
-    points: dict[str, dict[int, float]] = {}
+def _chart(
+    metric: MetricName,
+    rows: Sequence[MetricRow],
+    slots: dict[str, int],
+    *,
+    cohort: Cohort,
+) -> dict[str, Any]:
+    points: dict[str, dict[int, float | None]] = {}
     for row in rows:
         label = row.scope_id or row.camera_id
-        points.setdefault(label, {})[int(row.bucket.timestamp())] = row.value
+        points.setdefault(label, {})[int(row.bucket.timestamp())] = _cohort_value(row, cohort)
 
     axis = sorted({at for scope in points.values() for at in scope})
     labels = sorted(points)
@@ -356,33 +431,63 @@ def _configured_metrics(config: MusterConfig) -> list[MetricName]:
 _Key = tuple[CameraId, MetricName, ScopeId | None]
 
 
-def _fold(rows: Sequence[MetricRow]) -> dict[_Key, float]:
+def _cohort_value(row: MetricRow, cohort: Cohort) -> float | None:
+    """One row's contribution to the cohort's reading, or `None` where it cannot answer.
+
+    The single place the customer subtraction happens. Anywhere else would be a second
+    reader of the same convention, and the copy nobody updates is the one that starts
+    disagreeing about what `value` means.
+    """
+    if cohort is Cohort.ALL or row.metric in COHORT_EXEMPT_METRICS:
+        return row.value
+    if row.metric in UNSPLITTABLE_METRICS or row.staff_value is None:
+        return None
+    if cohort is Cohort.STAFF:
+        return row.staff_value
+    return row.value - row.staff_value
+
+
+def _fold(rows: Sequence[MetricRow], *, cohort: Cohort) -> dict[_Key, float | None]:
     """Reduce each scope's buckets to the one number its tile shows.
 
     Bucket order is compared rather than assumed: the store returns rows oldest-first
     today, and a tile that silently depends on that would be wrong the first time
     somebody adds an `ORDER BY`.
+
+    A bucket the cohort cannot answer makes the whole reading absent rather than dropping
+    out of the sum. A `None` quietly skipped renders a confident total, short by however
+    much was never measured — which is the failure the em dash exists to prevent, arriving
+    by a different route.
     """
-    totals: dict[_Key, float] = {}
-    newest: dict[_Key, tuple[MinuteBucket, float]] = {}
+    totals: dict[_Key, float | None] = {}
+    newest: dict[_Key, tuple[MinuteBucket, float | None]] = {}
     for row in rows:
         key = (row.camera_id, row.metric, row.scope_id)
+        value = _cohort_value(row, cohort)
         if row.metric in COUNTING_METRICS:
-            totals[key] = totals.get(key, 0.0) + row.value
+            if key not in totals:
+                totals[key] = value
+            else:
+                running = totals[key]
+                totals[key] = None if running is None or value is None else running + value
         else:
             seen = newest.get(key)
             if seen is None or row.bucket >= seen[0]:
-                newest[key] = (row.bucket, row.value)
+                newest[key] = (row.bucket, value)
     return totals | {key: value for key, (_, value) in newest.items()}
 
 
 __all__ = [
+    "COHORT_EXEMPT_METRICS",
     "COUNTING_METRICS",
+    "DEFAULT_COHORT",
     "DEFAULT_WINDOW",
     "EXPOSURE_CELLS",
+    "UNSPLITTABLE_METRICS",
     "UNTILED_METRICS",
     "BoardWindow",
     "CameraFreshness",
+    "Cohort",
     "Exposure",
     "Tile",
     "as_series",
@@ -391,5 +496,6 @@ __all__ = [
     "freshness_for",
     "human_duration",
     "scope_slots",
+    "staff_is_configured",
     "tiles_for",
 ]

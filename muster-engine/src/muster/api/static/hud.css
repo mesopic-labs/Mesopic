@@ -365,7 +365,8 @@ p {
   opacity: 0.6;
 }
 
-.windows {
+.windows,
+.cohorts {
   display: flex;
   gap: 0.35rem;
 }
@@ -551,6 +552,27 @@ p {
 .reading .value.is-absent {
   color: var(--muted);
   opacity: 0.5;
+}
+
+/* A reading the cohort filter does not apply to. Dimmed, never blanked: it is a real
+   measurement of everyone, and an em dash here would read as a metric that broke when the
+   filter was applied. The dotted rule is the only underline on the page, so it cannot be
+   mistaken for a link. */
+.reading .value.is-unaffected {
+  color: var(--muted);
+  border-bottom: 1px dotted var(--muted);
+  cursor: help;
+}
+
+/* The one line on the board that describes a limit rather than a measurement, so it is
+   set apart from the readings above it and never styled like one. */
+.caveat {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
 /* ---------- plates ---------- */

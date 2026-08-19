@@ -371,6 +371,10 @@ class GeometryAnalytics:
                     kind=EventKind.ZONE_CONFIRMED,
                     track_id=track_id,
                     zone_id=zone_id,
+                    # Zone-derived footfall counts confirmed entries and takes its staff
+                    # sub-count by filtering this flag, so an untagged confirmation counts
+                    # every staff arrival as a customer on any camera without a line.
+                    is_staff=self._is_staff(camera_id, track_id),
                 )
             )
         return events

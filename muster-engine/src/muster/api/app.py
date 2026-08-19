@@ -58,8 +58,10 @@ from muster.api.auth import (
     auth_router,
 )
 from muster.api.board import (
+    DEFAULT_COHORT,
     DEFAULT_WINDOW,
     BoardWindow,
+    Cohort,
     as_series,
     charts_of,
     exposure_of,
@@ -67,6 +69,7 @@ from muster.api.board import (
     heatmap_scopes,
     human_duration,
     scope_slots,
+    staff_is_configured,
     tiles_for,
 )
 from muster.api.calibration import calibration_router
@@ -281,7 +284,7 @@ def create_app(
             "truncated": len(rows) >= HEATMAP_LIMIT,
         }
 
-    def _board_context(window: BoardWindow) -> dict[str, Any]:
+    def _board_context(window: BoardWindow, cohort: Cohort) -> dict[str, Any]:
         end = clock()
         uptime_s = monotonic() - started_at
         rows = store.metrics_between(start=end - window.span, end=end, limit=MAX_LIMIT)
@@ -290,13 +293,19 @@ def create_app(
             "site_id": current().site.site_id,
             "window": window,
             "windows": list(BoardWindow),
+            "cohort": cohort,
+            "cohorts": list(Cohort),
+            # Whether the cohort control is offered at all. A site with no `role: staff`
+            # zone has no split to show, so the chips would be three ways of asking a
+            # question with one answer.
+            "staff_configured": staff_is_configured(current()),
             # The exposure strip's axis. UTC on the page because UTC is what is stored —
             # a dashboard that silently localises one clock and not the other is worse
             # than one that is consistently in a timezone you have to know.
             "since": end - window.span,
             "now": end,
-            "tiles": tiles_for(current(), rows=rows),
-            "charts": charts_of(current(), rows=rows),
+            "tiles": tiles_for(current(), rows=rows, cohort=cohort),
+            "charts": charts_of(current(), rows=rows, cohort=cohort),
             "slots": scope_slots(current()),
             "exposure": exposure_of(rows, end=end, window=window),
             "health": health,
@@ -307,24 +316,32 @@ def create_app(
         }
 
     @app.get("/")
-    async def dashboard(request: Request, window: BoardWindow = DEFAULT_WINDOW) -> Any:
+    async def dashboard(
+        request: Request,
+        window: BoardWindow = DEFAULT_WINDOW,
+        cohort: Cohort = DEFAULT_COHORT,
+    ) -> Any:
         """The board is rendered inline, not fetched.
 
         A page that is blank until the first poll lands looks broken for exactly as long
         as the poll interval, which is the first thing a new self-hoster would see.
 
-        `window` is accepted here as well as on the fragment so the range controls are
-        real links: with scripting off they reload the page at the chosen range instead
-        of doing nothing.
+        `window` and `cohort` are accepted here as well as on the fragment so both sets of
+        controls are real links: with scripting off they reload the page at the chosen
+        range and population instead of doing nothing.
         """
         return templates.TemplateResponse(
-            request=request, name="dashboard.html", context=_board_context(window)
+            request=request, name="dashboard.html", context=_board_context(window, cohort)
         )
 
     @app.get("/fragments/board")
-    async def board(request: Request, window: BoardWindow = DEFAULT_WINDOW) -> Any:
+    async def board(
+        request: Request,
+        window: BoardWindow = DEFAULT_WINDOW,
+        cohort: Cohort = DEFAULT_COHORT,
+    ) -> Any:
         return templates.TemplateResponse(
-            request=request, name="_board.html", context=_board_context(window)
+            request=request, name="_board.html", context=_board_context(window, cohort)
         )
 
     guard = WriteGuard(
