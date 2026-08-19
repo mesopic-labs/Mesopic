@@ -13,12 +13,21 @@ Two shapes, because the events have two shapes:
 * A **sampled state** counts a zone and names no track, so there is nothing to filter on
   and the split rides the sample itself (`RawEvent.staff_value`, ADR-0016's precedent).
 
-One distinction worth keeping straight when a reducer implements this: a **count** of no
-staff is `0.0`, because a count of nobody is zero; a **mean** over no staff samples is
-`None`, because the average of nothing is not zero, and a dwell row claiming staff stayed
-for zero seconds is a different and wronger statement than one admitting no staff stayed.
+Three cases to keep straight when a reducer implements this, not two:
 
-Implements P4.2.
+* A **count** of no staff is `0.0`, because a count of nobody is zero.
+* A **mean** over no staff samples is `None`, because the average of nothing is not zero,
+  and a dwell row claiming staff stayed for zero seconds is a different and wronger
+  statement than one admitting no staff stayed.
+* Either of them on a camera with **no `role: staff` zone** is `None`, whichever shape it
+  is. The tag is decided by the zone a track originated in, so such a camera can never
+  produce a staff member to count — its zero is not a measurement of no staff but the
+  absence of a measurement. Ask `SiteGeometry.has_staff_zone` and report absent.
+
+The third case is per **camera**, not per site: a site whose till camera sees the counter
+and whose stockroom camera does not measures the split on one and not the other.
+
+Implements P4.2, corrected by P4.7.
 """
 
 from __future__ import annotations

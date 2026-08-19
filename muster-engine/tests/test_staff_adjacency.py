@@ -31,6 +31,7 @@ from muster.aggregator.aggregator import Aggregator
 from muster.analytics.geometry import GeometryAnalytics
 from muster.analytics.metrics import build_registry
 from muster.analytics.site_geometry import SiteGeometry
+from muster.api.board import Cohort, tiles_for
 from muster.config.schema import MusterConfig
 from muster.types import (
     CameraId,
@@ -404,3 +405,204 @@ def test_a_zone_with_no_staff_dwell_reports_no_staff_mean_rather_than_zero() -> 
     dwell = _rows([sample])[(MetricName.DWELL_SECONDS, FLOOR)]
     assert dwell.value == pytest.approx(12.0)
     assert dwell.staff_value is None
+
+
+# --- Cameras that cannot measure staff at all (P4.7) -------------------------
+#
+# Every fixture above puts the staff zone on the only camera there is, so `value` and
+# `staff_value` are always both measurable. A real site is mixed: the till camera sees the
+# counter, the stockroom camera never does. A track on a camera with no `role: staff` zone
+# can never be tagged, whoever they are — so a `0.0` there is not a count of no staff, it
+# is a measurement that was not made, and ADR-0021's count-is-zero rule does not reach it.
+
+OTHER = CameraId("side-door")
+AISLE = ZoneId("aisle")
+QUEUE = ZoneId("till-queue")
+SIDE = "side-count"
+
+AISLE_POLY = [[0.0, 0.0], [0.45, 0.0], [0.45, 1.0], [0.0, 1.0]]
+QUEUE_POLY = [[0.55, 0.0], [1.0, 0.0], [1.0, 1.0], [0.55, 1.0]]
+
+
+def _mixed_config() -> MusterConfig:
+    """Two cameras, and only one of them can see the staff area.
+
+    The configuration nothing else in the suite builds, and the only one in which
+    "does this site have a staff zone" and "can this camera measure staff" differ.
+    """
+    base = _config().model_dump()
+    base["cameras"].append(
+        {
+            "camera_id": OTHER,
+            "name": "Side door",
+            "source": {"kind": "rtsp", "url_env": "MUSTER_TEST_RTSP"},
+            "reference_resolution": [1920, 1080],
+        }
+    )
+    base["lines"].append(
+        {
+            "line_id": SIDE,
+            "camera_id": OTHER,
+            "a": LINE_A,
+            "b": LINE_B,
+            "positive_dir": "in",
+            "metrics": ["line_cross", "footfall"],
+        }
+    )
+    base["zones"] += [
+        {
+            "zone_id": AISLE,
+            "camera_id": OTHER,
+            "role": "area",
+            "polygon": AISLE_POLY,
+            "metrics": ["occupancy", "dwell_seconds"],
+        },
+        {
+            "zone_id": QUEUE,
+            "camera_id": OTHER,
+            "role": "queue",
+            "polygon": QUEUE_POLY,
+            "metrics": ["queue_len"],
+        },
+    ]
+    return MusterConfig.model_validate(base)
+
+
+def _mixed_rows(events: list[RawEvent]) -> dict[tuple[str, MetricName, str | None], MetricRow]:
+    """Rows by `(camera, metric, scope)` — the camera is what this section is about."""
+    registry = build_registry(SiteGeometry.compile(_mixed_config()))
+    return {
+        (str(row.camera_id), row.metric, None if row.scope_id is None else str(row.scope_id)): row
+        for row in registry.reduce_all(events, BUCKET)
+    }
+
+
+def _side_crossing(*, track_id: int) -> RawEvent:
+    """A crossing on the camera with no staff zone. `is_staff` is False because nothing
+    could ever have set it, which is exactly the point."""
+    return RawEvent(
+        camera_id=OTHER,
+        ts=FrameTs(T0),
+        kind=EventKind.LINE_CROSS,
+        track_id=TrackId(track_id),
+        line_id=SIDE,  # type: ignore[arg-type]
+        direction=1,
+        is_staff=False,
+    )
+
+
+def _sample(zone_id: ZoneId, *, index: int) -> RawEvent:
+    """An occupancy sample as `GeometryAnalytics` emits it on a staff-less camera: a
+    staff count of zero, because counting nobody is all it can do."""
+    return RawEvent(
+        camera_id=OTHER,
+        ts=FrameTs(T0 + timedelta(seconds=index)),
+        kind=EventKind.OCCUPANCY_SAMPLE,
+        track_id=None,
+        zone_id=zone_id,
+        value=3.0,
+        confirmed_value=3.0,
+        staff_value=0.0,
+        staff_confirmed_value=0.0,
+        dt_s=1.0,
+    )
+
+
+def test_site_geometry_knows_which_cameras_can_measure_staff() -> None:
+    geometry = SiteGeometry.compile(_mixed_config())
+    assert geometry.has_staff_zone(CAMERA) is True
+    assert geometry.has_staff_zone(OTHER) is False
+
+
+def test_asking_an_unknown_camera_about_staff_raises() -> None:
+    """The same contract every other accessor keeps (P2.2): a camera that silently has no
+    geometry is a camera that silently stops counting, and answering `False` here would
+    make an unknown camera indistinguishable from a stockroom."""
+    geometry = SiteGeometry.compile(_mixed_config())
+    with pytest.raises(KeyError):
+        geometry.has_staff_zone(CameraId("no-such-camera"))
+
+
+def test_a_camera_with_no_staff_zone_reports_no_footfall_split() -> None:
+    rows = _mixed_rows([_side_crossing(track_id=1), _side_crossing(track_id=2)])
+    footfall = rows[(OTHER, MetricName.FOOTFALL, SIDE)]
+    assert footfall.value == 2.0, "the total is measured and unaffected"
+    assert footfall.staff_value is None
+
+
+def test_a_camera_with_no_staff_zone_reports_no_line_cross_split() -> None:
+    rows = _mixed_rows([_side_crossing(track_id=1)])
+    assert rows[(OTHER, MetricName.LINE_CROSS, SIDE)].staff_value is None
+
+
+def test_a_camera_with_no_staff_zone_reports_no_occupancy_split() -> None:
+    """Both series, because both are read off the same unmeasurable samples."""
+    rows = _mixed_rows([_sample(AISLE, index=index) for index in range(3)])
+    assert rows[(OTHER, MetricName.OCCUPANCY, AISLE)].value == pytest.approx(3.0)
+    assert rows[(OTHER, MetricName.OCCUPANCY, AISLE)].staff_value is None
+    assert rows[(OTHER, MetricName.OCCUPANCY_RAW, AISLE)].staff_value is None
+
+
+def test_a_camera_with_no_staff_zone_reports_no_queue_split() -> None:
+    rows = _mixed_rows([_sample(QUEUE, index=index) for index in range(3)])
+    assert rows[(OTHER, MetricName.QUEUE_LEN, QUEUE)].staff_value is None
+    assert rows[(OTHER, MetricName.QUEUE_LEN_RAW, QUEUE)].staff_value is None
+
+
+def test_the_staffed_camera_on_the_same_site_still_splits() -> None:
+    """The half that stops this being a blanket `None`. One site, one bucket, two cameras:
+    the one that can see the counter still answers, and its zero is a real zero."""
+    rows = _mixed_rows(
+        [
+            _crossing(is_staff=True, track_id=1),
+            _crossing(is_staff=False, track_id=2),
+            _side_crossing(track_id=3),
+        ]
+    )
+    assert rows[(CAMERA, MetricName.LINE_CROSS, DOOR)].staff_value == 1.0
+    assert rows[(OTHER, MetricName.LINE_CROSS, SIDE)].staff_value is None
+
+
+def test_a_camera_with_no_staff_zone_reports_no_dwell_split() -> None:
+    """Already true before P4.7, and pinned here so it stays true for the stated reason
+    rather than by accident: dwell is a mean, so it reported `None` for want of a staff
+    sample whether or not the camera could have produced one."""
+    sample = RawEvent(
+        camera_id=OTHER,
+        ts=FrameTs(T0),
+        kind=EventKind.DWELL_SAMPLE,
+        track_id=TrackId(1),
+        zone_id=AISLE,
+        value=9.0,
+        is_staff=False,
+    )
+    dwell = _mixed_rows([sample])[(OTHER, MetricName.DWELL_SECONDS, AISLE)]
+    assert dwell.value == pytest.approx(9.0)
+    assert dwell.staff_value is None
+
+
+def test_a_mixed_site_renders_one_camera_split_and_the_other_absent() -> None:
+    """The whole chain the card is about, end to end: two cameras, one bucket, one cohort.
+
+    The staffed camera answers "how many customers" with a number. The staff-less one
+    answers with an em dash, because it was never in a position to answer at all — and a
+    `0.0` there would have been the tile confidently reporting a measurement nobody made.
+    """
+    config = _mixed_config()
+    registry = build_registry(SiteGeometry.compile(config))
+    rows = list(
+        registry.reduce_all(
+            [
+                _crossing(is_staff=True, track_id=1),
+                _crossing(is_staff=False, track_id=2),
+                _side_crossing(track_id=3),
+            ],
+            BUCKET,
+        )
+    )
+    tiles = {
+        (str(tile.camera_id), tile.metric, str(tile.scope_id)): tile
+        for tile in tiles_for(config, rows=rows, cohort=Cohort.CUSTOMERS)
+    }
+    assert tiles[(CAMERA, MetricName.FOOTFALL, DOOR)].value == pytest.approx(1.0)
+    assert tiles[(OTHER, MetricName.FOOTFALL, SIDE)].value is None

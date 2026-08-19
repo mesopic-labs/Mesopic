@@ -144,6 +144,16 @@ class SiteGeometry:
         """Zone ids whose polygon contains `point`. Zones may overlap, so this is a list."""
         return [zone.zone_id for zone in self.zones_for(camera_id) if zone.contains(point)]
 
+    def has_staff_zone(self, camera_id: CameraId) -> bool:
+        """Whether this camera could tag a staff member at all (ADR-0021, P4.7).
+
+        Asked per camera and not per site: a track is tagged by the zone it *originated*
+        in, so on a camera with no `role: staff` zone nobody can ever be tagged, whoever
+        they are. A staff sub-count there is not a count of no staff — it is a
+        measurement that was not made, and the two must not render alike.
+        """
+        return any(zone.role is ZoneRole.STAFF for zone in self.zones_for(camera_id))
+
     def _require_known(self, camera_id: CameraId) -> None:
         """Guard a lookup, because "no geometry" and "no such camera" must not look alike.
 

@@ -94,6 +94,10 @@ class _SampledZoneMetric:
             (sample.staff_confirmed_value or 0.0) * (sample.dt_s or 0.0) for sample in samples
         )
         staff_peak = max(sample.staff_value or 0.0 for sample in samples)
+        # A camera with no staff zone samples a staff count of zero every tick, because
+        # counting nobody is the only thing it can do. Both series therefore report the
+        # split as absent rather than zero (staff.py, ADR-0021, P4.7).
+        measurable = self._geometry.has_staff_zone(camera_id)
         return [
             MetricRow(
                 camera_id=camera_id,
@@ -101,7 +105,7 @@ class _SampledZoneMetric:
                 metric=metric,
                 scope_id=ScopeId(zone.zone_id),
                 value=value,
-                staff_value=staff,
+                staff_value=staff if measurable else None,
                 sample_count=len(samples),
             )
             for metric, value, staff in (

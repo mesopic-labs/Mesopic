@@ -40,6 +40,7 @@ class LineCrossPlugin:
     def reduce(self, events: list[RawEvent], bucket: MinuteBucket) -> list[MetricRow]:
         rows = []
         for camera_id in sorted({event.camera_id for event in events}):
+            measurable = self._geometry.has_staff_zone(camera_id)
             for line in self._geometry.lines_for(camera_id):
                 if MetricName.LINE_CROSS not in line.metrics:
                     continue
@@ -51,8 +52,14 @@ class LineCrossPlugin:
                         metric=MetricName.LINE_CROSS,
                         scope_id=ScopeId(line.line_id),
                         value=float(sum(crossings)),
-                        # A count, so no staff is zero rather than absent (staff.py).
-                        staff_value=float(sum(_directions(staff_only(events), line.line_id))),
+                        # A count, so no staff is zero — but only where staff could have
+                        # been seen at all. On a camera with no staff zone the split is
+                        # absent rather than zero (staff.py, ADR-0021).
+                        staff_value=(
+                            float(sum(_directions(staff_only(events), line.line_id)))
+                            if measurable
+                            else None
+                        ),
                         sample_count=len(crossings),
                     )
                 )

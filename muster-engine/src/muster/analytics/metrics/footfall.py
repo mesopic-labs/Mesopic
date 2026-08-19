@@ -48,6 +48,7 @@ class FootfallPlugin:
             # decides which scopes exist and what counts as an arrival, and a hand-written
             # staff variant would eventually disagree with it about one of those.
             staff = dict(self._arrivals(camera_id, staff_only(events)))
+            measurable = self._geometry.has_staff_zone(camera_id)
             rows += [
                 MetricRow(
                     camera_id=camera_id,
@@ -55,8 +56,10 @@ class FootfallPlugin:
                     metric=MetricName.FOOTFALL,
                     scope_id=scope_id,
                     value=float(len(entrants)),
-                    # A count, so no staff is zero rather than absent (staff.py).
-                    staff_value=float(len(staff.get(scope_id, set()))),
+                    # A count, so no staff is zero — but only where staff could have been
+                    # seen at all. On a camera with no staff zone the split is absent
+                    # rather than zero (staff.py, ADR-0021).
+                    staff_value=float(len(staff.get(scope_id, set()))) if measurable else None,
                     sample_count=len(entrants),
                 )
                 for scope_id, entrants in self._arrivals(camera_id, events)
