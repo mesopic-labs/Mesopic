@@ -341,6 +341,10 @@ Three onboarding paths, **all keeping video local:** (1) self-hosted free; (2) h
 local engine (the primary paid path — only metrics sync); (3) the managed appliance (roadmap) for
 buyers who never want to touch Docker.
 
+**Cloud is not built yet.** If you want to hear when it is,
+[join the waitlist](https://muster.app/?source=readme) — one email, when there is something real to
+try. Nothing about the engine depends on it, and self-hosting stays free either way.
+
 > **Pricing is not final.** Muster has no paying customers yet; these tiers are what we intend to
 > charge, and we would rather say so than pretend otherwise. The self-hosted tier being free forever
 > is the part that is not going to change.
