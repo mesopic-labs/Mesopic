@@ -33,6 +33,8 @@ from muster.api.app import create_app
 from muster.api.board import (
     EXPOSURE_CELLS,
     BoardWindow,
+    Cohort,
+    Tile,
     charts_of,
     exposure_of,
     freshness_for,
@@ -101,6 +103,7 @@ def _row(
     minutes_ago: int,
     camera_id: CameraId = FRONT_DOOR,
     scope_id: ScopeId | None = SHOP_FLOOR,
+    staff_value: float | None = None,
 ) -> MetricRow:
     bucket = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=minutes_ago)
     return MetricRow(
@@ -109,6 +112,7 @@ def _row(
         metric=metric,
         scope_id=scope_id,
         value=value,
+        staff_value=staff_value,
     )
 
 
@@ -695,3 +699,273 @@ async def test_a_camera_with_no_frame_yet_carries_no_age_attribute(
     body = (await client.get("/fragments/board")).text
     assert "data-age-s=" not in body
     assert "data-uptime-s=" in body
+
+
+# --- Cohort (P4.6) ----------------------------------------------------------
+
+
+def _tile(tiles: tuple[Tile, ...], metric: MetricName, scope_id: ScopeId) -> Tile:
+    return next(tile for tile in tiles if tile.metric is metric and tile.scope_id == scope_id)
+
+
+def _config_without(role: str) -> MusterConfig:
+    parsed: dict[str, Any] = yaml.safe_load(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
+    parsed["zones"] = [zone for zone in parsed["zones"] if zone.get("role") != role]
+    return MusterConfig.model_validate(parsed)
+
+
+def _config_also_collecting(metric: str, *, on_zone: str) -> MusterConfig:
+    parsed: dict[str, Any] = yaml.safe_load(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
+    for zone in parsed["zones"]:
+        if zone["zone_id"] == on_zone:
+            zone.setdefault("metrics", []).append(metric)
+    return MusterConfig.model_validate(parsed)
+
+
+def test_the_default_cohort_leaves_every_reading_alone(config: MusterConfig) -> None:
+    """`value` is the total and `all` is the default, so a board nobody has filtered shows
+    exactly what it showed before this control existed."""
+    rows = [_row(MetricName.OCCUPANCY, 10.0, staff_value=3.0, minutes_ago=0)]
+
+    tiles = tiles_for(config, rows=rows, cohort=Cohort.ALL)
+
+    assert _tile(tiles, MetricName.OCCUPANCY, SHOP_FLOOR).value == 10.0
+
+
+def test_customers_are_the_total_less_the_staff_portion(config: MusterConfig) -> None:
+    """`value` is the total, staff included (ADR-0021), so the customer figure is a
+    subtraction — and it happens here at the presentation boundary, never in the store."""
+    rows = [_row(MetricName.OCCUPANCY, 10.0, staff_value=3.0, minutes_ago=0)]
+
+    tiles = tiles_for(config, rows=rows, cohort=Cohort.CUSTOMERS)
+
+    assert _tile(tiles, MetricName.OCCUPANCY, SHOP_FLOOR).value == 7.0
+
+
+def test_the_staff_cohort_shows_the_stored_staff_portion(config: MusterConfig) -> None:
+    rows = [_row(MetricName.OCCUPANCY, 10.0, staff_value=3.0, minutes_ago=0)]
+
+    tiles = tiles_for(config, rows=rows, cohort=Cohort.STAFF)
+
+    assert _tile(tiles, MetricName.OCCUPANCY, SHOP_FLOOR).value == 3.0
+
+
+def test_a_counting_metric_sums_its_cohort_across_the_window(config: MusterConfig) -> None:
+    """The window's total is still a total once filtered — the subtraction is per bucket
+    and the sum is over the results, not the other way round."""
+    rows = [
+        _row(MetricName.FOOTFALL, 5.0, staff_value=1.0, minutes_ago=2, scope_id=DOOR_LINE),
+        _row(MetricName.FOOTFALL, 4.0, staff_value=2.0, minutes_ago=1, scope_id=DOOR_LINE),
+    ]
+
+    tiles = tiles_for(config, rows=rows, cohort=Cohort.CUSTOMERS)
+
+    assert _tile(tiles, MetricName.FOOTFALL, DOOR_LINE).value == 6.0
+
+
+def test_one_unmeasured_bucket_makes_the_whole_total_absent(config: MusterConfig) -> None:
+    """A `None` that drops silently out of a sum is worse than an em dash: it renders a
+    confident number short by however much was never measured."""
+    rows = [
+        _row(MetricName.FOOTFALL, 5.0, staff_value=1.0, minutes_ago=2, scope_id=DOOR_LINE),
+        _row(MetricName.FOOTFALL, 4.0, staff_value=None, minutes_ago=1, scope_id=DOOR_LINE),
+    ]
+
+    tiles = tiles_for(config, rows=rows, cohort=Cohort.CUSTOMERS)
+
+    assert _tile(tiles, MetricName.FOOTFALL, DOOR_LINE).value is None
+
+
+def test_a_scope_whose_staff_portion_was_never_measured_shows_no_value(
+    config: MusterConfig,
+) -> None:
+    """`None` is not zero here either. A row with no staff figure cannot answer a cohort
+    question, and `value - None` is not a subtraction."""
+    rows = [_row(MetricName.OCCUPANCY, 10.0, staff_value=None, minutes_ago=0)]
+
+    tiles = tiles_for(config, rows=rows, cohort=Cohort.CUSTOMERS)
+
+    assert _tile(tiles, MetricName.OCCUPANCY, SHOP_FLOOR).value is None
+
+
+def test_a_mean_over_two_populations_cannot_be_split(config: MusterConfig) -> None:
+    """`dwell_seconds` stores a mean over all dwells beside a mean over staff dwells, and
+    `n_staff` is stored nowhere — so the difference of the two averages is not the
+    customers' mean dwell. An em dash is the honest answer; a number would not be."""
+    rows = [_row(MetricName.DWELL_SECONDS, 40.0, staff_value=10.0, minutes_ago=0)]
+
+    tiles = tiles_for(config, rows=rows, cohort=Cohort.CUSTOMERS)
+
+    assert _tile(tiles, MetricName.DWELL_SECONDS, SHOP_FLOOR).value is None
+
+
+def test_a_peak_cannot_be_split_either() -> None:
+    """`occupancy_raw` stores two independent maxima, and `max(a) - max(b)` understates
+    `max(a - b)`: five customers at one moment and three staff at another would render as
+    two. Wrong in a known direction is still wrong."""
+    config = _config_also_collecting("occupancy_raw", on_zone="shop-floor")
+    rows = [_row(MetricName.OCCUPANCY_RAW, 5.0, staff_value=3.0, minutes_ago=0)]
+
+    tiles = tiles_for(config, rows=rows, cohort=Cohort.CUSTOMERS)
+
+    assert _tile(tiles, MetricName.OCCUPANCY_RAW, SHOP_FLOOR).value is None
+
+
+def test_conversion_is_unaffected_by_the_cohort() -> None:
+    """Conversion's denominator is still total footfall — ADR-0021 leaves that open — so it
+    has no staff portion to subtract. Blanking it under a cohort would read as a metric
+    that stopped working, which is the one thing it must not do."""
+    config = _config_also_collecting("conversion", on_zone="shop-floor")
+    rows = [_row(MetricName.CONVERSION, 0.25, staff_value=None, minutes_ago=0)]
+
+    for cohort in Cohort:
+        tiles = tiles_for(config, rows=rows, cohort=cohort)
+
+        assert _tile(tiles, MetricName.CONVERSION, SHOP_FLOOR).value == 0.25
+
+
+def test_the_charts_follow_the_cohort_too(config: MusterConfig) -> None:
+    """The tiles and the plates read the same rows in the same request, so a cohort that
+    moved one and not the other would put two populations on one screen."""
+    rows = [_row(MetricName.OCCUPANCY, 10.0, staff_value=3.0, minutes_ago=0)]
+
+    charts = charts_of(config, rows=rows, cohort=Cohort.CUSTOMERS)
+
+    occupancy = next(chart for chart in charts if chart["metric"] == MetricName.OCCUPANCY.value)
+    assert occupancy["v"] == [[7.0]]
+
+
+async def test_a_cohort_the_page_does_not_offer_is_refused(client: httpx.AsyncClient) -> None:
+    """A closed set, for the reason the window is one: the split is a fixed vocabulary,
+    not a filter expression the caller gets to compose."""
+    response = await client.get("/fragments/board", params={"cohort": "managers"})
+
+    assert response.status_code == httpx.codes.BAD_REQUEST
+
+
+async def test_the_default_cohort_is_everyone(client: httpx.AsyncClient) -> None:
+    response = await client.get("/fragments/board")
+
+    assert response.status_code == httpx.codes.OK
+    assert 'data-cohort="all"' in response.text
+
+
+async def test_the_fragment_names_the_cohort_it_is_showing(client: httpx.AsyncClient) -> None:
+    """One element owns the cohort, for the reason one element owns the range: a second
+    copy is the one that silently disagrees."""
+    for cohort in Cohort:
+        text = (await client.get("/fragments/board", params={"cohort": cohort.value})).text
+
+        assert f'data-cohort="{cohort.value}"' in text
+
+
+async def test_every_control_carries_both_the_range_and_the_cohort(
+    client: httpx.AsyncClient,
+) -> None:
+    """The poll URL and both navs render a URL each way. One that drops a parameter
+    silently resets the other control — click a range and lose your cohort."""
+    text = (await client.get("/fragments/board", params={"cohort": "staff"})).text
+
+    urls = [url for url in re.findall(r'(?:href|hx-get)="([^"]+)"', text) if "?" in url]
+    assert urls, "the fragment renders its own poll URL and both navs"
+    for url in urls:
+        assert "window=" in url, url
+        assert "cohort=" in url, url
+
+
+async def test_the_cohort_controls_are_real_links(client: httpx.AsyncClient) -> None:
+    """With scripting off the chips still have to work, so each carries an `href` beside
+    its `hx-get` — the precedent the range chips set."""
+    text = (await client.get("/fragments/board", params={"cohort": "staff"})).text
+
+    assert 'href="/?window=6h&amp;cohort=customers"' in text
+
+
+async def test_the_page_accepts_a_cohort_without_scripting(client: httpx.AsyncClient) -> None:
+    """The link target has to be a real route, not just an htmx endpoint."""
+    response = await client.get("/", params={"window": "6h", "cohort": "staff"})
+
+    assert response.status_code == httpx.codes.OK
+    assert 'data-cohort="staff"' in response.text
+
+
+async def test_a_filtered_board_says_the_heatmaps_are_not_filtered(
+    client: httpx.AsyncClient,
+) -> None:
+    """`heatmap_minute` carries no staff dimension at all, so the overlays cannot follow
+    the toggle. Saying so is the difference between a known limit and two populations
+    rendered side by side with nothing to tell them apart."""
+    text = (await client.get("/fragments/board", params={"cohort": "customers"})).text
+
+    assert "heatmaps show everyone" in text
+
+
+async def test_an_unfiltered_board_needs_no_heatmap_caveat(client: httpx.AsyncClient) -> None:
+    """The caveat is about a mismatch, and at `all` there is none to warn about."""
+    text = (await client.get("/fragments/board")).text
+
+    assert "heatmaps show everyone" not in text
+
+
+async def test_the_caveat_lives_inside_the_swapped_fragment(client: httpx.AsyncClient) -> None:
+    """Rendered once in the page shell it would go stale on the first chip click, which is
+    the bug PR #51 was written about. The fragment owns everything that describes it."""
+    fragment = (await client.get("/fragments/board", params={"cohort": "staff"})).text
+    page = (await client.get("/", params={"cohort": "staff"})).text
+
+    assert fragment.count("heatmaps show everyone") == 1
+    assert page.count("heatmaps show everyone") == 1
+
+
+async def test_a_site_with_no_staff_zone_is_offered_no_cohort(store: Store) -> None:
+    """Every `staff_value` is `0.0` or `None` without a `role: staff` zone, so the control
+    could only ever answer zero — and a control that cannot answer is worse than none."""
+    app = create_app(config=_config_without("staff"), store=store, camera_reports=_all_streaming)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        text = (await client.get("/fragments/board")).text
+
+    assert 'aria-label="Cohort"' not in text
+    assert "shop-floor" in text, "the rest of the board must still render"
+
+
+async def test_a_site_with_a_staff_zone_is_offered_the_cohort(client: httpx.AsyncClient) -> None:
+    text = (await client.get("/fragments/board")).text
+
+    assert 'aria-label="Cohort"' in text
+
+
+COHORT_NOW = datetime(2026, 8, 18, 10, 0, 30, tzinfo=UTC)
+"""Mid-minute on purpose: the tiles bucket by the minute, so a clock sitting exactly on a
+boundary hides a whole class of off-by-a-minute error."""
+
+
+async def test_an_unsplittable_reading_renders_an_em_dash(
+    config: MusterConfig, store: Store
+) -> None:
+    """The assertion the rest of this file makes about missing rows, made about a missing
+    *split*: the number is there, the cohort's share of it is not, and the difference has
+    to survive all the way to the page."""
+    store.upsert_metrics(
+        [
+            MetricRow(
+                camera_id=FRONT_DOOR,
+                bucket=MinuteBucket(COHORT_NOW.replace(second=0, microsecond=0)),
+                metric=MetricName.DWELL_SECONDS,
+                scope_id=SHOP_FLOOR,
+                value=40.0,
+                staff_value=10.0,
+            )
+        ]
+    )
+    app = create_app(
+        config=config, store=store, camera_reports=_all_streaming, clock=lambda: COHORT_NOW
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        everyone = (await client.get("/fragments/board")).text
+        customers = (await client.get("/fragments/board", params={"cohort": "customers"})).text
+
+    assert "40" in everyone, "the total is measured and must still render"
+    assert customers.count("&mdash;") > everyone.count("&mdash;")
+    assert "is-absent" in customers

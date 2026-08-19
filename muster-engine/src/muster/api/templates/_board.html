@@ -15,11 +15,18 @@
    has no other way to learn that the range changed. It belongs HERE rather than on the
    island because this element is what the swap replaces: an attribute on the island
    would have to be kept in step by hand, and the copy that is never updated is the one
-   that silently disagrees. One element owns the range; everything else reads it. #}
+   that silently disagrees. One element owns the range; everything else reads it.
+
+   `data-cohort` follows the same rule and has no reader yet, deliberately. The heatmap
+   island does NOT read it: `heatmap_minute` stores a packed grid and no staff dimension,
+   so the overlays cannot follow the cohort at all — see the caveat below. The attribute is
+   here so that anything which ever can follow it reads the one authoritative copy instead
+   of starting a second one. #}
 <div id="board"
      class="board"
      data-window="{{ window.value }}"
-     hx-get="/fragments/board?window={{ window.value }}"
+     data-cohort="{{ cohort.value }}"
+     hx-get="/fragments/board?window={{ window.value }}&amp;cohort={{ cohort.value }}"
      hx-trigger="every 30s"
      hx-swap="outerHTML">
 
@@ -31,17 +38,37 @@
 
     {# Inside the fragment so the current-range highlight swaps with the data it describes.
        Real `href`s, so the range still changes with scripting off — htmx intercepts the
-       click when it is on. #}
+       click when it is on.
+
+       Every URL on this fragment carries BOTH parameters. One that names only its own is
+       a control that silently resets the other, and the range chips and the cohort chips
+       each render two URLs. #}
     <nav class="windows" aria-label="Time range">
       {% for choice in windows %}
-      <a href="/?window={{ choice.value }}"
+      <a href="/?window={{ choice.value }}&amp;cohort={{ cohort.value }}"
          class="window{% if choice == window %} is-current{% endif %}"
          {% if choice == window %}aria-current="true"{% endif %}
-         hx-get="/fragments/board?window={{ choice.value }}"
+         hx-get="/fragments/board?window={{ choice.value }}&amp;cohort={{ cohort.value }}"
          hx-target="#board"
          hx-swap="outerHTML">{{ choice.value }}</a>
       {% endfor %}
     </nav>
+
+    {# Offered only where there is a staff zone to split on. Without one every
+       `staff_value` is `0.0` or `None` (ADR-0021), so all three chips would answer the
+       same zero and the control would read as broken rather than as inapplicable. #}
+    {% if staff_configured %}
+    <nav class="cohorts" aria-label="Cohort">
+      {% for choice in cohorts %}
+      <a href="/?window={{ window.value }}&amp;cohort={{ choice.value }}"
+         class="window{% if choice == cohort %} is-current{% endif %}"
+         {% if choice == cohort %}aria-current="true"{% endif %}
+         hx-get="/fragments/board?window={{ window.value }}&amp;cohort={{ choice.value }}"
+         hx-target="#board"
+         hx-swap="outerHTML">{{ choice.value }}</a>
+      {% endfor %}
+    </nav>
+    {% endif %}
   </div>
 
   {#
@@ -119,13 +146,19 @@
           — it says nobody walked past. No data says nothing was reported, and printing
           `0` for a camera that has been dead all morning tells the operator their shop
           is empty.
+
+          A cohort-exempt reading is marked rather than blanked. Conversion's denominator
+          is still total footfall, so it has no staff portion to subtract — and an em dash
+          there would read as a metric that stopped working under the filter.
         #}
         {% for tile in levels %}
         <li class="reading" data-slot="{{ slots.get(tile.label, 0) }}">
           <span class="swatch" aria-hidden="true"></span>
           <span class="scope">{{ tile.label }}</span>
           <span class="metric">{{ tile.metric.value.replace("_", " ") }}</span>
-          <span class="value{% if tile.value is none %} is-absent{% endif %}">
+          {% set unaffected = tile.cohort_exempt and cohort.value != 'all' %}
+          <span class="value{% if tile.value is none %} is-absent{% endif %}{% if unaffected %} is-unaffected{% endif %}"
+                {% if unaffected %}title="Not split by cohort — this reading is everyone."{% endif %}>
             {%- if tile.value is none %}&mdash;{% else %}{{ tile.value | round(1) }}{% endif -%}
           </span>
         </li>
@@ -143,7 +176,9 @@
           <span class="swatch" aria-hidden="true"></span>
           <span class="scope">{{ tile.label }}</span>
           <span class="metric">{{ tile.metric.value.replace("_", " ") }}</span>
-          <span class="value{% if tile.value is none %} is-absent{% endif %}">
+          {% set unaffected = tile.cohort_exempt and cohort.value != 'all' %}
+          <span class="value{% if tile.value is none %} is-absent{% endif %}{% if unaffected %} is-unaffected{% endif %}"
+                {% if unaffected %}title="Not split by cohort — this reading is everyone."{% endif %}>
             {%- if tile.value is none %}&mdash;{% else %}{{ tile.value | round | int }}{% endif -%}
           </span>
         </li>
@@ -152,6 +187,19 @@
     </div>
     {% endif %}
   </section>
+
+  {#
+    The heatmaps cannot follow this control, and saying so is the point. `heatmap_minute`
+    stores a packed grid and no staff dimension, so the overlays below are everyone's
+    traffic whatever the readings above are filtered to.
+
+    This caveat lives INSIDE the fragment on purpose. Rendered once in the page shell — up
+    with the `.floors` section it describes — it would still be claiming `all` after the
+    first chip click, which is exactly the staleness PR #51 was about.
+  #}
+  {% if heatmaps and cohort.value != 'all' %}
+  <p class="caveat">Readings show {{ cohort.value }}; heatmaps show everyone.</p>
+  {% endif %}
 
   <section class="engine">
     <h2>Engine</h2>
