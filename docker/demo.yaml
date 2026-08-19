@@ -19,7 +19,7 @@
 
 site:
   site_id: "muster-demo"
-  timezone: "UTC"                   # display-only; everything stored is UTC regardless
+  timezone: "UTC"                   # the clock the dashboard prints; storage is UTC regardless
 
 budget:
   cpu_budget: 0.75

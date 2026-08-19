@@ -21,11 +21,17 @@
    island does NOT read it: `heatmap_minute` stores a packed grid and no staff dimension,
    so the overlays cannot follow the cohort at all — see the caveat below. The attribute is
    here so that anything which ever can follow it reads the one authoritative copy instead
-   of starting a second one. #}
+   of starting a second one.
+
+   `data-timezone` is the same pattern for the third reader: uPlot draws its axes in the
+   browser, so the site's zone has to travel as data. The exposure tick beside it is
+   converted server-side, and both come from `site.timezone` — one page, one clock
+   (P3.9). #}
 <div id="board"
      class="board"
      data-window="{{ window.value }}"
      data-cohort="{{ cohort.value }}"
+     data-timezone="{{ timezone }}"
      hx-get="/fragments/board?window={{ window.value }}&amp;cohort={{ cohort.value }}"
      hx-trigger="every 30s"
      hx-swap="outerHTML">
@@ -121,7 +127,7 @@
     </div>
 
     <p class="ticks">
-      <span>{{ since.strftime("%H:%M") }} UTC</span>
+      <span>{{ since_label }}</span>
       <span>now</span>
     </p>
   </figure>

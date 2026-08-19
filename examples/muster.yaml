@@ -3,13 +3,14 @@
 # Three conventions run through this file and are validated, not merely documented:
 #   * Secrets are `*_env` references. An inline secret is a startup error.
 #   * All geometry is normalized [0,1], origin top-left, so it survives a resolution change.
-#   * All storage is UTC. `timezone` below is display-only.
+#   * All storage is UTC. `timezone` below is display-only — it is what the dashboard
+#     renders every time in, and nothing else.
 #
 # Full schema: ../../Muster-docs/docs/01-architecture/engine-architecture.md §13.1
 
 site:
   site_id: "acme-camden"            # also the cloud-sync identity
-  timezone: "Europe/London"
+  timezone: "Europe/London"        # the clock the dashboard prints; storage stays UTC
 
 budget:
   cpu_budget: 0.75                  # fraction of the box's CPU the engine may use

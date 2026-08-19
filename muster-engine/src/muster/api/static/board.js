@@ -21,6 +21,28 @@
   const token = (name) =>
     getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
+  const UTC = "Etc/UTC";
+
+  /* The site's zone, from the element that owns it. Re-read on every call rather than
+   * captured once: `#board` is replaced wholesale by every poll, so a reference taken at
+   * load would be to a detached node — the same reason nothing else here holds one.
+   *
+   * A zone the browser cannot resolve falls back rather than throwing. `site.timezone` is
+   * validated against Python's tzdata at load, and browsers ship the same IANA database,
+   * so this should be unreachable; what it prevents is a charts-wide render failure if it
+   * ever is not. The exposure tick would then disagree with the axes, which is visible —
+   * and better than a page of empty plates. */
+  const siteZone = () => {
+    const zone = document.getElementById("board")?.dataset.timezone;
+    if (!zone) return UTC;
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: zone });
+      return zone;
+    } catch {
+      return UTC;
+    }
+  };
+
   /* The server sends a slot per label, and the slot comes from the config rather than
    * from the label's position in this chart. That is what keeps one zone one colour
    * across every plate and its reading above — assigning by position would make
@@ -47,10 +69,11 @@
     return {
       width,
       height,
-      /* One page, one clock. The exposure strip is labelled UTC because UTC is what is
-       * stored; an axis that quietly localised would put two different times on the same
-       * screen and leave the reader to notice. */
-      tzDate: (ts) => uPlot.tzDate(new Date(ts * 1000), "Etc/UTC"),
+      /* One page, one clock: the site's own, read from `#board` where the exposure
+       * tick's zone also comes from (P3.9). An axis that stayed on UTC while the tick
+       * localised would put two different times on the same screen and leave the reader
+       * to notice. */
+      tzDate: (ts) => uPlot.tzDate(new Date(ts * 1000), siteZone()),
       /* The legend is also the crosshair readout, so it is shown even for one series:
        * hovering names the scope and prints its value at that minute. Idle, it prints
        * the same em dash the readings do, and means the same thing by it. */

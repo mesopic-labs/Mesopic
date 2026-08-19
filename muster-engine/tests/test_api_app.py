@@ -254,3 +254,56 @@ def test_the_hud_stylesheet_honours_reduced_motion() -> None:
     css = (STATIC_DIR / "hud.css").read_text(encoding="utf-8")
 
     assert "prefers-reduced-motion" in css
+
+
+# --- The site's clock reaching the page (P3.9) -------------------------------
+
+
+async def test_the_exposure_tick_is_rendered_in_the_sites_timezone(
+    config: MusterConfig, store: Store
+) -> None:
+    """The label on the page, not just the helper that builds it.
+
+    `clock_label` is unit-tested in `test_api_board.py`; what this pins is that the value
+    reaching the template comes from `site.timezone` rather than from UTC — the wiring is
+    the part that was missing, not the arithmetic.
+    """
+    tokyo = config.model_copy(
+        update={"site": config.site.model_copy(update={"timezone": "Asia/Tokyo"})}
+    )
+    app = create_app(config=tokyo, store=store, camera_reports=_all_streaming)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        text = (await client.get("/")).text
+
+    assert "JST</span>" in text
+    assert "UTC</span>" not in text
+
+
+async def test_the_board_carries_the_timezone_the_charts_need(
+    config: MusterConfig, store: Store
+) -> None:
+    """uPlot's axes are drawn in the browser, so the zone has to reach it as data.
+
+    On `#board` rather than on the chart nodes, for the reason the range chips and the
+    cohort toggle live there: one element owns the state the islands read.
+    """
+    tokyo = config.model_copy(
+        update={"site": config.site.model_copy(update={"timezone": "Asia/Tokyo"})}
+    )
+    app = create_app(config=tokyo, store=store, camera_reports=_all_streaming)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://engine") as client:
+        text = (await client.get("/")).text
+
+    assert 'data-timezone="Asia/Tokyo"' in text
+
+
+async def test_the_charts_are_drawn_in_the_boards_timezone(client: httpx.AsyncClient) -> None:
+    """The other half of the same page. An axis that quietly stayed on UTC while the
+    exposure tick localised would put two clocks on one screen and leave the reader to
+    notice — which is exactly what the strip's original UTC label was avoiding."""
+    script = (await client.get("/static/board.js")).text
+
+    assert "dataset.timezone" in script
+    assert "uPlot.tzDate(new Date(ts * 1000), siteZone())" in script

@@ -70,7 +70,15 @@ class SiteConfig(ConfigSection):
 
     site_id: SiteId
     timezone: str = "UTC"
-    """Display only — all storage is UTC (`muster.types`)."""
+    """The zone every time the dashboard renders is shown in (P3.9).
+
+    Display only, and that is the whole of it: buckets, the sync wire format, `/healthz`,
+    `/api/metrics` and the CSV export are UTC regardless, and conversion happens at one
+    boundary (`muster.api.board.clock_label`, plus `data-timezone` for the chart axes).
+
+    Set to the shop's own zone rather than left at `UTC`: an operator asked whether 09:30
+    was the lunch rush should not be doing the arithmetic. Both surfaces move together —
+    a page with one clock localised and one not is worse than either alone."""
 
     @field_validator("timezone")
     @classmethod
@@ -294,6 +302,14 @@ class MqttExporterConfig(ConfigSection):
     broker: str | None = None
     port: Annotated[int, Field(gt=0, le=65535)] = 1883
     base_topic: str = "muster"
+    discovery: bool = True
+    """Announce sensors to Home Assistant (P4.4).
+
+    On by default, because the exporter is already opt-in behind `enabled` and a second
+    switch to find is how a day-one integration becomes a support question. Turn it off
+    for a shared broker where someone else owns the `homeassistant/` prefix."""
+    discovery_prefix: str = "homeassistant"
+    """Where Home Assistant listens. Its own default; changed only if HA's was."""
 
     @model_validator(mode="after")
     def _enabled_needs_a_broker(self) -> Self:

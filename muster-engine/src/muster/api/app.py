@@ -64,6 +64,7 @@ from muster.api.board import (
     Cohort,
     as_series,
     charts_of,
+    clock_label,
     exposure_of,
     freshness_for,
     heatmap_scopes,
@@ -307,10 +308,13 @@ def create_app(
             # zone has no split to show, so the chips would be three ways of asking a
             # question with one answer.
             "staff_configured": staff_is_configured(current()),
-            # The exposure strip's axis. UTC on the page because UTC is what is stored —
-            # a dashboard that silently localises one clock and not the other is worse
-            # than one that is consistently in a timezone you have to know.
-            "since": end - window.span,
+            # The exposure strip's axis, in the site's own zone (P3.9). Formatted here
+            # rather than in the template because the conversion is the one boundary
+            # between what is stored and what is read: everything below this line is UTC.
+            "since_label": clock_label(end - window.span, current().site.timezone),
+            # The charts' axes are drawn in the browser, so the zone travels as data on
+            # `#board` and uPlot reads it there. Both clocks or neither.
+            "timezone": current().site.timezone,
             "now": end,
             "tiles": tiles_for(current(), rows=rows, cohort=cohort),
             "charts": charts_of(current(), rows=rows, cohort=cohort),
