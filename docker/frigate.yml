@@ -1,0 +1,51 @@
+# Frigate, for the M2 gate (P4.5) and nothing else.
+#
+# ADR-0022 shipped the Frigate ingest path with one open item stated in the ADR itself:
+# the wire format was never checked against a running Frigate. The tests pin *our*
+# behaviour given a payload, not that the payload is what Frigate sends — so a wrong
+# assumption about box coordinates produces plausible tracks in the wrong place and no
+# test fails. This file is what closes that, by putting a real Frigate on the same clip
+# the engine's own RTSP path is watching.
+#
+# Deliberately minimal: no recording, no snapshots, no authentication, one object type.
+# It exists to publish objects to a broker on a developer's machine, and every feature it
+# does not enable is one that cannot fail during a gate run.
+
+mqtt:
+  enabled: true
+  host: mosquitto
+  port: 1883
+  topic_prefix: frigate
+
+detectors:
+  # The CPU detector is the one that needs no accelerator and no model download of its
+  # own. Frigate's own docs discourage it for real use, which is fine: the gate needs
+  # Frigate to *emit objects in its own format*, not to be fast.
+  cpu1:
+    type: cpu
+
+cameras:
+  gate:
+    ffmpeg:
+      inputs:
+        - path: rtsp://mediamtx:8554/sample
+          roles: [detect]
+      input_args: preset-rtsp-generic
+    detect:
+      enabled: true
+      # THIS RESOLUTION IS LOAD-BEARING. Frigate reports boxes in its *detect* space, and
+      # `muster.yaml` divides by `reference_resolution` to normalise them — so the two
+      # numbers must match or every foot-point lands somewhere plausible and wrong.
+      # ADR-0022 calls this out as unverifiable from our side; the gate is where it stops
+      # being an assumption.
+      width: 1280
+      height: 720
+      fps: 5
+    objects:
+      track: [person]
+    # A gate run should leave nothing on disk it has to clean up, and neither of these is
+    # part of what is being verified.
+    record:
+      enabled: false
+    snapshots:
+      enabled: false

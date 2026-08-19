@@ -1,0 +1,126 @@
+# The config the M2 gate (P4.5) runs, and the only one that exercises everything.
+#
+# `demo.yaml` is the smallest site that shows the pipeline working. This one is the
+# smallest site that shows the *whole product* working, which is a different thing: two
+# ingest paths, both adjacencies, and every exporter the free path claims.
+#
+# THE TWO CAMERAS WATCH THE SAME CLIP ON PURPOSE. `rtsp-door` decodes it ourselves;
+# `frigate-door` consumes the objects Frigate publishes about the same frames. Their
+# geometry is identical because geometry is normalized [0,1] — so their counts should
+# agree, and if they do not, the disagreement is the coordinate-space assumption ADR-0022
+# recorded as unverified. No unit test can find that; two paths over one clip can.
+
+site:
+  site_id: "muster-gate"
+  timezone: "Europe/London"         # not UTC, so P3.9's conversion is actually exercised
+
+budget:
+  cpu_budget: 0.75
+  fps_min: 1.0
+  fps_max: 5.0
+
+# Site-wide, and deliberately not under `exporters.mqtt`: consuming Frigate must not
+# require publishing anything (ADR-0022).
+frigate:
+  broker: "mosquitto"
+  port: 1883
+
+cameras:
+  - camera_id: "rtsp-door"
+    name: "Door (our decode)"
+    source:
+      kind: rtsp
+      url_env: MUSTER_RTSP_URL
+      transport: tcp
+    reference_resolution: [1920, 1080]
+    stall_timeout_s: 10
+    detector:
+      input_size: 640
+      roi_from_geometry: true
+
+  - camera_id: "frigate-door"
+    name: "Door (via Frigate)"
+    source:
+      kind: frigate
+      mqtt_topic: "frigate/events"
+      camera: "gate"                # Frigate's own name for it; the events topic is shared
+    # Frigate's DETECT resolution, not the stream's. It is the divisor for the boxes it
+    # publishes — see docker/frigate.yml, where the same two numbers are set.
+    reference_resolution: [1280, 720]
+    stall_timeout_s: 10
+
+lines:
+  # The same normalized line for both cameras. Same clip, same geometry, two paths.
+  - line_id: "rtsp-doorway"
+    camera_id: "rtsp-door"
+    a: [0.10, 0.80]
+    b: [0.90, 0.80]
+    positive_dir: in
+    metrics: [line_cross, footfall]
+
+  - line_id: "frigate-doorway"
+    camera_id: "frigate-door"
+    a: [0.10, 0.80]
+    b: [0.90, 0.80]
+    positive_dir: in
+    metrics: [line_cross, footfall]
+
+zones:
+  # `heatmap` alongside the levels, because "both adjacencies rendering" is half of what
+  # this gate has to show and `demo.yaml` configures neither.
+  - zone_id: "floor"
+    camera_id: "rtsp-door"
+    role: area
+    polygon: [[0.05, 0.30], [0.95, 0.30], [0.95, 0.95], [0.05, 0.95]]
+    metrics: [occupancy, dwell_seconds, heatmap]
+
+  # The staff adjacency is a birth-place test: a track whose FIRST foot-point falls here
+  # is tagged and every count splits (ADR-0021).
+  #
+  # NOBODY IN THIS CLIP IS STAFF, and this zone does not pretend otherwise. It is a band
+  # down the side people enter from — measured from the heatmap during the first gate run,
+  # where every foot-point sat in the left 45% of the floor — so that some tracks are born
+  # inside it and the split has data to render. What the gate proves is that the mechanism
+  # works end to end: tags flow, the six counts split, and the dashboard's cohort chips
+  # change the numbers. It proves nothing about who anyone is. A real site draws this
+  # behind a counter.
+  - zone_id: "counter"
+    camera_id: "rtsp-door"
+    role: staff
+    polygon: [[0.05, 0.30], [0.22, 0.30], [0.22, 0.95], [0.05, 0.95]]
+    metrics: [occupancy]
+
+  - zone_id: "frigate-floor"
+    camera_id: "frigate-door"
+    role: area
+    polygon: [[0.05, 0.30], [0.95, 0.30], [0.95, 0.95], [0.05, 0.95]]
+    metrics: [occupancy, dwell_seconds, heatmap]
+
+thresholds:
+  detection_confidence: 0.35
+  track_thresh: 0.5
+  max_cost: 0.4
+  max_cost_low: 0.25
+  track_memory_s: 2.0
+  dwell_min_s: 3.0
+  queue_dwell_weight: true
+
+storage:
+  event_retention_hours: 72
+
+api:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8080
+  password_env: MUSTER_ADMIN_PASSWORD
+
+exporters:
+  # Every exporter the free path claims, except the two that need a peer: the webhook
+  # wants a signed endpoint and CSV writes files nobody asked for.
+  mqtt: { enabled: true, broker: "mosquitto", base_topic: "muster" }
+  prometheus: { enabled: true }
+  webhook: { enabled: false }
+  csv: { enabled: false }
+
+cloud_sync:
+  enabled: false

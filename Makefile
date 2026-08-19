@@ -1,6 +1,6 @@
 # The same gate as CI, one command. If `make check` is green, CI will be too.
 .DEFAULT_GOAL := help
-.PHONY: help setup fmt lint types arch test check cov image run demo compose-check test-stream clean
+.PHONY: help setup fmt lint types arch test check cov image run demo gate compose-check test-stream clean
 
 UV ?= uv
 ALL := muster-engine/src muster-engine/tests
@@ -60,8 +60,29 @@ demo:  ## THE one command: engine + dashboard + sample stream + broker
 	printf '  running end to end. Export MUSTER_RTSP_URL to point it at a real camera.\n\n'; \
 	docker compose --profile demo up
 
+gate:  ## The M2 gate (P4.5): both ingest paths on one clip, both adjacencies, every exporter
+	@command -v openssl >/dev/null || { echo "error: openssl not found; export MUSTER_ADMIN_PASSWORD yourself" >&2; exit 1; }
+	@test -f examples/clips/sample.mp4 || { echo "error: examples/clips/sample.mp4 is missing — the gate needs footage with people in it" >&2; exit 1; }
+	@set -eu; \
+	: "$${MUSTER_ADMIN_PASSWORD:=$$(openssl rand -hex 16)}"; \
+	: "$${MUSTER_RTSP_URL:=rtsp://mediamtx:8554/sample}"; \
+	export MUSTER_ADMIN_PASSWORD MUSTER_RTSP_URL; \
+	MUSTER_SEED=gate.yaml docker compose --profile gate build; \
+	MUSTER_SEED=gate.yaml docker compose --profile gate run --rm seed; \
+	printf '\n  dashboard   http://localhost:8080\n'; \
+	printf '  frigate     http://localhost:5000\n'; \
+	printf '  password    %s\n\n' "$$MUSTER_ADMIN_PASSWORD"; \
+	printf '  Two cameras watch the SAME clip: `rtsp-door` decodes it here, `frigate-door`\n'; \
+	printf '  consumes what Frigate publishes about it. Their geometry is identical, so\n'; \
+	printf '  their counts should be too — a disagreement is the coordinate-space\n'; \
+	printf '  assumption ADR-0022 recorded as unverified.\n\n'; \
+	printf '  broker:  docker compose --profile gate exec mosquitto mosquitto_sub -v -t "muster/#" -t "homeassistant/#"\n'; \
+	printf '  stop:    docker compose --profile gate down -v\n\n'; \
+	MUSTER_SEED=gate.yaml docker compose --profile gate up
+
 compose-check:  ## Validate the compose file and its demo profile
 	docker compose --profile demo config -q
+	docker compose --profile gate config -q
 	docker compose config -q
 
 test-stream:  ## Serve a synthetic RTSP camera on :8554 (no engine, no clip needed)
