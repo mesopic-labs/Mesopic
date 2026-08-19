@@ -4,12 +4,18 @@ ADR-0019's decisions, as tests: writes need a session and reads do not, an uncon
 credential refuses writes rather than allowing them, the refusal says which door is shut
 and never why, and the password reaches no log line.
 
-The structural test at the bottom is the one that matters longest. P3.4's `/config`
-editor is a strictly more powerful write than geometry, and it will be written by
-somebody who has forgotten this file exists — so a new state-changing route that carries
-no session dependency fails here rather than shipping.
+The two structural tests at the bottom are the ones that matter longest: a new
+state-changing route that carries no session dependency fails there rather than shipping,
+and since P3.4 a *read* route that is neither deliberately open nor deliberately guarded
+fails beside it (ADR-0023).
 
-Red-first for P3.10.
+**P3.4 also found that the first of those was vacuous.** FastAPI 0.141 wraps an included
+router rather than splicing its routes into `app.routes`, so the original walk saw every
+read and not one write — it would have passed with the calibration save unguarded. The
+walk now descends, and `test_the_route_walk_reaches_the_routes_inside_an_included_router`
+is what stops it going quiet again.
+
+Red-first for P3.10, extended by P3.4.
 """
 
 from __future__ import annotations
@@ -41,6 +47,14 @@ FRONT_DOOR = CameraId("front-door")
 PASSWORD = "correct-horse-battery-staple"  # noqa: S105 - a fixture, not a credential
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+GUARDED_READS = frozenset({"/config"})
+"""The reads that require a session, and the only ones (ADR-0023).
+
+`/config` renders the config file itself, which may legitimately carry an inline RTSP URL
+— for a camera the address *is* the credential. Every other view stays open: ADR-0019 item
+1 decided that a LAN dashboard needing a password to look at is a worse product, and that
+still holds for everything that does not render a secret."""
 
 EXEMPT_WRITES = frozenset({("POST", "/login"), ("POST", "/logout")})
 """The only state-changing routes that may skip the session guard.
@@ -447,6 +461,48 @@ async def test_the_metrics_api_needs_no_session(client: httpx.AsyncClient) -> No
 # --- The structural guarantee -------------------------------------------------
 
 
+def _api_routes(app: FastAPI) -> list[APIRoute]:
+    """Every `APIRoute` the app serves, including the ones inside included routers.
+
+    **`app.routes` is not that list.** Since FastAPI 0.141 `include_router` appends a
+    wrapper holding the router rather than splicing its routes in, so a walk of
+    `app.routes` alone sees only what was declared with `@app.get` and friends — which is
+    every read and not one write. The structural guarantee below was vacuous for exactly
+    as long as that went unnoticed: it would have passed with the calibration save
+    unguarded, which is the hole it exists to make impossible.
+    """
+    found: list[APIRoute] = []
+    pending = list(app.routes)
+    while pending:
+        route = pending.pop()
+        if isinstance(route, APIRoute):
+            found.append(route)
+        inner = getattr(route, "original_router", None)
+        if inner is not None:
+            pending.extend(inner.routes)
+    return found
+
+
+def _guarded(route: APIRoute) -> bool:
+    return any(
+        isinstance(dependency.call, WriteGuard) for dependency in route.dependant.dependencies
+    )
+
+
+def test_the_route_walk_reaches_the_routes_inside_an_included_router(
+    config: MusterConfig, store: Store
+) -> None:
+    """The check on the check: a walk that found nothing would make both tests vacuous."""
+    app = _app(config, store, credential=Credential(PASSWORD), clock=FakeClock())
+
+    reachable = {
+        (method, route.path) for route in _api_routes(app) for method in route.methods or set()
+    }
+
+    assert ("POST", "/calibrate/{camera_id}") in reachable
+    assert ("POST", "/config") in reachable
+
+
 def test_every_write_route_requires_a_session(config: MusterConfig, store: Store) -> None:
     """No state-changing route ships without the guard, including ones not written yet.
 
@@ -458,14 +514,33 @@ def test_every_write_route_requires_a_session(config: MusterConfig, store: Store
 
     unguarded = [
         (method, route.path)
-        for route in app.routes
-        if isinstance(route, APIRoute)
+        for route in _api_routes(app)
         for method in route.methods or set()
         if method not in SAFE_METHODS
         and (method, route.path) not in EXEMPT_WRITES
-        and not any(
-            isinstance(dependency.call, WriteGuard) for dependency in route.dependant.dependencies
-        )
+        and not _guarded(route)
     ]
 
     assert unguarded == []
+
+
+def test_every_read_route_is_deliberately_open_or_deliberately_guarded(
+    config: MusterConfig, store: Store
+) -> None:
+    """ADR-0023 gates one read and one only, so a second one cannot arrive by accident.
+
+    `/config` renders `muster.yaml`, which may hold an inline RTSP URL — the single value
+    on the read surface that is a credential. Every other view stays open, which is
+    ADR-0019 item 1 and a deliberate product decision rather than an oversight. A read
+    route in neither list is a decision nobody made.
+    """
+    app = _app(config, store, credential=Credential(PASSWORD), clock=FakeClock())
+
+    unclassified = {
+        route.path
+        for route in _api_routes(app)
+        if route.methods and route.methods <= SAFE_METHODS
+        if (route.path in GUARDED_READS) is not _guarded(route)
+    }
+
+    assert unclassified == set()

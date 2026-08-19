@@ -36,6 +36,7 @@ from muster.supervisor.control import (
     ControlMessage,
     Heartbeat,
     Reconfigure,
+    Retarget,
     Snapshot,
     SnapshotReply,
     Stop,
@@ -273,6 +274,14 @@ class WorkerHandle:
         """Ask the worker to close what is open and adopt `geometry`. Never blocks."""
         try:
             self._control.put_nowait(Reconfigure(geometry=geometry))
+        except queue.Full:
+            return False
+        return True
+
+    def request_retarget(self, fps_min: float, fps_max: float) -> bool:
+        """Ask the worker to adopt a new fps envelope. Never blocks."""
+        try:
+            self._control.put_nowait(Retarget(fps_min=fps_min, fps_max=fps_max))
         except queue.Full:
             return False
         return True

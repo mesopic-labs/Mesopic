@@ -510,3 +510,58 @@ async def test_without_a_password_env_the_engine_has_no_credential(
         response = await client.get("/login")
 
     assert response.status_code == 404
+
+
+# --- The config editor's join (P3.4) -----------------------------------------
+
+
+async def test_saving_a_document_rewrites_the_config_and_reloads_it(
+    store: Store, config_file: Path
+) -> None:
+    """The same join as `save_geometry`, for a document the operator typed.
+
+    Written first, read back second: what the store compiles and the workers adopt is
+    what a restart would also read, rather than the value the browser happened to send.
+    """
+    engine = Engine(
+        load_config(config_file), store, entry=run_until_stopped, config_path=config_file
+    )
+    edited = _text_of(config_file).replace("fps_max: 5.0", "fps_max: 4.0")
+
+    landed = await engine.save_config(edited)
+
+    assert landed.budget.fps_max == 4.0
+    assert _text_of(config_file) == edited
+    assert load_config(config_file).budget.fps_max == 4.0
+
+
+async def test_a_document_that_would_not_load_changes_nothing(
+    store: Store, config_file: Path
+) -> None:
+    """A config the engine wrote is a config that starts. The refusal happens before the
+    rename, so there is nothing to roll back."""
+    engine = Engine(
+        load_config(config_file), store, entry=run_until_stopped, config_path=config_file
+    )
+    before = _text_of(config_file)
+
+    with pytest.raises(ConfigError):
+        await engine.save_config(before.replace("fps_max: 5.0", "fps_max: 0.5"))
+
+    assert _text_of(config_file) == before
+    assert engine.config.budget.fps_max == 5.0
+
+
+async def test_the_saved_document_is_what_the_app_renders_next(
+    store: Store, config_file: Path
+) -> None:
+    """`config_document` reads the file rather than a copy, so the editor cannot show one
+    thing while the engine runs another."""
+    engine = Engine(
+        load_config(config_file), store, entry=run_until_stopped, config_path=config_file
+    )
+    edited = _text_of(config_file).replace("fps_max: 5.0", "fps_max: 4.0")
+
+    await engine.save_config(edited)
+
+    assert engine.config_document() == edited

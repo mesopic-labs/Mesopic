@@ -32,7 +32,7 @@ from muster.api.app import create_app
 from muster.api.auth import Credential
 from muster.config import load_config
 from muster.config.schema import ApiConfig, LineConfig, MusterConfig, ZoneConfig
-from muster.config.writer import write_geometry
+from muster.config.writer import read_document, write_document, write_geometry
 from muster.errors import ConfigError
 from muster.exporters.fanout import build_exporters
 from muster.exporters.prometheus import PrometheusExporter
@@ -144,6 +144,8 @@ class Engine:
             render_prometheus=_prometheus_renderer(self.supervisor),
             snapshot=self.supervisor.snapshot,
             save_geometry=self.save_geometry if config_path is not None else None,
+            config_document=self.config_document if config_path is not None else None,
+            save_config=self.save_config if config_path is not None else None,
             credential=_credential(config.api),
         )
 
@@ -163,6 +165,37 @@ class Engine:
             msg = "this engine was built without a config file to write back to"
             raise ConfigError(msg)
         write_geometry(self.config_path, zones=zones, lines=lines)
+        self.config = load_config(self.config_path)
+        self.store.apply_config(self.config)
+        await self.supervisor.reload(self.config)
+        return self.config
+
+    def config_document(self) -> str:
+        """The config file's text, read fresh for every render.
+
+        Not a cached copy: `/calibrate` writes this same file, so a copy taken at start-up
+        would show an editor a document that no longer exists the moment a zone is redrawn.
+        """
+        if self.config_path is None:  # pragma: no cover - the app never offers the route
+            msg = "this engine was built without a config file to read"
+            raise ConfigError(msg)
+        return read_document(self.config_path)
+
+    async def save_config(self, document: str) -> MusterConfig:
+        """Write a whole config an operator edited, then adopt what landed.
+
+        The same order as `save_geometry`, for the same reason: the file is authoritative
+        (§13.1), so it is written first and **read back** rather than trusted. What the
+        store compiles and the workers adopt is then what a restart would also read.
+
+        What the reload can carry is geometry and the fps envelope; everything else in the
+        document is read at start-up. `/config` names those sections rather than implying
+        the whole save took effect — see `muster.config.changes`.
+        """
+        if self.config_path is None:  # pragma: no cover - the app never offers the route
+            msg = "this engine was built without a config file to write back to"
+            raise ConfigError(msg)
+        write_document(self.config_path, document)
         self.config = load_config(self.config_path)
         self.store.apply_config(self.config)
         await self.supervisor.reload(self.config)

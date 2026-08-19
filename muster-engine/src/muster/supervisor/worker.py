@@ -30,6 +30,7 @@ from muster.supervisor.control import (
     ControlMessage,
     Heartbeat,
     Reconfigure,
+    Retarget,
     Snapshot,
     SnapshotReply,
     Stop,
@@ -153,7 +154,9 @@ def camera_loop(
             message = _next_message(control)
             if isinstance(message, Stop):
                 break
-            if message is not None and not isinstance(message, Stop):
+            if isinstance(message, Retarget):
+                pressure.set_envelope(fps_min=message.fps_min, fps_max=message.fps_max)
+            elif message is not None:
                 # A snapshot answers from the frame in hand and a reconfigure closes
                 # what is open, so both need this iteration's frame and neither may
                 # skip it — the loop carries on to the sampler either way.
@@ -223,6 +226,8 @@ def track_loop(
             message = _next_message(control)
             if isinstance(message, Stop):
                 break
+            if isinstance(message, Retarget):
+                pressure.set_envelope(fps_min=message.fps_min, fps_max=message.fps_max)
             if isinstance(message, Reconfigure):
                 for event in analytics.reconfigure(message.geometry, camera_id=camera_id, ts=ts):
                     outbox.push(event)

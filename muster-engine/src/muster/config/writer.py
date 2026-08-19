@@ -1,14 +1,23 @@
-"""Replace the `zones:` and `lines:` blocks of `muster.yaml`, and nothing else.
+"""Write `muster.yaml`: two keys of it from the canvas, or all of it from the editor.
+
+`write_geometry` replaces the `zones:` and `lines:` blocks and nothing else.
+`write_document` replaces the whole file with text an operator typed. They share the two
+guards below — validate the candidate, then rename it into place — because those are the
+properties that make the engine safe to let near a document a human owns, and a second
+copy of either is a second chance to forget one.
 
 §13.1 makes the config file authoritative and the store's `zones`/`lines` tables its
 compiled form, so the calibration view cannot save geometry to the store alone — the next
 `apply_config` would overwrite it from the file. Saving means editing the file, which
 makes the engine a writer of a document a human owns.
 
-That is why this is a round trip rather than a dump. `yaml.safe_dump` of the whole
-document would be four lines of code and would silently delete every comment in the file,
-including the ones marking an RTSP URL as an env reference rather than an inline secret.
-`ruamel.yaml` preserves what it did not touch; this module touches two keys.
+That is why the geometry save is a round trip rather than a dump. `yaml.safe_dump` of the
+whole document would be four lines of code and would silently delete every comment in the
+file, including the ones marking an RTSP URL as an env reference rather than an inline
+secret. `ruamel.yaml` preserves what it did not touch; that path touches two keys.
+
+The editor needs none of that. What the operator submitted *is* the document, so their
+comments and layout survive by being written back unchanged rather than re-rendered.
 
 The candidate document is validated **before** it can land. Referential integrity is a
 property of the whole document — a zone naming a camera that does not exist is only
@@ -16,7 +25,7 @@ visible from the top — so the check runs against the rendered result, not agai
 fragment that was passed in. A config the engine itself broke is a config that fails at
 the next start, on a box nobody is watching.
 
-Implements P3.3 (engine-architecture.md §13, §13.1).
+Implements P3.3 and P3.4 (engine-architecture.md §13, §13.1).
 """
 
 from __future__ import annotations
@@ -61,6 +70,39 @@ def write_geometry(path: Path, *, zones: Sequence[ZoneConfig], lines: Sequence[L
     rendered = _render(document)
     _reject_an_invalid_result(rendered, resolved)
     _replace_atomically(resolved, rendered)
+
+
+def read_document(path: Path) -> str:
+    """The config file's text, exactly as it is on disk.
+
+    The one place an `OSError` around the config becomes a `ConfigError`, so the route
+    rendering the editor has a single failure to handle rather than two.
+    """
+    resolved = path.expanduser().resolve()
+    try:
+        return resolved.read_text(encoding="utf-8")
+    except OSError as error:
+        msg = f"cannot read config {resolved}: {error.strerror}"
+        raise ConfigError(msg) from None
+
+
+def write_document(path: Path, text: str) -> None:
+    """Save a whole config an operator edited, or refuse it whole.
+
+    Raises:
+        ConfigError: the text is not YAML, would not load as a config, or cannot be
+            written. The message names the failing key path and never the value under it.
+    """
+    resolved = path.expanduser().resolve()
+    try:
+        candidate = yaml.safe_load(text)
+    except yaml.YAMLError:
+        # Deliberately not the parser's own message: it quotes the offending line, and
+        # the offending line may be the one holding an RTSP URL.
+        msg = f"config {resolved} is not valid YAML"
+        raise ConfigError(msg) from None
+    _reject_an_invalid_config(candidate, resolved)
+    _replace_atomically(resolved, text)
 
 
 def _replace_block(document: Any, key: str, blocks: list[CommentedMap]) -> None:
@@ -122,6 +164,11 @@ def _reject_an_invalid_result(rendered: str, path: Path) -> None:
         # "a config the engine broke never lands" would let exactly that through.
         msg = f"the engine produced a config for {path} that is not valid YAML"
         raise ConfigError(msg) from None
+    _reject_an_invalid_config(candidate, path)
+
+
+def _reject_an_invalid_config(candidate: Any, path: Path) -> None:
+    """Refuse a parsed document that is not a config, naming where and not what."""
     try:
         MusterConfig.model_validate(candidate)
     except ValidationError as error:
@@ -179,4 +226,4 @@ def _sequence(items: Iterable[Any], *, flow: bool = False) -> CommentedSeq:
     return sequence
 
 
-__all__ = ["write_geometry"]
+__all__ = ["read_document", "write_document", "write_geometry"]

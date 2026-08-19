@@ -56,7 +56,25 @@ class Reconfigure:
     geometry: SiteGeometry
 
 
-ControlMessage = Stop | Snapshot | Reconfigure
+@dataclass(frozen=True, slots=True)
+class Retarget:
+    """Adopt a new fps envelope without restarting (P3.4).
+
+    Two floats rather than a `BudgetConfig`, for the same reason `Reconfigure` carries
+    compiled geometry: the worker uses the envelope and nothing else in that section, and
+    a message carrying only what its receiver reads cannot grow a second meaning later.
+
+    `cpu_budget` is deliberately absent. It is the supervisor's scheduling input, not a
+    worker's — a worker sheds on its own outbox pressure (`Backpressure`), which is the
+    local signal, and handing it a site-wide fraction would invite a second opinion about
+    the same decision.
+    """
+
+    fps_min: float
+    fps_max: float
+
+
+ControlMessage = Stop | Snapshot | Reconfigure | Retarget
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +133,7 @@ __all__ = [
     "ControlMessage",
     "Heartbeat",
     "Reconfigure",
+    "Retarget",
     "Snapshot",
     "SnapshotReply",
     "Stop",

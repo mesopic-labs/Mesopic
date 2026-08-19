@@ -29,13 +29,13 @@ from typing import Any
 import numpy as np
 import pytest
 import yaml
-from scripted_worker import run_until_stopped
+from scripted_worker import report_retarget_then_stop, run_until_stopped
 
 from muster.analytics.site_geometry import SiteGeometry
 from muster.config.schema import MusterConfig
 from muster.errors import SnapshotUnavailableError, StreamDropped
 from muster.store.store import Store
-from muster.supervisor.control import Reconfigure, Snapshot, SnapshotReply, Stop
+from muster.supervisor.control import Reconfigure, Retarget, Snapshot, SnapshotReply, Stop
 from muster.supervisor.snapshot import MAX_EDGE_PX, encode_snapshot
 from muster.supervisor.supervisor import Supervisor
 from muster.supervisor.worker import camera_loop
@@ -197,7 +197,7 @@ def _run(control: _Q | None = None, snapshots: _Q | None = None, **kw: Any) -> A
     sink = kw.pop("sink", _Sink())
     parts: dict[str, Any] = {
         "source": _Source(kw.pop("frames", 3)),
-        "sampler": _Sampler(),
+        "sampler": kw.pop("sampler", _Sampler()),
         "detector": _Detector(),
         "tracker": _Tracker(),
         "analytics": analytics,
@@ -341,3 +341,63 @@ async def test_reload_compiles_before_it_sends(tmp_path: Path, config: MusterCon
         await supervisor.reload(config)
 
     assert supervisor.live_workers == 0
+
+
+# --- Retarget (P3.4) --------------------------------------------------------
+
+
+class _RecordingSampler:
+    def __init__(self) -> None:
+        self.rates: list[float] = []
+
+    def is_due(self, _ts: FrameTs) -> bool:
+        return True
+
+    def set_target_fps(self, target_fps: float) -> None:
+        self.rates.append(target_fps)
+
+
+def test_a_retarget_moves_the_running_camera_onto_the_new_ceiling() -> None:
+    """A budget saved in `/config` reaches a camera that is already streaming.
+
+    Without this the envelope is a start-up argument: `Backpressure` is constructed once
+    per worker, so a new `fps_max` would apply at the next restart and the operator would
+    be told the save took effect when it had not.
+    """
+    sampler = _RecordingSampler()
+
+    _run(control=_Q(Retarget(fps_min=1.0, fps_max=2.0)), sampler=sampler, frames=2)
+
+    assert sampler.rates == [2.0]
+
+
+def test_a_retarget_does_not_touch_the_geometry() -> None:
+    """The two ride the same channel and must not be confused for one another: a budget
+    change that closed every open dwell would fabricate exits nobody walked."""
+    _, analytics, sink = _run(control=_Q(Retarget(fps_min=1.0, fps_max=2.0)), frames=2)
+
+    assert analytics.reconfigured == []
+    assert sink.items == []
+
+
+async def test_reload_pushes_the_budget_to_a_running_worker(
+    tmp_path: Path, config: MusterConfig
+) -> None:
+    """The budget half of a hot reload, across a real process boundary.
+
+    `Reconfigure` carries compiled geometry; this carries two floats, and the reason it
+    is exercised through a real worker rather than by inspecting the queue is that the
+    `spawn` pickler is the only thing that can reject it — and it would do so in the
+    child, where nothing is watching.
+    """
+    slower = config.model_copy(update={"budget": config.budget.model_copy(update={"fps_max": 2.0})})
+    with Store(tmp_path / "muster.db") as store:
+        store.migrate()
+        supervisor = Supervisor(config, store=store, entry=report_retarget_then_stop)
+        await supervisor.start()
+
+        await supervisor.reload(slower)
+        events = await supervisor.drain_once(timeout=5.0, expected=len(config.cameras))
+        await supervisor.stop(flush=False)
+
+    assert [event.value for event in events] == [2.0] * len(config.cameras)
