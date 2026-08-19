@@ -222,6 +222,30 @@ def test_a_track_id_reused_after_death_is_classified_afresh() -> None:
     assert not any(event.is_staff for event in events)
 
 
+def test_a_confirmed_zone_entry_carries_the_tag() -> None:
+    """Zone-derived footfall counts *confirmed* entries, so a confirmation with no tag is a
+    staff arrival counted as a customer on every camera that has no counting line. It is
+    the one path `staff_only` cannot rescue: the flag it filters on was never set."""
+    analytics = _analytics()
+
+    events = _walk(analytics, (BEHIND_COUNTER, True), *([(ON_FLOOR, True)] * 5))
+
+    confirmed = [e for e in events if e.kind is EventKind.ZONE_CONFIRMED and e.zone_id == FLOOR]
+    assert confirmed, "staying on the floor past dwell_min_s should confirm the entry"
+    assert all(event.is_staff for event in confirmed)
+
+
+def test_a_customer_confirmation_is_left_untagged() -> None:
+    """The other half of the same contract: confirming an entry must not invent a role."""
+    analytics = _analytics()
+
+    events = _walk(analytics, *([(ON_FLOOR, True)] * 6))
+
+    confirmed = [e for e in events if e.kind is EventKind.ZONE_CONFIRMED and e.zone_id == FLOOR]
+    assert confirmed, "staying on the floor past dwell_min_s should confirm the entry"
+    assert not any(event.is_staff for event in confirmed)
+
+
 # --- Sampled state ----------------------------------------------------------
 
 
