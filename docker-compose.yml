@@ -68,7 +68,7 @@ services:
   # would render the calibration page and then fail every save made on it. It never
   # overwrites: a demo brought up twice keeps whatever was drawn the first time.
   seed:
-    profiles: ["demo", "gate"]
+    profiles: ["demo", "gate", "gif"]
     image: mesopic-engine:dev
     build:
       context: .
@@ -82,6 +82,7 @@ services:
       - mesopic-data:/data
       - ./docker/demo.yaml:/seed/demo.yaml:ro
       - ./docker/gate.yaml:/seed/gate.yaml:ro
+      - ./docker/gif.yaml:/seed/gif.yaml:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -91,7 +92,7 @@ services:
   # In the `camera` profile as well as `demo`, so `make test-stream` can bring up just a
   # stream to develop ingest against without building or running the engine.
   mediamtx:
-    profiles: ["demo", "camera", "gate"]
+    profiles: ["demo", "camera", "gate", "gif"]
     # The plain tag is distroless — no shell, no ffmpeg — so `runOnInit` silently
     # does nothing. The -ffmpeg variant is the one that can serve a looped clip.
     image: bluenviron/mediamtx:latest-ffmpeg
@@ -104,7 +105,7 @@ services:
 
   # For exercising the MQTT exporter and the Home Assistant discovery path locally.
   mosquitto:
-    profiles: ["demo", "gate"]
+    profiles: ["demo", "gate", "gif"]
     image: eclipse-mosquitto:2
     restart: unless-stopped
     ports:

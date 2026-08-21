@@ -1,6 +1,6 @@
 # The same gate as CI, one command. If `make check` is green, CI will be too.
 .DEFAULT_GOAL := help
-.PHONY: help setup fmt lint types arch test check cov image run demo gate compose-check test-stream clean
+.PHONY: help setup fmt lint types arch test check cov image run demo gate gif compose-check test-stream clean
 
 UV ?= uv
 ALL := mesopic-engine/src mesopic-engine/tests
@@ -80,9 +80,28 @@ gate:  ## The M2 gate (P4.5): both ingest paths on one clip, both adjacencies, e
 	printf '  stop:    docker compose --profile gate down -v\n\n'; \
 	MESOPIC_SEED=gate.yaml docker compose --profile gate up
 
+gif:  ## Bring up exactly what the launch demo GIF is recorded against (P5.5)
+	@command -v openssl >/dev/null || { echo "error: openssl not found; export MESOPIC_ADMIN_PASSWORD yourself" >&2; exit 1; }
+	@test -f examples/clips/sample.mp4 || { echo "error: examples/clips/sample.mp4 is missing — the GIF needs footage with people in it" >&2; exit 1; }
+	@set -eu; \
+	: "$${MESOPIC_ADMIN_PASSWORD:=$$(openssl rand -hex 16)}"; \
+	: "$${MESOPIC_RTSP_URL:=rtsp://mediamtx:8554/sample}"; \
+	export MESOPIC_ADMIN_PASSWORD MESOPIC_RTSP_URL; \
+	MESOPIC_SEED=gif.yaml docker compose --profile gif build; \
+	MESOPIC_SEED=gif.yaml docker compose --profile gif run --rm seed; \
+	printf '\n  dashboard   http://localhost:8080\n'; \
+	printf '  password    %s\n\n' "$$MESOPIC_ADMIN_PASSWORD"; \
+	printf '  Footfall, line-crossings, live occupancy, dwell and a zone heatmap, on a\n'; \
+	printf '  real storefront feed. NO QUEUE TILE: nobody waits in this clip, so the\n'; \
+	printf '  config does not claim one — see the header of docker/gif.yaml.\n\n'; \
+	printf '  record:  scripts/record-demo-gif.sh\n'; \
+	printf '  stop:    docker compose --profile gif down -v\n\n'; \
+	MESOPIC_SEED=gif.yaml docker compose --profile gif up
+
 compose-check:  ## Validate the compose file and its demo profile
 	docker compose --profile demo config -q
 	docker compose --profile gate config -q
+	docker compose --profile gif config -q
 	docker compose config -q
 
 test-stream:  ## Serve a synthetic RTSP camera on :8554 (no engine, no clip needed)
