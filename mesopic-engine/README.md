@@ -15,11 +15,11 @@ make setup     # uv sync + git hooks
 make check     # lint, types, module boundaries, tests
 ```
 
-See the repository [README](../README.md) for the quickstart and configuration.
+See the repository README for the quickstart and configuration.
 
 ## Licence
 
-MIT — see [LICENSE](./LICENSE). Model weights are **not** bundled: they are fetched at
+MIT — the full text ships alongside this file, as `LICENSE`. Model weights are **not** bundled: they are fetched at
 runtime as separately-licensed artefacts, which is what keeps the model's licence
 separable from this code (ADR-0008, ADR-0013). The default install carries no AGPL
 anywhere; `mesopic[ultralytics]` is opt-in and AGPL-3.0.

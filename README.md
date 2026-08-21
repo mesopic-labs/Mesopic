@@ -63,7 +63,7 @@ docker run -d --name mesopic \
   -e MESOPIC_RTSP_URL="rtsp://user:pass@192.168.1.64:554/stream1" \
   -p 8080:8080 \
   -v mesopic-data:/data \
-  ghcr.io/emil1j/mesopic-engine:latest
+  ghcr.io/mesopic-labs/mesopic-engine:latest
 ```
 
 Then open **http://localhost:8080** for the local dashboard.
@@ -75,7 +75,7 @@ that first run a minute longer than later ones. Every release is signed; if you 
 check that before running it:
 
 ```bash
-cosign verify ghcr.io/emil1j/mesopic-engine:latest \
+cosign verify ghcr.io/mesopic-labs/mesopic-engine:latest \
   --certificate-identity-regexp '^https://github\.com/.+/Mesopic/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
