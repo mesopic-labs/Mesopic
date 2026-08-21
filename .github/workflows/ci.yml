@@ -109,23 +109,40 @@ jobs:
   secrets:
     name: gitleaks
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # The action reads a pull request's commit list over the API to know what to scan.
-      # The workflow-level default is `contents: read` only, so this has to be asked for.
-      pull-requests: read
+    # `contents: read` only, inherited from the workflow default. The licensed action
+    # needed `pull-requests: read` to ask the API which commits to scan; the binary reads
+    # the checkout, so the grant goes with it.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0   # scan history, not just the diff
-      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+      # The scanner is MIT. The action that wraps it is not: it requires a paid licence
+      # for organisation-owned repositories and fails closed without one, which is what
+      # happened the moment this repository moved into the organisation. Running the
+      # binary keeps the gate free, drops a third-party JavaScript action from the supply
+      # chain, and pins the version the pre-commit hook already uses, so the local hook
+      # and the merge gate cannot disagree about what counts as a secret.
+      #
+      # Pinned by checksum for the reason actions are pinned by SHA: a release asset is
+      # mutable, and a scanner that has been swapped is a gate that passes everything.
+      - name: install gitleaks
         env:
-          # Required since v2 to scan a pull request. Without it the job fails *before*
-          # scanning anything — a secret-scanning gate that never looked at the diff is
-          # worse than no gate, because the red looks like a finding rather than a
-          # misconfiguration.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
+          VERSION: "8.28.0"
+          SHA256: "a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb"
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          echo "${SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          install -m 0755 gitleaks /usr/local/bin/gitleaks
+          rm gitleaks.tar.gz gitleaks
+
+      # `git`, not `detect` — the latter was removed in v8. The command exits non-zero on
+      # a finding, and prints the commit count it scanned, so a gate that silently looked
+      # at nothing is visible in the log rather than indistinguishable from a pass.
+      # --redact keeps the secret itself out of a log that is public the day this
+      # repository is.
+      - run: gitleaks git --config .gitleaks.toml --redact --no-banner .
 
   dependencies:
     name: dependency review
