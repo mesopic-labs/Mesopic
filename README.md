@@ -9,10 +9,10 @@
 <!-- Badges (CI, licence, stars, discussions) go in when the repository goes public;
      they render broken until then and would assert things that are not true yet. -->
 
-<!-- The 60-second demo GIF goes here (P5.5), as ![Mesopic counting a storefront](docs/assets/demo.gif).
-     Absent until it is recorded, because a broken image is worse than no image on the one
-     screen a launch visitor actually looks at. Record it with `make gif` +
-     scripts/record-demo-gif.sh, which enforces the < 5 MB / <= 60 s budget the M3 gate sets. -->
+![Mesopic counting people at a storefront: footfall, line crossings, live occupancy and dwell time on a live dashboard](docs/assets/demo.gif)
+
+<!-- Reshoot with `make gif`, then scripts/record-demo-gif.sh, which enforces the
+     < 5 MB / <= 60 s budget the M3 gate sets. -->
 
 > **Status:** pre-launch. APIs, config, and metric definitions will change before `v1.0`.
 
