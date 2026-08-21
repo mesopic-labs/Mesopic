@@ -124,5 +124,5 @@ exporters:
 
 cloud_sync:
   enabled: false                    # OFF by default — the local engine is whole on its own
-  endpoint: "https://sync.mesopic.app"
+  endpoint: "https://sync.mesopic.dev"
   site_token_env: "MESOPIC_SITE_TOKEN"   # by reference; never the token itself

@@ -342,7 +342,7 @@ local engine (the primary paid path — only metrics sync); (3) the managed appl
 buyers who never want to touch Docker.
 
 **Cloud is not built yet.** If you want to hear when it is,
-[join the waitlist](https://mesopic.app/?source=readme) — one email, when there is something real to
+[join the waitlist](https://mesopic.dev/?source=readme) — one email, when there is something real to
 try. Nothing about the engine depends on it, and self-hosting stays free either way.
 
 > **Pricing is not final.** Mesopic has no paying customers yet; these tiers are what we intend to
