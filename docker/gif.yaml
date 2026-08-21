@@ -1,0 +1,93 @@
+# The site the launch demo GIF is recorded against (P5.5).
+#
+# NOT a document to copy — `examples/mesopic.yaml` is the worked example. This one exists
+# so the most-scrutinised asset at launch is reproducible: `make gif` brings up exactly
+# what was on screen when the GIF was shot, and `scripts/record-demo-gif.sh` re-records it.
+# A demo nobody can reshoot is a demo that quietly goes stale.
+#
+# WHAT IS DELIBERATELY ABSENT: a queue zone. The clip this is recorded against is a
+# storefront thoroughfare — people walk past and walk in, nobody ever waits — so a
+# `role: queue` zone here would render a tile reading 0 or 1 forever under a label
+# promising queue analytics. The metric works; this footage cannot show it. Footage that
+# can is MK.8's job, and the GIF gets a queue the day that clip exists, not before.
+#
+# The staff split is absent for the reason `gate.yaml` spells out about the same clip:
+# nobody in it is staff, and a marketing asset is the worst place to imply otherwise.
+
+site:
+  site_id: "mesopic-demo"
+  timezone: "Europe/London"         # the clock the dashboard prints; storage stays UTC
+
+budget:
+  cpu_budget: 0.75
+  fps_min: 1.0
+  fps_max: 5.0
+
+cameras:
+  - camera_id: "storefront"
+    name: "Storefront"
+    source:
+      kind: rtsp
+      # By reference, never inline (hard invariant 6). `make gif` points this at the
+      # mediamtx sidecar looping ./examples/clips/sample.mp4.
+      url_env: MESOPIC_RTSP_URL
+      transport: tcp
+    reference_resolution: [1920, 1080]
+    stall_timeout_s: 10
+    detector:
+      input_size: 640
+      roi_from_geometry: true
+
+lines:
+  # The store threshold, and the same normalized line P4.5 ran the M2 gate over on this
+  # clip — so it is geometry with counts already checked against it rather than geometry
+  # drawn for a screenshot. People walk the pavement below it and cross upward, away from
+  # the camera, to go in; `positive_dir: in` is therefore entries, not passers-by.
+  - line_id: "doorway"
+    camera_id: "storefront"
+    a: [0.10, 0.80]
+    b: [0.90, 0.80]
+    positive_dir: in
+    metrics: [line_cross, footfall]
+
+zones:
+  # Heatmap is on here and off in `demo.yaml` on purpose: a density overlay reads
+  # instantly in a muted, thumbnail-sized loop, which is the viewing condition the GIF
+  # is actually judged in.
+  - zone_id: "shopfront"
+    camera_id: "storefront"
+    role: area
+    polygon: [[0.05, 0.30], [0.95, 0.30], [0.95, 0.95], [0.05, 0.95]]
+    metrics: [occupancy, dwell_seconds, heatmap]
+
+thresholds:
+  detection_confidence: 0.35
+  track_thresh: 0.5
+  max_cost: 0.4
+  max_cost_low: 0.25
+  track_memory_s: 2.0
+  dwell_min_s: 3.0
+  queue_dwell_weight: true
+
+storage:
+  event_retention_hours: 72
+
+api:
+  # 0.0.0.0 and a password for the same paired reason as `demo.yaml`: a published port
+  # cannot reach a loopback bind from outside the container, and binding every interface
+  # is exactly when the write surface needs its credential (ADR-0019).
+  enabled: true
+  host: "0.0.0.0"
+  port: 8080
+  password_env: MESOPIC_ADMIN_PASSWORD
+
+exporters:
+  # On, because "the integrations are real" is part of what the GIF is claiming when the
+  # posts point at Frigate and Home Assistant.
+  mqtt: { enabled: true, broker: "mosquitto", base_topic: "mesopic" }
+  prometheus: { enabled: true }
+  webhook: { enabled: false }
+  csv: { enabled: false }
+
+cloud_sync:
+  enabled: false

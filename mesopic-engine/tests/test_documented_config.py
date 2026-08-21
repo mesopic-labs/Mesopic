@@ -43,6 +43,14 @@ this one, so drift in it is invisible until the one-command bring-up dies on a f
 machine — which is exactly the machine nobody is watching.
 """
 
+GIF_CONFIG = REPO_ROOT / "docker" / "gif.yaml"
+"""The config the launch demo GIF is recorded against (P5.5).
+
+Held here because the GIF is the most-scrutinised asset at launch and is re-recorded
+rarely. A key renamed six months from now would not fail anything until someone tried to
+reshoot it, found the bring-up dead, and had no record of what the original was shot with.
+"""
+
 FIXTURE_CONFIG = REPO_ROOT / "fixtures" / "mesopic.yaml"
 """The geometry the ground-truth clips are labelled against.
 
@@ -85,10 +93,11 @@ def documents(documented: dict[str, Any], example: dict[str, Any]) -> dict[str, 
         "example": example,
         "fixtures": _yaml_document(FIXTURE_CONFIG),
         "demo": _yaml_document(DEMO_CONFIG),
+        "gif": _yaml_document(GIF_CONFIG),
     }
 
 
-@pytest.mark.parametrize("document", ["readme", "example", "fixtures", "demo"])
+@pytest.mark.parametrize("document", ["readme", "example", "fixtures", "demo", "gif"])
 def test_every_documented_config_validates(
     document: str, documents: dict[str, dict[str, Any]], tmp_path: Path
 ) -> None:
@@ -119,7 +128,7 @@ def test_readme_and_example_agree_on_structure(
     assert set(documented["zones"][0]) <= set(example["zones"][0])
 
 
-@pytest.mark.parametrize("document", ["readme", "example", "fixtures", "demo"])
+@pytest.mark.parametrize("document", ["readme", "example", "fixtures", "demo", "gif"])
 def test_every_documented_config_shows_some_geometry(
     document: str, documents: dict[str, dict[str, Any]]
 ) -> None:
@@ -137,7 +146,7 @@ def test_every_documented_config_shows_some_geometry(
 
 
 @pytest.mark.privacy
-@pytest.mark.parametrize("document", ["readme", "example", "fixtures", "demo"])
+@pytest.mark.parametrize("document", ["readme", "example", "fixtures", "demo", "gif"])
 def test_no_document_inlines_a_secret(document: str, documents: dict[str, dict[str, Any]]) -> None:
     """Secrets are referenced by env-var name, never written into the config file.
 
