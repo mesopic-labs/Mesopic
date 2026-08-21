@@ -1,0 +1,649 @@
+"""Tracks plus `SiteGeometry` become `RawEvent`s.
+
+Pure in the sense engine-architecture.md §8 means it: no camera, no model, no database,
+no clock. Everything this module decides, it decides from the tracks it has been shown
+and the geometry it was built with, which is what makes it testable against a recorded
+track sequence alone.
+
+It is *not* stateless, and cannot be. A crossing is a property of two consecutive
+foot-points, the hysteresis band is a property of what the track did last, and a zone
+enter is the difference between two membership sets — so the per-track bookkeeping
+algorithms.md §5(c), §5(d) and §6 describe lives here, keyed by `(camera, track)` because
+a `TrackId` is unique per camera per run and nothing more.
+
+The math is imported, not re-derived: containment and `side_of` come from
+`site_geometry`, and the segment-intersection test below is built on that same `side_of`
+so its tie-break for a zero side cannot drift from the direction test beside it — which
+is the failure §5(b) explicitly warns about.
+
+Implements P2.3.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+
+from mesopic.analytics.site_geometry import PreparedLine, SiteGeometry, cell_of, side_of
+from mesopic.types import (
+    CameraId,
+    EventKind,
+    FrameTs,
+    LineId,
+    MetricName,
+    NormPoint,
+    RawEvent,
+    Track,
+    TrackId,
+    ZoneId,
+    ZoneRole,
+)
+
+HYSTERESIS_DELTA = 0.02
+"""How far past a line a foot-point must get before a re-cross counts, in normalized
+units (algorithms.md §5(d), "small, e.g. 0.02"). The band is the primary defence against
+a person loitering on the threshold; the timer below is the backstop."""
+
+CROSSING_DEBOUNCE_S = 1.0
+"""How long the same track is ignored on the same line after crossing it (§5(d))."""
+
+DWELL_MIN_S = 3.0
+"""How long a track must be *continuously* inside a zone before it counts (§6, §7).
+
+The same threshold the dwell state machine uses, applied to the live count — one rule,
+two consumers. Confirmation here is deliberately not the aggregator's dwell machine: it
+has no re-entry grace, because §6 asks for continuous residency and a round trip out of
+the zone genuinely restarts it.
+"""
+
+
+@dataclass(slots=True)
+class _LineState:
+    """Per `(track, line)`: the sticky side and the debounce window."""
+
+    sticky_side: int | None = None
+    """Last *non-zero* side. A graze must not move it, or one step onto the line and
+    back becomes two half-crossings (§5c)."""
+
+    pending_side: int | None = None
+    """The side of a crossing that has happened but is not yet committed (§5d).
+
+    A segment that intersects the line is proof the track crossed it. The hysteresis band
+    decides *when to believe it*, not whether it happened — so a crossing whose first
+    sample on the far side is still inside the band waits here until the walker clears the
+    band or steps back. While it waits, the sticky side must not move: advancing it is
+    what used to erase the transition, and the next segment no longer intersects, so the
+    crossing could never be recovered."""
+
+    debounced_until: datetime | None = None
+
+
+@dataclass(slots=True)
+class _Residency:
+    """Per `(zone, track)`: when this stay started, and whether it has been confirmed."""
+
+    entered_at: FrameTs
+    confirmed: bool = False
+
+
+@dataclass(slots=True)
+class _TrackState:
+    """Per track: where it last was, whether that was an observation or a guess, and
+    which side of the counter it came from."""
+
+    last_observed_foot: NormPoint | None = None
+    was_observed: bool = False
+    lines: dict[LineId, _LineState] = field(default_factory=dict)
+    is_staff: bool | None = None
+    """Whether this track was born in a staff zone. `None` until it has been *observed*
+    once — a track first seen coasting has no trustworthy origin yet, and a Kalman guess
+    must not assign somebody a role (algorithms.md §3.4, §11.1).
+
+    Decided once and never revisited. Re-testing per tick would untag a staff member the
+    moment they stepped out from behind the counter, which is most of a shift and exactly
+    when they are inflating the floor's numbers.
+    """
+
+
+class GeometryAnalytics:
+    """Turns each tick's tracks into raw events for one site.
+
+    Holds the per-track state the crossing and membership tests need. One instance per
+    engine; `on_tracks` is called once per camera per tick.
+    """
+
+    def __init__(
+        self,
+        geometry: SiteGeometry,
+        *,
+        hysteresis_delta: float = HYSTERESIS_DELTA,
+        crossing_debounce_s: float = CROSSING_DEBOUNCE_S,
+        dwell_min_s: float = DWELL_MIN_S,
+    ) -> None:
+        self._geometry = geometry
+        self._hysteresis_delta = hysteresis_delta
+        self._crossing_debounce_s = crossing_debounce_s
+        self._dwell_min_s = timedelta(seconds=dwell_min_s)
+        self._tracks: dict[tuple[CameraId, TrackId], _TrackState] = {}
+        self._inside: dict[ZoneId, dict[TrackId, _Residency]] = {}
+        self._last_ts: dict[CameraId, datetime] = {}
+
+    def on_tracks(
+        self, camera_id: CameraId, tracks: Sequence[Track], *, ts: FrameTs | None = None
+    ) -> list[RawEvent]:
+        """Derive this tick's events for one camera. No I/O, no persistence.
+
+        `ts` is the sampled frame's capture time. It is optional only because a tick that
+        carries tracks can take its timestamp from the newest of them — but a tick with
+        *no* tracks cannot, and an empty camera still has to report that its zones held
+        nobody. Pass it wherever the caller knows it, which is everywhere real.
+        """
+        for track in tracks:
+            if track.camera_id != camera_id:
+                msg = (
+                    f"track {track.track_id} belongs to camera "
+                    f"{track.camera_id!r}, not {camera_id!r}"
+                )
+                raise ValueError(msg)
+
+        previous_ts = self._last_ts.get(camera_id)
+        tick_ts = self._tick_ts(camera_id, tracks, ts)
+        self._classify(camera_id, tracks)
+        events = self._line_events(camera_id, tracks)
+        events += self._zone_events(camera_id, tracks, tick_ts)
+        events += self._occupancy_samples(camera_id, tick_ts, previous_ts)
+        events += self._heatmap_hits(camera_id, tracks, tick_ts, previous_ts)
+        self._forget_dead_tracks(camera_id, tracks)
+        return events
+
+    # --- Reconfiguration ----------------------------------------------------
+
+    def reconfigure(
+        self, geometry: SiteGeometry, *, camera_id: CameraId, ts: FrameTs
+    ) -> list[RawEvent]:
+        """Swap in edited geometry, closing what the old geometry had open.
+
+        **The close is not politeness, it is the contract.** `_zone_events` is the single
+        owner of track-death → exit (§7), and a swapped-out zone leaves that diff
+        entirely — so an open dwell that is merely dropped never emits its exit, is never
+        counted, and leaks. Everyone inside is therefore walked out first, at `ts`, and
+        the swap happens after.
+
+        The visible consequence is deliberate: editing a polygon under a busy shop reads
+        as everyone leaving and re-entering. That is bounded, honest and one minute wide,
+        which is the right direction to be wrong in compared with a silent leak.
+
+        Only `camera_id`'s state is touched. A worker owns one camera and cannot observe
+        another, so closing another's dwells from here would emit departures nobody saw.
+        """
+        zones = self._geometry.zones_for(camera_id)
+        events = [
+            _zone_event(
+                EventKind.ZONE_EXIT,
+                zone.zone_id,
+                None,
+                is_staff=self._is_staff(camera_id, track_id),
+                departed=(camera_id, track_id, ts),
+            )
+            for zone in zones
+            for track_id in sorted(self._inside.get(zone.zone_id, {}))
+        ]
+        for zone in zones:
+            self._inside.pop(zone.zone_id, None)
+        # Sticky side describes a line that may have just moved, so a carried-over side
+        # would compare the next frame against geometry nobody walked.
+        for key in [k for k in self._tracks if k[0] == camera_id]:
+            del self._tracks[key]
+        self._geometry = geometry
+        return events
+
+    def open_zone_count(self, camera_id: CameraId) -> int:
+        """How many residencies this camera currently holds open. For tests and §15."""
+        return sum(
+            len(self._inside.get(zone.zone_id, {})) for zone in self._geometry.zones_for(camera_id)
+        )
+
+    def _tick_ts(
+        self, camera_id: CameraId, tracks: Sequence[Track], ts: FrameTs | None
+    ) -> datetime | None:
+        """This tick's capture time — the caller's, the newest track's, or the last seen.
+
+        A tick with no tracks still has to stamp the exits it produces, and this module
+        has no clock by design. The last capture time is the honest answer: it is when
+        the departing track was last actually seen.
+        """
+        if ts is not None:
+            self._last_ts[camera_id] = ts
+        elif tracks:
+            self._last_ts[camera_id] = max(track.ts for track in tracks)
+        return self._last_ts.get(camera_id)
+
+    # --- Lines --------------------------------------------------------------
+
+    def _line_events(self, camera_id: CameraId, tracks: Sequence[Track]) -> list[RawEvent]:
+        lines = self._geometry.lines_for(camera_id)
+        events: list[RawEvent] = []
+        for track in tracks:
+            state = self._tracks.setdefault((camera_id, track.track_id), _TrackState())
+            observed = track.time_since_update == 0
+            if observed or state.was_observed:
+                events += [
+                    event
+                    for line in lines
+                    if (event := self._crossing(track, line, state)) is not None
+                ]
+            self._remember(state, track, observed=observed)
+        return events
+
+    def _crossing(self, track: Track, line: PreparedLine, state: _TrackState) -> RawEvent | None:
+        """One track against one line, following algorithms.md §5 step for step."""
+        line_state = state.lines.setdefault(line.line_id, _LineState())
+        current_side = line.side_of(track.foot_point)
+        clear_of_band = line.distance_to(track.foot_point) >= self._hysteresis_delta
+
+        previous = state.last_observed_foot
+        if previous is None:
+            # First sight of this track: seed the side it started on. Without this the
+            # track's first real crossing has nothing to flip from and is swallowed.
+            self._update_sticky(line_state, current_side)
+            return None
+
+        if line_state.pending_side is not None:
+            return self._resolve_pending(track, line, line_state, current_side, clear_of_band)
+
+        if not _segments_intersect(previous, track.foot_point, line.a, line.b):
+            self._update_sticky(line_state, current_side)
+            return None
+
+        sticky = line_state.sticky_side
+        if current_side == 0 or sticky is None or (current_side > 0) == (sticky > 0):
+            self._update_sticky(line_state, current_side)
+            return None
+
+        if not clear_of_band:
+            # Crossed, but not yet committed. Held rather than dropped, and the sticky
+            # side deliberately stays where it was.
+            line_state.pending_side = current_side
+            return None
+        return self._commit(track, line, line_state, current_side, crossed_from=sticky)
+
+    def _resolve_pending(
+        self,
+        track: Track,
+        line: PreparedLine,
+        line_state: _LineState,
+        current_side: int,
+        clear_of_band: bool,
+    ) -> RawEvent | None:
+        """Commit a held crossing, abandon it, or keep waiting.
+
+        No segment test here: the intersection that created the pending crossing is the
+        proof, and the walker is now inside the band where consecutive samples straddle
+        the line constantly. Re-testing would make committing depend on which side of the
+        line the last sample happened to sit.
+        """
+        pending = line_state.pending_side
+        if pending is None:  # pragma: no cover - the caller checked
+            return None
+        if current_side != 0 and (current_side > 0) != (pending > 0) and clear_of_band:
+            # Back on the side they came from, and clear of the band: they stepped over
+            # and returned. Nothing happened, and this is the jitter case §5(d) exists for.
+            line_state.pending_side = None
+            self._update_sticky(line_state, current_side)
+            return None
+        if not clear_of_band or current_side == 0:
+            return None
+        line_state.pending_side = None
+        # The pending side is the far side, so the walker came from its opposite. Reading
+        # `sticky_side` here would work today and break the moment anything else moves it.
+        return self._commit(track, line, line_state, current_side, crossed_from=-pending)
+
+    def _commit(
+        self,
+        track: Track,
+        line: PreparedLine,
+        line_state: _LineState,
+        current_side: int,
+        *,
+        crossed_from: int,
+    ) -> RawEvent | None:
+        """Emit the crossing, unless this track is still inside its debounce window.
+
+        `crossed_from` is the side the track came from, passed in rather than read off
+        `line_state` because committing overwrites it — and because a pending crossing
+        commits one or more frames after the side that produced it was current.
+
+        Stamped with the committing frame's capture time rather than the intersecting
+        one. The difference is a frame or two in the ordinary case, and using the earlier
+        stamp would let a walker who paused in the doorway emit into a minute bucket that
+        has already been closed and written (§10).
+        """
+        if line_state.debounced_until is not None and track.ts < line_state.debounced_until:
+            line_state.sticky_side = current_side
+            return None
+        line_state.sticky_side = current_side
+        line_state.debounced_until = track.ts + timedelta(seconds=self._crossing_debounce_s)
+        return RawEvent(
+            camera_id=track.camera_id,
+            ts=track.ts,
+            kind=EventKind.LINE_CROSS,
+            track_id=track.track_id,
+            line_id=line.line_id,
+            direction=1 if crossed_from < 0 else -1,
+            is_staff=self._is_staff(track.camera_id, track.track_id),
+        )
+
+    @staticmethod
+    def _update_sticky(line_state: _LineState, side: int) -> None:
+        """Zero is not a side. Holding through it is what makes a graze silent (§5c)."""
+        if side != 0:
+            line_state.sticky_side = side
+
+    # --- Zones --------------------------------------------------------------
+
+    def _zone_events(
+        self, camera_id: CameraId, tracks: Sequence[Track], tick_ts: datetime | None
+    ) -> list[RawEvent]:
+        """Membership diffing, which is also the single owner of track-death -> exit.
+
+        algorithms.md §7's dwell state machine depends on that: a track that dies inside a
+        zone is absent from `tracks`, so it falls out of `now_inside` and closes its dwell
+        normally. Without it `open_dwells` leaks forever.
+        """
+        events: list[RawEvent] = []
+        coasted = {t.track_id for t in tracks if t.time_since_update > 0}
+        by_id = {track.track_id: track for track in tracks}
+
+        for zone in self._geometry.zones_for(camera_id):
+            residents = self._inside.setdefault(zone.zone_id, {})
+            was_inside = set(residents)
+            now_inside = {
+                track.track_id
+                for track in tracks
+                if track.time_since_update == 0 and zone.contains(track.foot_point)
+            }
+            # A dead-reckoned position may neither create nor destroy membership (§3.4).
+            now_inside |= was_inside & coasted
+
+            events += [
+                _zone_event(
+                    EventKind.ZONE_ENTER,
+                    zone.zone_id,
+                    by_id[track_id],
+                    is_staff=self._is_staff(camera_id, track_id),
+                )
+                for track_id in sorted(now_inside - was_inside)
+            ]
+            events += [
+                _zone_event(
+                    EventKind.ZONE_EXIT,
+                    zone.zone_id,
+                    by_id.get(track_id),
+                    # Read before `_forget_dead_tracks` runs, which is what lets an exit
+                    # for a track that died inside the zone still know whose it was.
+                    is_staff=self._is_staff(camera_id, track_id),
+                    departed=(camera_id, track_id, tick_ts),
+                )
+                for track_id in sorted(was_inside - now_inside)
+            ]
+            self._inside[zone.zone_id] = self._residents_after(
+                residents, now_inside, by_id, tick_ts
+            )
+            events += self._confirmations(camera_id, zone.zone_id, tick_ts)
+        return events
+
+    @staticmethod
+    def _residents_after(
+        residents: dict[TrackId, _Residency],
+        now_inside: set[TrackId],
+        by_id: dict[TrackId, Track],
+        tick_ts: datetime | None,
+    ) -> dict[TrackId, _Residency]:
+        """Carry the residency of everyone who stayed; start a clock for everyone new.
+
+        A track that left is simply dropped, which is what restarts its confirmation
+        clock on a re-entry — §6 asks for *continuous* residency, and a round trip out of
+        the zone is not continuous however brief it was.
+        """
+        kept: dict[TrackId, _Residency] = {}
+        for track_id in now_inside:
+            existing = residents.get(track_id)
+            if existing is not None:
+                kept[track_id] = existing
+                continue
+            track = by_id.get(track_id)
+            entered_at = track.ts if track is not None else tick_ts
+            if entered_at is not None:
+                kept[track_id] = _Residency(entered_at=FrameTs(entered_at))
+        return kept
+
+    def _confirmations(
+        self, camera_id: CameraId, zone_id: ZoneId, tick_ts: datetime | None
+    ) -> list[RawEvent]:
+        """Announce, once, that a stay has outlasted `dwell_min_s`.
+
+        The occupancy sample carries how many tracks are confirmed but not *which*, and
+        zone-derived footfall counts distinct confirmed entries (§7) — so the identity
+        has to arrive as its own event or not at all.
+        """
+        if tick_ts is None:
+            return []
+        events = []
+        for track_id, residency in sorted(self._inside[zone_id].items()):
+            if residency.confirmed or tick_ts - residency.entered_at < self._dwell_min_s:
+                continue
+            residency.confirmed = True
+            events.append(
+                RawEvent(
+                    camera_id=camera_id,
+                    ts=FrameTs(tick_ts),
+                    kind=EventKind.ZONE_CONFIRMED,
+                    track_id=track_id,
+                    zone_id=zone_id,
+                    # Zone-derived footfall counts confirmed entries and takes its staff
+                    # sub-count by filtering this flag, so an untagged confirmation counts
+                    # every staff arrival as a customer on any camera without a line.
+                    is_staff=self._is_staff(camera_id, track_id),
+                )
+            )
+        return events
+
+    # --- Staff tagging ------------------------------------------------------
+
+    def _classify(self, camera_id: CameraId, tracks: Sequence[Track]) -> None:
+        """Tag each newly observed track by where it came from (algorithms.md §11.1).
+
+        Origin, never current position. Staff walk out onto the floor and customers walk
+        up to the counter, so where a track *is* says little and where it was *born* says
+        most of what there is to know — and a customer leaning over the counter is inside
+        the staff zone, which is the case a position test gets wrong while looking right.
+
+        Runs before any event is built, so every event in this tick reports the same tag.
+        """
+        for track in tracks:
+            if track.time_since_update != 0:
+                continue
+            state = self._tracks.setdefault((camera_id, track.track_id), _TrackState())
+            if state.is_staff is None:
+                state.is_staff = self._born_in_staff_zone(camera_id, track.foot_point)
+
+    def _born_in_staff_zone(self, camera_id: CameraId, foot_point: NormPoint) -> bool:
+        return any(
+            zone.role is ZoneRole.STAFF and zone.contains(foot_point)
+            for zone in self._geometry.zones_for(camera_id)
+        )
+
+    def _is_staff(self, camera_id: CameraId, track_id: TrackId) -> bool:
+        """The tag as everything downstream sees it. Undecided reads as not staff — a
+        track nobody has observed yet has no origin to have come from."""
+        state = self._tracks.get((camera_id, track_id))
+        return bool(state is not None and state.is_staff)
+
+    # --- Sampled state ------------------------------------------------------
+
+    def _occupancy_samples(
+        self, camera_id: CameraId, tick_ts: datetime | None, previous_ts: datetime | None
+    ) -> list[RawEvent]:
+        """One count per zone per tick, carrying the interval it stands for.
+
+        Emitted whether or not anything changed, because that is the entire point: a
+        reducer fed only transitions reports nothing for a minute in which nobody moved,
+        and "nobody moved" is not the same fact as "the camera was down".
+
+        Nothing is emitted for a tick that did not advance the clock — the first tick of
+        a run, or a repeated timestamp. A zero-width interval weights nothing and would
+        only inflate `sample_count` into false confidence (algorithms.md §6.2).
+        """
+        if tick_ts is None or previous_ts is None or tick_ts <= previous_ts:
+            return []
+        dt_s = (tick_ts - previous_ts).total_seconds()
+        samples = []
+        for zone in self._geometry.zones_for(camera_id):
+            residents = self._inside.get(zone.zone_id, {})
+            staff = {track_id for track_id in residents if self._is_staff(camera_id, track_id)}
+            samples.append(
+                RawEvent(
+                    camera_id=camera_id,
+                    ts=FrameTs(tick_ts),
+                    kind=EventKind.OCCUPANCY_SAMPLE,
+                    track_id=None,
+                    zone_id=zone.zone_id,
+                    value=float(len(residents)),
+                    confirmed_value=float(
+                        sum(1 for residency in residents.values() if residency.confirmed)
+                    ),
+                    # The staff halves of both counts, each on its own basis: the peak
+                    # series reads the raw count and the mean reads the confirmed one, so
+                    # one staff number could only be right for one of them.
+                    staff_value=float(len(staff)),
+                    staff_confirmed_value=float(
+                        sum(
+                            1
+                            for track_id, residency in residents.items()
+                            if residency.confirmed and track_id in staff
+                        )
+                    ),
+                    dt_s=dt_s,
+                )
+            )
+        return samples
+
+    def _heatmap_hits(
+        self,
+        camera_id: CameraId,
+        tracks: Sequence[Track],
+        tick_ts: datetime | None,
+        previous_ts: datetime | None,
+    ) -> list[RawEvent]:
+        """One hit per resident per heatmap zone per tick, carrying its cell and interval.
+
+        Gated on the clock advancing for the same reason occupancy samples are: a
+        zero-width interval deposits no presence, and the first tick of a run has no
+        previous frame to measure one against.
+
+        **A coasted track deposits nothing** (algorithms.md §3.4(2), which names the
+        heatmap hit explicitly). Heat is evidence that somebody was *seen* on a spot; the
+        Kalman filter's guess about where an occluded person probably is would smear
+        invented heat across the floor, and it would look entirely plausible.
+        """
+        if tick_ts is None or previous_ts is None or tick_ts <= previous_ts:
+            return []
+        dt_s = (tick_ts - previous_ts).total_seconds()
+        observed = {track.track_id: track for track in tracks if track.time_since_update == 0}
+        hits = []
+        for zone in self._geometry.zones_for(camera_id):
+            if MetricName.HEATMAP not in zone.metrics:
+                continue
+            for track_id in sorted(self._inside.get(zone.zone_id, {})):
+                track = observed.get(track_id)
+                if track is None:
+                    continue
+                hits.append(
+                    RawEvent(
+                        camera_id=camera_id,
+                        ts=FrameTs(tick_ts),
+                        kind=EventKind.HEATMAP_HIT,
+                        track_id=track_id,
+                        zone_id=zone.zone_id,
+                        cell=cell_of(track.foot_point),
+                        dt_s=dt_s,
+                        is_staff=self._is_staff(track.camera_id, track.track_id),
+                    )
+                )
+        return hits
+
+    # --- Bookkeeping --------------------------------------------------------
+
+    @staticmethod
+    def _remember(state: _TrackState, track: Track, *, observed: bool) -> None:
+        """Only an observation moves the anchor a crossing is measured from.
+
+        That is what recovers a crossing hidden by an occlusion: on re-match the segment
+        runs from the last *real* position to the re-found one, so the crossing is
+        evaluated once against evidence rather than against the Kalman filter's guess
+        (§3.4(4)).
+        """
+        if observed:
+            state.last_observed_foot = track.foot_point
+        state.was_observed = observed
+
+    def _forget_dead_tracks(self, camera_id: CameraId, tracks: Sequence[Track]) -> None:
+        """A `TrackId` is unique per run only, so state for a dead track is a leak."""
+        alive = {track.track_id for track in tracks}
+        for key in [k for k in self._tracks if k[0] == camera_id and k[1] not in alive]:
+            del self._tracks[key]
+
+
+def _zone_event(
+    kind: EventKind,
+    zone_id: ZoneId,
+    track: Track | None,
+    *,
+    is_staff: bool,
+    departed: tuple[CameraId, TrackId, datetime | None] | None = None,
+) -> RawEvent:
+    """Build a zone event, for a track that may already be gone.
+
+    An exit is routinely emitted for a track that has left the tick's list entirely — a
+    death inside the zone is how a dwell closes — so its identity and timestamp come from
+    `departed` rather than from a `Track` that no longer exists.
+    """
+    if track is not None:
+        return RawEvent(
+            camera_id=track.camera_id,
+            ts=track.ts,
+            kind=kind,
+            track_id=track.track_id,
+            zone_id=zone_id,
+            is_staff=is_staff,
+        )
+    if departed is None:  # pragma: no cover - the caller always supplies one of the two
+        msg = "a zone event needs either a live track or the identity of a departed one"
+        raise ValueError(msg)
+    camera_id, track_id, ts = departed
+    if ts is None:  # pragma: no cover - a track can only depart after it was once seen
+        msg = f"no capture time to stamp the exit of track {track_id}"
+        raise ValueError(msg)
+    return RawEvent(
+        camera_id=camera_id,
+        ts=FrameTs(ts),
+        kind=kind,
+        track_id=track_id,
+        zone_id=zone_id,
+        is_staff=is_staff,
+    )
+
+
+def _segments_intersect(p1: NormPoint, p2: NormPoint, a: NormPoint, b: NormPoint) -> bool:
+    """Do segments `p1->p2` and `a->b` properly cross (algorithms.md §5(b))?
+
+    Degenerate cases are resolved rather than left to the reader: `(d > 0)` folds a zero
+    into the negative side, the same tie-break the sticky side uses, so a graze produces
+    no crossing on the grazing frame and a normal one on the frame it commits.
+    """
+    d1 = side_of(a, b, p1)
+    d2 = side_of(a, b, p2)
+    d3 = side_of(p1, p2, a)
+    d4 = side_of(p1, p2, b)
+    return ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0))

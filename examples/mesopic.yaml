@@ -1,0 +1,128 @@
+# A worked Mesopic site config. Mount it at /data/mesopic.yaml.
+#
+# Three conventions run through this file and are validated, not merely documented:
+#   * Secrets are `*_env` references. An inline secret is a startup error.
+#   * All geometry is normalized [0,1], origin top-left, so it survives a resolution change.
+#   * All storage is UTC. `timezone` below is display-only — it is what the dashboard
+#     renders every time in, and nothing else.
+#
+# Full schema: ../../Mesopic-docs/docs/01-architecture/engine-architecture.md §13.1
+
+site:
+  site_id: "acme-camden"            # also the cloud-sync identity
+  timezone: "Europe/London"        # the clock the dashboard prints; storage stays UTC
+
+budget:
+  cpu_budget: 0.75                  # fraction of the box's CPU the engine may use
+  fps_min: 1.0
+  fps_max: 5.0                      # effective-fps envelope (ADR-0003)
+
+cameras:
+  - camera_id: "front-door"
+    name: "Front door"
+    source:
+      kind: rtsp                    # rtsp | onvif | frigate
+      # Prefer the camera's SUB-stream: 640x480–1280x720 is cheaper to decode and plenty
+      # for foot-point detection. Mesopic does not need your 4K main stream.
+      url: "rtsp://user:pass@192.168.1.40:554/Streaming/Channels/102"
+      # An RTSP URL carries the camera's credentials. Inline `url` keeps this example
+      # readable; a real deployment should use `url_env: MESOPIC_FRONT_DOOR_RTSP` instead
+      # and keep the URL out of a file it might commit. Set one of the two, never both.
+      transport: tcp                # TCP: UDP loss on a cheap LAN reads as detector noise
+    reference_resolution: [1920, 1080]
+    stall_timeout_s: 5              # no frame for this long == treat as a drop
+    detector:
+      input_size: 640
+      roi_from_geometry: true       # crop to the union of this camera's zones and lines
+
+  - camera_id: "till"
+    name: "Till area"
+    # Already running Frigate? Consume its objects and skip our own decode+detect.
+    # `mqtt_topic` defaults to Frigate's own `frigate/events`, which carries EVERY camera
+    # on the box — so `camera` below is what says which of them this one is. Set it when
+    # Frigate's name for the camera differs from `camera_id`; omit it when they match.
+    # A Frigate camera has no frame, so its zones and lines are set here rather than in
+    # the visual editor, which has nothing to draw on.
+    source: { kind: frigate, mqtt_topic: "frigate/events", camera: "till" }
+    reference_resolution: [1920, 1080]   # must match Frigate's DETECT resolution:
+                                         # it is the divisor that normalises its boxes
+
+lines:
+  - line_id: "door-count"
+    camera_id: "front-door"
+    a: [0.10, 0.80]                 # normalized endpoints
+    b: [0.90, 0.80]
+    positive_dir: in                # +1 crossing == entering
+    metrics: [line_cross, footfall]
+
+zones:
+  - zone_id: "shop-floor"
+    camera_id: "front-door"
+    role: area                      # area | queue | staff
+    polygon: [[0.05, 0.30], [0.95, 0.30], [0.95, 0.95], [0.05, 0.95]]
+    metrics: [occupancy, dwell_seconds, heatmap]
+
+  - zone_id: "queue-till"
+    camera_id: "till"
+    role: queue
+    polygon: [[0.20, 0.40], [0.80, 0.40], [0.80, 0.90], [0.20, 0.90]]
+    metrics: [queue_len, dwell_seconds]
+
+  - zone_id: "behind-counter"
+    camera_id: "till"
+    role: staff                     # tracks originating here are tagged staff, not identified
+    polygon: [[0.00, 0.55], [0.35, 0.55], [0.35, 1.00], [0.00, 1.00]]
+
+thresholds:
+  detection_confidence: 0.35
+  track_thresh: 0.5                 # high/low confidence split
+  # Association gates, in the TRACKER's units: a match is accepted iff its cost is below
+  # these. Stage 2 is tighter than stage 1, the opposite of what the BYTE names suggest.
+  # These are centre-distance cost's own measured operating points (ADR-0014) — they do
+  # not translate from an IoU threshold.
+  max_cost: 0.4
+  max_cost_low: 0.25
+  track_memory_s: 2.0               # how long a lost track is remembered
+  dwell_min_s: 3.0                  # ignore transient zone touches shorter than this
+  queue_dwell_weight: true
+
+storage:
+  # How long the raw event log is kept, for local debugging and re-aggregation.
+  # Metrics are NOT trimmed by this: minute rows are the durable series and stay
+  # until you delete them. Raw events are the short-retention log.
+  event_retention_hours: 72
+
+api:
+  # The local dashboard and its JSON. Loopback by default: reading needs no credential,
+  # so for reads the bind address is the access control. Reaching it from another machine
+  # is a deliberate act — set host to 0.0.0.0 only if you mean it, and prefer publishing
+  # the port from a container to your own loopback instead.
+  host: "127.0.0.1"
+  port: 8080
+  # Writing is a different question. Saving geometry rewrites this file, so it needs a
+  # password, named here and set in the environment like every other secret. Leave it out
+  # and the engine still runs — it just refuses every write, including the calibration
+  # page's save button.
+  # password_env: "MESOPIC_ADMIN_PASSWORD"
+
+# How to reach the Frigate broker, when any camera above has `kind: frigate`.
+# Site-wide, because a site runs one Frigate; the topic stays on the camera because that
+# is the part that differs. Deliberately not the MQTT exporter's broker: consuming from
+# Frigate must not require publishing to anything.
+frigate:
+  broker: "127.0.0.1"
+  port: 1883
+  # Credentials by reference, never inline — a broker password is a secret like any other.
+  # username_env: "MESOPIC_FRIGATE_USER"
+  # password_env: "MESOPIC_FRIGATE_PASSWORD"
+
+exporters:
+  mqtt: { enabled: true, broker: "192.168.1.10", base_topic: "mesopic" }
+  prometheus: { enabled: true }     # served at :8080/metrics
+  webhook: { enabled: true, url: "https://example.invalid/hook", secret_env: "MESOPIC_WEBHOOK_SECRET" }
+  csv: { enabled: false, dir: "/data/exports" }
+
+cloud_sync:
+  enabled: false                    # OFF by default — the local engine is whole on its own
+  endpoint: "https://sync.mesopic.dev"
+  site_token_env: "MESOPIC_SITE_TOKEN"   # by reference; never the token itself

@@ -1,19 +1,19 @@
 # Workspace root. Deliberately NOT a package — it holds the uv workspace and the
-# shared toolchain config; package metadata lives in muster-engine/pyproject.toml.
+# shared toolchain config; package metadata lives in mesopic-engine/pyproject.toml.
 #
 # This repository is the MIT engine, and only the MIT engine.
 
 [tool.uv.workspace]
-members = ["muster-engine"]
+members = ["mesopic-engine"]
 # The proprietary hosted layer lives in its own private repository. It is not a
 # workspace member, not a dependency, and not present in this tree — see README.
 
 [tool.uv.sources]
-muster = { workspace = true }
+mesopic = { workspace = true }
 
 [dependency-groups]
 dev = [
-  "muster",
+  "mesopic",
   "ruff>=0.14.2",
   "mypy>=1.18",
   "import-linter>=2.3",
@@ -31,7 +31,7 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["muster-engine/src"]
+src = ["mesopic-engine/src"]
 extend-exclude = ["**/migrations/*"]
 
 [tool.ruff.lint]
@@ -70,7 +70,7 @@ ignore = [
 "**/cli.py" = ["T20"]                                      # the CLI is allowed to print
 "**/tests/association/test_sweep.py" = ["T20"]              # the sweep's table IS its output
 "**/conftest.py" = ["ANN201"]
-# `muster.types` is named by the architecture docs.
+# `mesopic.types` is named by the architecture docs.
 # Shadowing the stdlib `types` module is harmless under absolute imports.
 "**/types.py" = ["A005"]
 
@@ -78,7 +78,7 @@ ignore = [
 ban-relative-imports = "parents"
 
 [tool.ruff.lint.isort]
-known-first-party = ["muster"]
+known-first-party = ["mesopic"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -92,7 +92,7 @@ strict = true
 warn_unreachable = true
 warn_unused_ignores = true
 enable_error_code = ["redundant-expr", "truthy-bool", "ignore-without-code"]
-mypy_path = ["muster-engine/src"]
+mypy_path = ["mesopic-engine/src"]
 explicit_package_bases = true
 exclude = ["build/", "dist/"]
 
@@ -117,7 +117,7 @@ ignore_missing_imports = true
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["muster-engine/tests"]
+testpaths = ["mesopic-engine/tests"]
 addopts = "-ra --strict-markers --strict-config"
 asyncio_mode = "auto"
 filterwarnings = ["error"]
@@ -129,7 +129,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["muster-engine/src"]
+source = ["mesopic-engine/src"]
 
 [tool.coverage.report]
 exclude_also = [
@@ -144,7 +144,7 @@ exclude_also = [
 # (implementation-plan.md P0.4). These are architecture, not style.
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_packages = ["muster"]
+root_packages = ["mesopic"]
 # Some boundaries are drawn against third-party packages: `domain/` must not reach for
 # FastAPI, and the sync client must not reach for a video codec.
 include_external_packages = true
@@ -152,38 +152,38 @@ include_external_packages = true
 [[tool.importlinter.contracts]]
 name = "The MIT engine never imports the proprietary cloud (ADR-0001, ADR-0008)"
 type = "forbidden"
-source_modules = ["muster"]
+source_modules = ["mesopic"]
 # The hosted layer is a separate private repository, so this is belt-and-braces: it
 # catches the day someone vendors it back in for convenience.
-forbidden_modules = ["muster_cloud"]
+forbidden_modules = ["mesopic_cloud"]
 
 [[tool.importlinter.contracts]]
 name = "Analytics computes, it does not persist or serve (engine-architecture §2)"
 type = "forbidden"
-source_modules = ["muster.analytics"]
-forbidden_modules = ["muster.store", "muster.api", "muster.sync", "muster.exporters"]
+source_modules = ["mesopic.analytics"]
+forbidden_modules = ["mesopic.store", "mesopic.api", "mesopic.sync", "mesopic.exporters"]
 
 [[tool.importlinter.contracts]]
 name = "Detector and tracker know nothing of geometry or storage (engine-architecture §2)"
 type = "forbidden"
-source_modules = ["muster.detector", "muster.tracker"]
-forbidden_modules = ["muster.analytics", "muster.store", "muster.aggregator", "muster.api"]
+source_modules = ["mesopic.detector", "mesopic.tracker"]
+forbidden_modules = ["mesopic.analytics", "mesopic.store", "mesopic.aggregator", "mesopic.api"]
 
 [[tool.importlinter.contracts]]
 name = "Ingest hands over frames and nothing else (engine-architecture §4)"
 type = "forbidden"
-source_modules = ["muster.ingest"]
-forbidden_modules = ["muster.detector", "muster.tracker", "muster.analytics", "muster.store"]
+source_modules = ["mesopic.ingest"]
+forbidden_modules = ["mesopic.detector", "mesopic.tracker", "mesopic.analytics", "mesopic.store"]
 
 [[tool.importlinter.contracts]]
 name = "The sync client reads metrics, never frames (ADR-0005)"
 type = "forbidden"
-source_modules = ["muster.sync"]
-forbidden_modules = ["muster.ingest", "muster.detector", "av", "cv2"]
+source_modules = ["mesopic.sync"]
+forbidden_modules = ["mesopic.ingest", "mesopic.detector", "av", "cv2"]
 
 [[tool.importlinter.contracts]]
 name = "The dashboard serves numbers, never frames (engine-architecture §13)"
-source_modules = ["muster.api"]
+source_modules = ["mesopic.api"]
 type = "forbidden"
 # The web layer is the one part of the engine reachable from a browser, so the "frames
 # never leave the box" guarantee is worth having as a property of the import graph rather
@@ -193,15 +193,15 @@ type = "forbidden"
 # P3.3's calibration snapshot is the single exception in §13, and it is NOT an exception
 # to this contract: the snapshot is grabbed by the worker that already owns the stream and
 # handed over as bytes, so the browser gets a frame without this package ever importing a
-# codec. If that turns out to need `muster.ingest` here, the answer is a new seam, not a
+# codec. If that turns out to need `mesopic.ingest` here, the answer is a new seam, not a
 # wider contract.
-forbidden_modules = ["muster.ingest", "muster.detector", "muster.tracker", "av", "cv2"]
+forbidden_modules = ["mesopic.ingest", "mesopic.detector", "mesopic.tracker", "av", "cv2"]
 
 [[tool.importlinter.contracts]]
 name = "Ground truth handles labels, never pixels (ADR-0015)"
 type = "forbidden"
-source_modules = ["muster.truth"]
+source_modules = ["mesopic.truth"]
 # The truth set is crossing timestamps and directions — numbers a human wrote down. A
 # decoder reachable from here is how "we label footage" quietly becomes "we process
 # footage", and how this suite would stop being runnable in CI with no clips on disk.
-forbidden_modules = ["muster.ingest", "muster.detector", "av", "cv2"]
+forbidden_modules = ["mesopic.ingest", "mesopic.detector", "av", "cv2"]

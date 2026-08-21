@@ -52,7 +52,7 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run mypy muster-engine/src muster-engine/tests
+      - run: uv run mypy mesopic-engine/src mesopic-engine/tests
 
   architecture:
     name: import-linter (module boundaries)
@@ -103,7 +103,7 @@ jobs:
       # pull in the model-download and golden-clip tests: those need the network and an
       # accelerator, and a merge gate that depends on either is a gate that goes red for
       # reasons unrelated to the change. This file spawns local processes and nothing else.
-      - run: uv run pytest muster-engine/tests/test_reliability_soak.py -m slow
+      - run: uv run pytest mesopic-engine/tests/test_reliability_soak.py -m slow
         timeout-minutes: 10
 
   secrets:
@@ -141,7 +141,7 @@ jobs:
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           # The default install must carry no AGPL anywhere (ADR-0013). Ultralytics is
-          # reachable only through the opt-in `muster[ultralytics]` extra, which is not
+          # reachable only through the opt-in `mesopic[ultralytics]` extra, which is not
           # part of the resolved default graph.
           deny-licenses: AGPL-3.0, AGPL-3.0-only, AGPL-3.0-or-later, GPL-3.0, SSPL-1.0
           fail-on-severity: moderate
@@ -158,15 +158,15 @@ jobs:
           file: docker/engine.Dockerfile
           push: false
           load: true
-          tags: muster-engine:ci
+          tags: mesopic-engine:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
       # ADR-0008: the model is a separately-licensed runtime artefact, never baked in.
       # If this ever fails, someone has welded a licence into the image.
       - name: assert no model weights in the image
-        run: scripts/assert-no-model-weights.sh muster-engine:ci
+        run: scripts/assert-no-model-weights.sh mesopic-engine:ci
 
       # The entrypoint has to actually resolve. A venv copied across stages carries
       # absolute shebangs, and a broken one fails only at `docker run`, never at build.
       - name: assert the entrypoint runs
-        run: docker run --rm muster-engine:ci version
+        run: docker run --rm mesopic-engine:ci version

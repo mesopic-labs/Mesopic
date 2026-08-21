@@ -16,7 +16,7 @@ This repository is public, and the product's central claim is that footage never
 the customer's premises. Committing video of real people into it would contradict that on
 day one, permanently — git history is not something you take footage back out of.
 
-So a clip is described here and stored elsewhere. Point `MUSTER_CLIPS_DIR` at a local
+So a clip is described here and stored elsewhere. Point `MESOPIC_CLIPS_DIR` at a local
 directory containing `<clip_id>.mp4`, and the manifest's SHA-256 confirms it is the same
 file the labels were made against. `*.mp4` is in `.gitignore`; keep it that way.
 
@@ -82,7 +82,7 @@ What they are good for is the thing that was actually blocked: metric plugins ca
 written against real detections on real footage instead of invented expectations.
 
 **The accuracy gate still needs a dedicated recording session** — 2.5–3.5 m, ≥ 1 hour
-continuous, several people walking a known schedule. See `../../Muster-docs/docs/04-testing/ground-truth-clip-set-design.md`
+continuous, several people walking a known schedule. See `../../Mesopic-docs/docs/04-testing/ground-truth-clip-set-design.md`
 §7 and §8; §8's hour-grain-vs-minute-grain question wants an answer *before* that session,
 not after.
 
@@ -203,13 +203,13 @@ the clip worth running:
 ### A gap this surfaced: the labeller cannot see the line
 
 A truth file records a crossing of `line_id`, but the line's geometry lives in
-`muster.yaml`, and the clicker does not show it. For a head-on doorway that is harmless —
+`mesopic.yaml`, and the clicker does not show it. For a head-on doorway that is harmless —
 the threshold is obvious. For an oblique storefront it is not: someone walking along the
 pavement passes within a metre of the door, and whether they count depends on where the
 line sits. Until the clicker can overlay the configured line, an oblique clip's labels are
 only meaningful alongside the config they were made against.
 
-**`muster.yaml` in this directory is that config**, committed beside the labels for
+**`mesopic.yaml` in this directory is that config**, committed beside the labels for
 exactly this reason. It defines one line, `entrance`, on the hallway camera, and three
 zones. Read it before labelling anything — particularly the note on endpoint order, which
 decides the sign of every crossing and is invisible in the resulting truth file.
@@ -240,7 +240,7 @@ Expect roughly 30–45 minutes of clicking per 30 minutes of clip.
 Then check what you produced:
 
 ```
-muster truth validate fixtures/clips/*.clip.json fixtures/truth/*.truth.json
+mesopic truth validate fixtures/clips/*.clip.json fixtures/truth/*.truth.json
 ```
 
 ## Times are media time
@@ -249,14 +249,14 @@ muster truth validate fixtures/clips/*.clip.json fixtures/truth/*.truth.json
 repository where "timestamps are UTC everywhere" does not apply, and it has to be.
 Replaying a clip stamps every frame with the wall clock of the replay, so a UTC timestamp
 in a truth file would describe the labelling session rather than the footage. Conversion
-happens at exactly one boundary, inside `muster.truth.score`.
+happens at exactly one boundary, inside `mesopic.truth.score`.
 
 ## Adding a clip
 
 1. **Normalise the camera original**, which is never itself a fixture:
 
    ```
-   scripts/normalize-clip.sh ~/Downloads/IMG_1234.MOV my-clip-01 "$MUSTER_CLIPS_DIR"
+   scripts/normalize-clip.sh ~/Downloads/IMG_1234.MOV my-clip-01 "$MESOPIC_CLIPS_DIR"
    ```
 
    This produces the 1080p25 SDR BT.709 artefact the manifest hashes, and it exists
@@ -286,4 +286,4 @@ happens at exactly one boundary, inside `muster.truth.score`.
 3. Be honest about `consent.model_release`. `unknown` is the correct answer far more often
    than it is comfortable, and it costs nothing except the ability to gate on that clip.
 4. Label it, and commit the truth file.
-5. Run `muster truth validate` on both.
+5. Run `mesopic truth validate` on both.

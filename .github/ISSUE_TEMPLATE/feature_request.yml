@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose something Muster should do.
+description: Propose something Mesopic should do.
 labels: ["enhancement"]
 body:
   - type: markdown
@@ -21,7 +21,7 @@ body:
   - type: textarea
     id: proposal
     attributes:
-      label: What you would like Muster to do
+      label: What you would like Mesopic to do
     validations:
       required: true
 

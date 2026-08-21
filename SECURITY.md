@@ -1,6 +1,6 @@
 # Security Policy
 
-We take the security of Muster seriously. Muster is privacy-by-design — video
+We take the security of Mesopic seriously. Mesopic is privacy-by-design — video
 never leaves the customer's premises — but the cloud sync channel, the hosted
 dashboard, and the billing path are real attack surface, and we welcome reports.
 
@@ -13,7 +13,7 @@ Report privately via either:
 - **GitHub Private Vulnerability Reporting** — the Security tab → "Report a
   vulnerability". Preferred: it keeps the report, the fix, and the advisory in one
   place, and it credits you automatically if you want that.
-- **Email: muster.project@gmail.com** — if you would rather not use GitHub, or your
+- **Email: mesopic.project@gmail.com** — if you would rather not use GitHub, or your
   report does not fit an advisory form.
 
 Include: a description, steps to reproduce, the affected component and version, and the
@@ -24,7 +24,7 @@ impact you believe it has. A minimal proof-of-concept helps enormously.
 **In scope:**
 - The engine in this repository, and the container images published from it.
 - Anything that would let an attacker get video, frames, or images off a box running
-  Muster, or persist them to disk. That is the invariant the whole product rests on, and
+  Mesopic, or persist them to disk. That is the invariant the whole product rests on, and
   a working break of it is the highest-value report you can send us.
 - Credential handling: RTSP URLs, webhook secrets, and the cloud site token.
 
@@ -53,7 +53,7 @@ will not consider it a violation of applicable computer-misuse law.
 
 ## Our commitment (expected response)
 
-Muster is early and maintained by a very small team; these timelines are set to be
+Mesopic is early and maintained by a very small team; these timelines are set to be
 achievable rather than impressive:
 
 | Stage | Target |

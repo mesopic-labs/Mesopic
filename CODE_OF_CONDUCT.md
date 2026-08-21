@@ -2,9 +2,9 @@
 
 ## Our pledge
 
-The Muster project is committed to providing a friendly, safe, and welcoming
+The Mesopic project is committed to providing a friendly, safe, and welcoming
 environment for everyone who takes part in it, regardless of experience level,
-background, or identity. We want contributing to Muster to be a positive
+background, or identity. We want contributing to Mesopic to be a positive
 experience for all involved.
 
 ## Our standard
@@ -32,7 +32,7 @@ project's community, users, and customers.
 Instances of unacceptable behaviour may be reported privately to the project
 maintainer at:
 
-> **muster.project@gmail.com**
+> **mesopic.project@gmail.com**
 
 All reports will be reviewed and investigated promptly and fairly. The maintainer is
 obligated to respect the privacy and security of the reporter of any incident, and will

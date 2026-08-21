@@ -1,12 +1,12 @@
 # Documentation
 
-This directory is where Muster's published documentation will live — the quickstart,
+This directory is where Mesopic's published documentation will live — the quickstart,
 configuration reference, integration guides, camera compatibility matrix, and the
 architecture and decision records that are useful to someone running or extending the
 engine. It is built into a static site as part of the launch milestone.
 
 Until then, the documentation that exists is in the [README](../README.md):
-what Muster measures, how to run it, how to configure cameras, lines, and zones, and
+what Mesopic measures, how to run it, how to configure cameras, lines, and zones, and
 what it does and does not store about people.
 
 ## Where new documentation goes

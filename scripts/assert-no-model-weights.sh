@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-IMAGE="${1:-muster-engine:dev}"
+IMAGE="${1:-mesopic-engine:dev}"
 
 # Two things make a file a real weight rather than a false positive:
 #

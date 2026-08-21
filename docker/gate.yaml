@@ -11,7 +11,7 @@
 # recorded as unverified. No unit test can find that; two paths over one clip can.
 
 site:
-  site_id: "muster-gate"
+  site_id: "mesopic-gate"
   timezone: "Europe/London"         # not UTC, so P3.9's conversion is actually exercised
 
 budget:
@@ -30,7 +30,7 @@ cameras:
     name: "Door (our decode)"
     source:
       kind: rtsp
-      url_env: MUSTER_RTSP_URL
+      url_env: MESOPIC_RTSP_URL
       transport: tcp
     reference_resolution: [1920, 1080]
     stall_timeout_s: 10
@@ -112,12 +112,12 @@ api:
   enabled: true
   host: "0.0.0.0"
   port: 8080
-  password_env: MUSTER_ADMIN_PASSWORD
+  password_env: MESOPIC_ADMIN_PASSWORD
 
 exporters:
   # Every exporter the free path claims, except the two that need a peer: the webhook
   # wants a signed endpoint and CSV writes files nobody asked for.
-  mqtt: { enabled: true, broker: "mosquitto", base_topic: "muster" }
+  mqtt: { enabled: true, broker: "mosquitto", base_topic: "mesopic" }
   prometheus: { enabled: true }
   webhook: { enabled: false }
   csv: { enabled: false }

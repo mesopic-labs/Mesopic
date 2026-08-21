@@ -30,7 +30,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Muster version
+      label: Mesopic version
       placeholder: "v0.1.0, or the image digest"
     validations:
       required: true
