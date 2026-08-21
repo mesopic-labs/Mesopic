@@ -1,0 +1,65 @@
+# The engine is published to PyPI as `mesopic` from CI, never from a maintainer's laptop
+# — the same rule release.yml applies to the image. Authentication is PyPI Trusted
+# Publishing (OIDC): no API token exists in this repository, in an environment, or on
+# anyone's machine, so there is nothing to leak and nothing to rotate.
+#
+# Deliberately a separate workflow from release.yml. The image pipeline signs, SBOMs and
+# attests across several steps; a PyPI upload is one irreversible act. Coupling them
+# means a failure in either leaves the other half-published, and a re-run re-signs an
+# image to retry an upload. A tag runs both, independently.
+#
+# Every action is pinned to a full commit SHA, never a tag — see the note in ci.yml.
+
+name: PyPI
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+# Least privilege by default. The job below asks for the one extra it needs.
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.11.15"
+
+jobs:
+  publish:
+    name: build and publish mesopic to PyPI
+    runs-on: ubuntu-latest
+
+    # No `environment:` here, deliberately. GitHub gates environments and their
+    # protection rules behind Pro/Team on private repositories, and this organisation is
+    # on the free plan — so depending on one would make the release fail for a reason
+    # that has nothing to do with the release. The trusted publisher is still scoped to
+    # this organisation, this repository, and this workflow filename, which is the part
+    # that actually stops another workflow minting an upload token.
+    #
+    # Restore it when the repository goes public (free organisations get environments on
+    # public repositories) and add the environment to the publisher on PyPI at the same
+    # time — one without the other fails closed.
+
+    permissions:
+      contents: read
+      id-token: write # OIDC — the only credential anywhere in this pipeline
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d # v10.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      # The workspace root is not a package; the distribution is built from the member.
+      - run: uv build mesopic-engine --out-dir dist
+
+      # A version is burned the instant PyPI accepts it: it can be yanked or deleted, but
+      # that number can never be uploaded again. So the metadata is checked before the
+      # upload rather than discovered to be wrong after it.
+      - run: uvx twine check --strict dist/*
+
+      # Publishes with PEP 740 attestations by default, which is the same provenance
+      # story the signed image already tells.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
