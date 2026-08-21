@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mesopic"
-version = "0.1.0"
+version = "0.1.1"
 description = "Open-source video-intelligence engine — footfall, queues, dwell and occupancy from the RTSP/ONVIF cameras you already own. Runs on your box; footage never leaves the building."
 readme = "README.md"
 requires-python = ">=3.12"
