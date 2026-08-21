@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{#
+  The engine's one credential prompt (ADR-0019).
+
+  A plain form posting `application/x-www-form-urlencoded`, with no scripting involved:
+  the same reason the dashboard's range controls are real links. It also keeps the body on
+  the one form encoding Starlette parses from the standard library, so a login page does
+  not pull a parser dependency into an MIT engine.
+
+  Reads need no session, so this page is only ever reached deliberately or by a save that
+  came back 401 — never as a wall in front of the dashboard.
+#}
+
+{% block title %}Sign in — Mesopic{% endblock %}
+{% block heading %}Sign in{% endblock %}
+{% block subtitle %}
+Counts and charts are open on this network. The password guards changes — drawing zones
+and lines, and anything else that rewrites this site's configuration.
+{% endblock %}
+
+{% block content %}
+{% if authenticated %}
+<section class="readings" aria-label="Session">
+  <p class="reading"><span class="scope">You are signed in.</span></p>
+  <form method="post" action="/logout">
+    <button type="submit" class="tool is-commit">Sign out</button>
+  </form>
+</section>
+{% else %}
+<section class="readings" aria-label="Sign in">
+  <form method="post" action="/login">
+    <label class="reading" for="password">
+      <span class="scope">Password</span>
+      {# `autocomplete` and `autofocus` only; no `name` beyond the one field the route
+         reads, so there is nothing else on this form for a browser to remember. #}
+      <input
+        id="password"
+        name="password"
+        type="password"
+        autocomplete="current-password"
+        autofocus
+        required
+      />
+    </label>
+    <button type="submit" class="tool is-commit">Sign in</button>
+  </form>
+  {% if error %}
+  {# Deliberately the same sentence for a wrong password and for a cooldown: which one it
+     was is in the log, because telling the caller narrows their next guess. #}
+  <p class="saved" role="status">{{ error }}</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

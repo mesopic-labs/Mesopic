@@ -1,0 +1,80 @@
+# The site config the fixture clips are labelled against.
+#
+# A truth file records a crossing of `line_id`, but the line's geometry lives here, and
+# the clicker does not draw it. For a head-on doorway that is harmless — the threshold is
+# obvious. For an oblique scene it is not: where the line sits decides whether a given
+# walk counts at all, so an oblique clip's labels mean nothing without the config they
+# were made against. This file is that config, committed beside the labels.
+#
+# Replay a clip with the rig, then point the engine at it:
+#   MESOPIC_CLIPS_DIR=~/Projects/mesopic-clips  (bytes live outside the repo — ADR-0015)
+#   mesopic run --config fixtures/mesopic.yaml
+#
+# Geometry is normalized [0,1], origin top-left, so it survives the 4K -> 1080p
+# normalisation `scripts/normalize-clip.sh` applies.
+
+site:
+  site_id: "fixtures"
+  timezone: "Europe/London"
+
+cameras:
+  # The hallway clips (`-01` and `-02`) share one framing, so one camera serves both:
+  # swap the mediamtx path to replay the other.
+  - camera_id: "home-hallway"
+    name: "Home hallway (fixture replay)"
+    source:
+      kind: rtsp
+      # A loopback path carries no credentials, so there is nothing here to keep in an
+      # env var. A real camera URL is a secret and uses `url_env` — see examples/mesopic.yaml.
+      url: "rtsp://127.0.0.1:8554/home-hallway-oblique-01"
+      transport: tcp
+    reference_resolution: [1920, 1080]
+
+  - camera_id: "home-kitchen"
+    name: "Home kitchen (fixture replay)"
+    source:
+      kind: rtsp
+      url: "rtsp://127.0.0.1:8554/home-kitchen-oblique-01"
+      transport: tcp
+    reference_resolution: [1920, 1080]
+
+lines:
+  # Placed across the corridor between the back doorway and the living/dining room,
+  # perpendicular to the walking path, which runs diagonally from about (0.35, 0.46) at
+  # the doorway down to (0.90, 0.95) in the foreground.
+  #
+  # ENDPOINT ORDER IS LOAD-BEARING. `+1` is a crossing from the right of `a -> b` to its
+  # left, and `positive_dir` only labels that sense — it does not set it. With `a` at the
+  # bottom of frame and `b` up by the wall corner, the doorway side is `-1` and the living
+  # room is `+1`, so walking in from the back door is `+1` and `positive_dir: in` reads
+  # correctly. Swapping `a` and `b` silently inverts every count.
+  - line_id: "entrance"
+    camera_id: "home-hallway"
+    a: [0.44, 1.00]
+    b: [0.62, 0.42]
+    positive_dir: in
+    metrics: [line_cross, footfall]
+
+  # The kitchen clip deliberately has NO counting line. Nobody transits a threshold in
+  # it — the subject moves between three stations and stands at each — so any line drawn
+  # across it would be measuring an event the footage does not contain. It is an
+  # occupancy and dwell fixture, and the zones below are the whole of its geometry.
+
+zones:
+  - zone_id: "living-room"
+    camera_id: "home-hallway"
+    role: area
+    polygon: [[0.62, 0.30], [1.00, 0.30], [1.00, 0.78], [0.66, 0.78]]
+    metrics: [occupancy, dwell_seconds]
+
+  - zone_id: "kitchen-counter"
+    camera_id: "home-kitchen"
+    role: area
+    polygon: [[0.02, 0.52], [0.34, 0.52], [0.34, 0.88], [0.02, 0.88]]
+    metrics: [occupancy, dwell_seconds]
+
+  - zone_id: "tv-corner"
+    camera_id: "home-kitchen"
+    role: area
+    polygon: [[0.70, 0.30], [1.00, 0.30], [1.00, 0.58], [0.70, 0.58]]
+    metrics: [occupancy, dwell_seconds]

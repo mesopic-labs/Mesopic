@@ -34,7 +34,7 @@ cameras:
     detect:
       enabled: true
       # THIS RESOLUTION IS LOAD-BEARING. Frigate reports boxes in its *detect* space, and
-      # `muster.yaml` divides by `reference_resolution` to normalise them — so the two
+      # `mesopic.yaml` divides by `reference_resolution` to normalise them — so the two
       # numbers must match or every foot-point lands somewhere plausible and wrong.
       # ADR-0022 calls this out as unverifiable from our side; the gate is where it stops
       # being an assumption.

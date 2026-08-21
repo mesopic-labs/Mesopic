@@ -15,9 +15,9 @@ repos:
       # trailing newline is indistinguishable from a tampered file to a hash, and "the
       # formatter did it" is not a distinction a supply-chain check can afford to make.
       - id: trailing-whitespace
-        exclude: ^muster-engine/src/muster/api/static/vendor/
+        exclude: ^mesopic-engine/src/mesopic/api/static/vendor/
       - id: end-of-file-fixer
-        exclude: ^muster-engine/src/muster/api/static/vendor/
+        exclude: ^mesopic-engine/src/mesopic/api/static/vendor/
       - id: check-yaml
         args: [--allow-multiple-documents]
       - id: check-toml
@@ -76,7 +76,7 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
-        args: [muster-engine/src, muster-engine/tests]
+        args: [mesopic-engine/src, mesopic-engine/tests]
 
       - id: import-linter
         name: import-linter (module boundaries)

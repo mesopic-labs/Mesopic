@@ -1,6 +1,6 @@
 <div align="center">
 
-# Muster
+# Mesopic
 
 ### A billion cameras already watching. Almost none of them counting.
 
@@ -15,14 +15,14 @@
 
 ---
 
-## What is Muster?
+## What is Mesopic?
 
-Muster turns the **RTSP/ONVIF security cameras you already have** into business sensors — footfall,
+Mesopic turns the **RTSP/ONVIF security cameras you already have** into business sensors — footfall,
 queues, dwell, occupancy — **without new hardware and without a sales call**. The heavy computer
 vision runs *on your box* (a cheap CPU-only mini-PC is enough); **footage never leaves the building.**
 Only anonymous foot-point coordinates and derived metrics are ever computed, and frames are discarded
 the instant they're processed. It's the Frigate/Plausible open-source playbook aimed at the top-down,
-sales-led market that Verkada ($5.8B, Dec 2025) and Spot AI grew into — except Muster is MIT-licensed,
+sales-led market that Verkada ($5.8B, Dec 2025) and Spot AI grew into — except Mesopic is MIT-licensed,
 self-serve, and yours to run.
 
 - **Engine** — MIT-licensed, Python-first, CPU-only capable. It does the vision.
@@ -56,14 +56,14 @@ If you never want the cloud, you never need it. The engine and a local dashboard
 
 ## Quickstart
 
-Point Muster at any RTSP camera and watch it count. No account, no cloud, no config file to start.
+Point Mesopic at any RTSP camera and watch it count. No account, no cloud, no config file to start.
 
 ```bash
-docker run -d --name muster \
-  -e MUSTER_RTSP_URL="rtsp://user:pass@192.168.1.64:554/stream1" \
+docker run -d --name mesopic \
+  -e MESOPIC_RTSP_URL="rtsp://user:pass@192.168.1.64:554/stream1" \
   -p 8080:8080 \
-  -v muster-data:/data \
-  ghcr.io/emil1j/muster-engine:latest
+  -v mesopic-data:/data \
+  ghcr.io/emil1j/mesopic-engine:latest
 ```
 
 Then open **http://localhost:8080** for the local dashboard.
@@ -75,8 +75,8 @@ that first run a minute longer than later ones. Every release is signed; if you 
 check that before running it:
 
 ```bash
-cosign verify ghcr.io/emil1j/muster-engine:latest \
-  --certificate-identity-regexp '^https://github\.com/.+/Muster/' \
+cosign verify ghcr.io/emil1j/mesopic-engine:latest \
+  --certificate-identity-regexp '^https://github\.com/.+/Mesopic/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -100,21 +100,21 @@ to end: the stream connects, the dashboard renders live, MQTT publishes retained
 and `/metrics` scrapes. Point it at something real to see real numbers:
 
 ```bash
-MUSTER_RTSP_URL="rtsp://user:pass@192.168.1.64:554/stream1" make demo
+MESOPIC_RTSP_URL="rtsp://user:pass@192.168.1.64:554/stream1" make demo
 ```
 
 Reading the dashboard never asks for a password. The password guards *changes* — drawing
 zones and lines, and anything else that rewrites your config.
 
-- `MUSTER_RTSP_URL` — the ONVIF/RTSP stream to analyse. That's the only thing you *must* provide.
+- `MESOPIC_RTSP_URL` — the ONVIF/RTSP stream to analyse. That's the only thing you *must* provide.
 - `-p 8080:8080` — the local HUD dashboard + metrics API.
-- `-v muster-data:/data` — persists the SQLite metric store and your `muster.yaml` config.
+- `-v mesopic-data:/data` — persists the SQLite metric store and your `mesopic.yaml` config.
 
 By default the engine samples ~2–5 effective FPS and runs an INT8-quantized YOLOX-nano model on CPU — sized
 so an **Intel N100-class mini-PC (4 cores, no GPU)** handles a couple of cameras. A GPU, Coral TPU, or
 NPU is an **optional** speed-up, never a requirement.
 
-> For more than the single-camera demo, mount a config file (`-v ./muster.yaml:/data/muster.yaml`)
+> For more than the single-camera demo, mount a config file (`-v ./mesopic.yaml:/data/mesopic.yaml`)
 > and define your cameras, lines, and zones — see [Example config](#example-config).
 
 ---
@@ -132,7 +132,7 @@ Video stays local. Only metrics can (optionally) sync to the hosted dashboard.
           └──────────────────────┼──────────────────────┘
                                   ▼
         ┌───────────────────────────────────────────────────┐
-        │            MUSTER ENGINE  (your box, MIT)           │
+        │            MESOPIC ENGINE  (your box, MIT)           │
         │                                                     │
         │  PyAV/FFmpeg ingest → sample ~2–5 fps               │
         │  YOLO (nano/small, INT8) via ONNX RT / OpenVINO     │
@@ -157,7 +157,7 @@ Video stays local. Only metrics can (optionally) sync to the hosted dashboard.
                                        └───────────────────────┘
 ```
 
-**The one thing to internalise:** inference never runs in Muster's cloud in v1. The cloud is a
+**The one thing to internalise:** inference never runs in Mesopic's cloud in v1. The cloud is a
 metrics viewer. Cloud-side inference is not built, not on by default, and would need its own
 decision record before it ever were — it would break both the cost model and the privacy posture.
 
@@ -167,28 +167,28 @@ decision record before it ever were — it would break both the cost model and t
 
 **Any camera that speaks RTSP or ONVIF** — which is essentially every IP security camera made in the
 last decade (Hikvision, Dahua, Reolink, Amcrest, Axis, Ubiquiti, generic ONVIF, and re-badges of all
-of the above). Muster ingests the existing stream; it does not need its own sensor, unlike
+of the above). Mesopic ingests the existing stream; it does not need its own sensor, unlike
 FootfallCam or Milesight, which require dedicated hardware per door.
 
 - Prefer a **sub-stream** (e.g. 640×480–1280×720) for counting — it's cheaper to decode and plenty for
-  foot-point detection. Muster does not need your 4K main stream.
+  foot-point detection. Mesopic does not need your 4K main stream.
 - Both **H.264** and **H.265/HEVC** are supported via FFmpeg.
 
 ---
 
-## How Muster compares
+## How Mesopic compares
 
-Muster is not the first open-source project to point a model at a camera. It is aimed at a different
+Mesopic is not the first open-source project to point a model at a camera. It is aimed at a different
 layer from most of them.
 
-| | What it is | Where Muster differs |
+| | What it is | Where Mesopic differs |
 | --- | --- | --- |
-| **[Frigate](https://frigate.video/)** | An excellent open-source NVR — recording, review, and real-time detection, with accelerator support Muster does not try to match. | Frigate answers *"what happened, and do I have the clip?"* Muster answers *"how many, how long, and is that up on last week?"* A zone in an NVR tells you an object was present; that is not the same thing as a time-weighted metric series. Run both — Frigate is a first-class [integration](#integrations), not a competitor. |
-| **[OpenDataCam](https://opendata.cam/)** | MIT, and the reference tool for *urban traffic* studies — modal split, turn counts, 50+ object classes across drawn counters. | Built for streets and pitched at city researchers, and it wants an NVIDIA GPU or a Jetson. Muster is CPU-first and shaped for premises: occupancy, dwell, queue length, and conversion are metrics OpenDataCam does not model. Line-crossing is where the two genuinely overlap. |
-| **Perception libraries** — e.g. [Supervision](https://github.com/roboflow/supervision), [trio-retina](https://github.com/machinefi/trio-retina) | Well-built toolkits that turn detections into tracks and zone/line events. | They stop at the event stream, by design. Turning `zone.enter` into a defensible occupancy figure — sampling, Δt-weighting, minute buckets, a store, idempotent rollups — is most of the work, and it is the part Muster is. |
-| **Commercial counters** — V-Count, RetailNext, FootfallCam, Verkada, Spot AI | Mature, accurate, supported, and the incumbents Muster is aimed at. | A dedicated sensor per door or a proprietary camera estate, an annual contract, and a sales call. Muster runs on the cameras already screwed to your ceiling, installs in one command, and the engine is MIT. |
+| **[Frigate](https://frigate.video/)** | An excellent open-source NVR — recording, review, and real-time detection, with accelerator support Mesopic does not try to match. | Frigate answers *"what happened, and do I have the clip?"* Mesopic answers *"how many, how long, and is that up on last week?"* A zone in an NVR tells you an object was present; that is not the same thing as a time-weighted metric series. Run both — Frigate is a first-class [integration](#integrations), not a competitor. |
+| **[OpenDataCam](https://opendata.cam/)** | MIT, and the reference tool for *urban traffic* studies — modal split, turn counts, 50+ object classes across drawn counters. | Built for streets and pitched at city researchers, and it wants an NVIDIA GPU or a Jetson. Mesopic is CPU-first and shaped for premises: occupancy, dwell, queue length, and conversion are metrics OpenDataCam does not model. Line-crossing is where the two genuinely overlap. |
+| **Perception libraries** — e.g. [Supervision](https://github.com/roboflow/supervision), [trio-retina](https://github.com/machinefi/trio-retina) | Well-built toolkits that turn detections into tracks and zone/line events. | They stop at the event stream, by design. Turning `zone.enter` into a defensible occupancy figure — sampling, Δt-weighting, minute buckets, a store, idempotent rollups — is most of the work, and it is the part Mesopic is. |
+| **Commercial counters** — V-Count, RetailNext, FootfallCam, Verkada, Spot AI | Mature, accurate, supported, and the incumbents Mesopic is aimed at. | A dedicated sensor per door or a proprietary camera estate, an annual contract, and a sales call. Mesopic runs on the cameras already screwed to your ceiling, installs in one command, and the engine is MIT. |
 
-Two things Muster does not claim: it is not more accurate than an audited commercial counter today,
+Two things Mesopic does not claim: it is not more accurate than an audited commercial counter today,
 and it does not do the security-camera job Frigate does well. It does the measurement layer, in the
 open, on hardware you already own.
 
@@ -198,7 +198,7 @@ open, on hardware you already own.
 
 ### Home Assistant (MQTT)
 
-Turn on the MQTT exporter and Muster announces itself to Home Assistant — no YAML on the
+Turn on the MQTT exporter and Mesopic announces itself to Home Assistant — no YAML on the
 HA side:
 
 ```yaml
@@ -207,22 +207,22 @@ exporters:
     enabled: true
     broker: "192.168.1.10"
     port: 1883
-    base_topic: "muster"
+    base_topic: "mesopic"
     discovery: true                # publish HA discovery configs
     discovery_prefix: "homeassistant"
 ```
 
-Each minute's value is published **retained** to `muster/<camera_id>/<metric>`, with a
+Each minute's value is published **retained** to `mesopic/<camera_id>/<metric>`, with a
 fourth segment for anything scoped to a zone or line
-(`muster/entrance/dwell_seconds/waiting_area`). Retained is the point: a sensor shows its
+(`mesopic/entrance/dwell_seconds/waiting_area`). Retained is the point: a sensor shows its
 last known value the moment HA restarts, instead of `unknown` until the next minute ticks.
 
 Discovery configs go to `homeassistant/sensor/<unique_id>/config`, where `unique_id` is
-`muster_<site>_<camera>_<metric>[_<scope>]`. Each entity is declared
+`mesopic_<site>_<camera>_<metric>[_<scope>]`. Each entity is declared
 `state_class: measurement`, so HA's statistics average it as a level rather than
 differencing it as a counter.
 
-Liveness rides on `muster/status` (`online` / `offline`), set as the MQTT will, and every
+Liveness rides on `mesopic/status` (`online` / `offline`), set as the MQTT will, and every
 entity points its `availability_topic` at it. If the engine dies, its sensors go
 unavailable in HA rather than freezing on a stale number that looks current.
 
@@ -231,7 +231,7 @@ unavailable in HA rather than freezing on a stale number that looks current.
 
 ### Frigate
 
-Already running [Frigate](https://frigate.video/)? Muster can read its object stream
+Already running [Frigate](https://frigate.video/)? Mesopic can read its object stream
 instead of decoding the camera a second time — no second detector, no second decode
 budget:
 
@@ -265,18 +265,18 @@ silently counting nothing.
 | **Prometheus** | `/metrics` scrape endpoint for Grafana/alerting   |
 
 Prometheus scrapes `:8080/metrics` with no extra configuration. Metric values arrive as
-`muster_metric`, labelled by camera, metric, and scope; the engine's own health gauges
-share the `muster_` prefix.
+`mesopic_metric`, labelled by camera, metric, and scope; the engine's own health gauges
+share the `mesopic_` prefix.
 
 ---
 
 ## Example config
 
-`muster.yaml` — one camera, one counting line, one dwell zone. Coordinates are normalized `[0,1]`
+`mesopic.yaml` — one camera, one counting line, one dwell zone. Coordinates are normalized `[0,1]`
 image space, so they survive resolution changes.
 
 ```yaml
-# muster.yaml — mount at /data/muster.yaml
+# mesopic.yaml — mount at /data/mesopic.yaml
 site:
   site_id: "front-of-house"
   timezone: "Europe/London"        # display only; everything is stored in UTC
@@ -308,21 +308,21 @@ zones:
     metrics: [dwell_seconds, occupancy, queue_len]
 
 exporters:
-  mqtt: { enabled: true, broker: "192.168.1.10", base_topic: "muster" }
+  mqtt: { enabled: true, broker: "192.168.1.10", base_topic: "mesopic" }
   prometheus: { enabled: true }    # scrape at :8080/metrics
 
 # Optional: push metrics-only to the hosted dashboard. Omit to stay fully local.
 cloud_sync:
   enabled: false
-  # site_token_env: "MUSTER_SITE_TOKEN"   # by reference; never the token itself
+  # site_token_env: "MESOPIC_SITE_TOKEN"   # by reference; never the token itself
 ```
 
 A fuller worked example, with two cameras and every metric wired up, is in
-[`examples/muster.yaml`](./examples/muster.yaml).
+[`examples/mesopic.yaml`](./examples/mesopic.yaml).
 
 ---
 
-## Muster Cloud (optional, paid)
+## Mesopic Cloud (optional, paid)
 
 The engine and local dashboard are **free forever.** Cloud is the thin, self-serve layer for people who
 want multi-site rollups, 90-day history, and alerts without running their own Postgres — built on
@@ -342,10 +342,10 @@ local engine (the primary paid path — only metrics sync); (3) the managed appl
 buyers who never want to touch Docker.
 
 **Cloud is not built yet.** If you want to hear when it is,
-[join the waitlist](https://muster.app/?source=readme) — one email, when there is something real to
+[join the waitlist](https://mesopic.app/?source=readme) — one email, when there is something real to
 try. Nothing about the engine depends on it, and self-hosting stays free either way.
 
-> **Pricing is not final.** Muster has no paying customers yet; these tiers are what we intend to
+> **Pricing is not final.** Mesopic has no paying customers yet; these tiers are what we intend to
 > charge, and we would rather say so than pretend otherwise. The self-hosted tier being free forever
 > is the part that is not going to change.
 
@@ -353,13 +353,13 @@ try. Nothing about the engine depends on it, and self-hosting stays free either 
 
 ## Privacy
 
-Muster is built **UK/EU-first and GDPR-by-design.**
+Mesopic is built **UK/EU-first and GDPR-by-design.**
 
-- **Footage never leaves the building.** All inference is local. Muster's cloud does not run inference
+- **Footage never leaves the building.** All inference is local. Mesopic's cloud does not run inference
   in v1 and cannot receive video.
-- **Frames are discarded immediately** after they're processed. Muster stores only foot-point
+- **Frames are discarded immediately** after they're processed. Mesopic stores only foot-point
   coordinates and the metrics derived from them.
-- **No face recognition, no biometric storage in v1.** Muster counts and tracks anonymous points, not
+- **No face recognition, no biometric storage in v1.** Mesopic counts and tracks anonymous points, not
   identities.
 - **Metrics-only retention.** The hosted cloud keeps derived metrics for **90 days**; never video.
 
@@ -389,11 +389,11 @@ closed repository — it is not required to run anything here, and nothing here 
 on it.
 
 ```
-muster/
-├── muster-engine/          # the MIT engine — the whole open-source product
-│   ├── src/muster/
+mesopic/
+├── mesopic-engine/          # the MIT engine — the whole open-source product
+│   ├── src/mesopic/
 │   │   ├── types.py            domain vocabulary: ids, UTC time, normalized geometry
-│   │   ├── config/             muster.yaml schema + loader (validated, fail-loud)
+│   │   ├── config/             mesopic.yaml schema + loader (validated, fail-loud)
 │   │   ├── ingest/             RTSP/ONVIF via PyAV; Frigate via MQTT; one interface
 │   │   ├── sampler/            adaptive fps — the CPU-budget lever
 │   │   ├── detector/           ONNX Runtime; model fetch/export/quantize/cache
@@ -405,14 +405,14 @@ muster/
 │   │   ├── api/                local HUD dashboard, /healthz, /metrics
 │   │   ├── sync/               metrics-only push to the cloud — optional, off by default
 │   │   ├── supervisor/         process-per-camera, backpressure, restart
-│   │   └── cli.py              `muster run | discover | calibrate | export | doctor`
+│   │   └── cli.py              `mesopic run | discover | calibrate | export | doctor`
 │   └── tests/
 ├── docker/                 # engine image + the local dev stack (mediamtx, mosquitto)
-├── examples/muster.yaml    # a worked config: one camera, one line, one zone
+├── examples/mesopic.yaml    # a worked config: one camera, one line, one zone
 └── pyproject.toml          # the shared lint / type / test / boundary config
 ```
 
-The one piece of cloud-facing code here is `muster/sync/` — the client that pushes your
+The one piece of cloud-facing code here is `mesopic/sync/` — the client that pushes your
 own metrics to the hosted dashboard if you choose to use it. It is MIT like everything
 else, it is off by default, and you can read exactly what it sends. It reads the metrics
 tables and nothing else: an enforced import boundary means it has no path to a frame at
@@ -428,7 +428,7 @@ things most people want next are:
 | Question | Where |
 |---|---|
 | How do I run it? | [Quickstart](#quickstart) above |
-| How do I configure cameras, lines, and zones? | [Example config](#example-config), and `examples/muster.yaml` |
+| How do I configure cameras, lines, and zones? | [Example config](#example-config), and `examples/mesopic.yaml` |
 | How do I connect Home Assistant or Frigate? | [Integrations](#integrations) above |
 | What licence is the model under? | [License](#license) below, and `/healthz` on a running engine |
 | How do I contribute? | [CONTRIBUTING.md](./CONTRIBUTING.md) |
@@ -439,7 +439,7 @@ things most people want next are:
 
 ## Contributing
 
-Muster is MIT-licensed and contributions are welcome — especially camera compatibility reports,
+Mesopic is MIT-licensed and contributions are welcome — especially camera compatibility reports,
 integration adapters, and metric-accuracy validation on real footage.
 
 - Read **[CONTRIBUTING.md](./CONTRIBUTING.md)** for dev setup, coding conventions, and the PR process.
@@ -455,7 +455,7 @@ domain values, and static-analysis-clean code. Significant decisions are recorde
 
 ## License
 
-Muster's engine is released under the **[MIT License](./LICENSE)** — use it, fork it, ship it. The
+Mesopic's engine is released under the **[MIT License](./LICENSE)** — use it, fork it, ship it. The
 hosted cloud service is a separate, optional, paid offering; running your own engine and dashboard
 never requires it.
 
@@ -472,5 +472,5 @@ If you want an Ultralytics YOLO model instead, it is available through the opt-i
 act, and the CLI says so the first time you use it. It is never pulled in by default.
 
 <div align="center">
-<sub>Muster · started 13 July 2026 · open core, video-intelligence for cameras you already own.</sub>
+<sub>Mesopic · started 13 July 2026 · open core, video-intelligence for cameras you already own.</sub>
 </div>

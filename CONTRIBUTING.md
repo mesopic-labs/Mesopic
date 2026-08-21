@@ -1,6 +1,6 @@
-# Contributing to Muster
+# Contributing to Mesopic
 
-Thanks for your interest in Muster — the open-source video-intelligence engine that
+Thanks for your interest in Mesopic — the open-source video-intelligence engine that
 turns the RTSP/ONVIF cameras you already own into business sensors. The engine is
 MIT-licensed and yours to run; contributions are welcome, especially:
 
@@ -29,7 +29,7 @@ repository. Everything here is the free-forever engine and local dashboard.
 
 ## Development environment
 
-Muster's engine is **Python-first and CPU-only capable** — a GPU/TPU/NPU is an
+Mesopic's engine is **Python-first and CPU-only capable** — a GPU/TPU/NPU is an
 optional speed-up, never a requirement — so you can develop and test the entire
 correctness-critical core on a laptop with no camera and no accelerator.
 
@@ -43,8 +43,8 @@ correctness-critical core on a laptop with no camera and no accelerator.
 **Setup**
 
 ```bash
-git clone <repo-url> muster
-cd muster
+git clone <repo-url> mesopic
+cd mesopic
 make setup          # uv sync + install the git hooks
 make check          # lint, types, boundaries, tests — the same gate CI runs
 ```
@@ -54,7 +54,7 @@ one](#hardware-free-rtsp-the-mediamtx-simulation), which needs no camera and no 
 
 ```bash
 make test-stream                      # a synthetic camera on rtsp://127.0.0.1:8554/synthetic
-uv run muster run --config ./muster.yaml
+uv run mesopic run --config ./mesopic.yaml
 ```
 
 ---
@@ -82,7 +82,7 @@ scripted foot-points with no camera, no model, and no database in the loop.
 ```bash
 make test                        # the fast suite (what runs on every commit)
 uv run pytest -m privacy         # just the privacy invariants
-uv run pytest muster-engine/tests/test_types.py   # a single file
+uv run pytest mesopic-engine/tests/test_types.py   # a single file
 make cov                         # with a coverage report
 ```
 
@@ -200,7 +200,7 @@ Number the file with the next free integer (`NNNN-kebab-case-title.md`). Open it
 
 ## Licensing and provenance
 
-Muster is MIT, and it has to stay cleanly MIT — a licence problem in an open-source
+Mesopic is MIT, and it has to stay cleanly MIT — a licence problem in an open-source
 project is not fixable after the fact, because every downstream user has already
 redistributed the result.
 
@@ -213,7 +213,7 @@ redistributed the result.
 - **New dependencies need their licence stated in the PR**, along with maintainer,
   release cadence, and transitive weight. The default install must carry **no AGPL** —
   AGPL-licensed components stay behind an opt-in extra the user chooses deliberately.
-- Muster does not ship model weights. A model is fetched at runtime as a separately
+- Mesopic does not ship model weights. A model is fetched at runtime as a separately
   licensed artefact, which keeps its licence separable from this code. Please don't
   commit weights, clips, or fixtures containing real footage.
 
@@ -257,7 +257,7 @@ We work **trunk-based**: `main` is always releasable.
 1. **Search first** — check open [issues](../../issues) and
    [discussions](../../discussions) so you don't duplicate work.
 2. **Start a discussion** for anything non-trivial. Describe the problem and the
-   business metric it serves before proposing a solution — Muster's scope is
+   business metric it serves before proposing a solution — Mesopic's scope is
    deliberately the "core six + two adjacencies," and features like
    loss-prevention, face recognition, pose, and ANPR are explicitly out of v1.
 3. **If it's architecturally significant, draft an ADR** as part of the proposal.

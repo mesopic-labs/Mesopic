@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mesopic"
+version = "0.1.0"
+description = "Open-source video-intelligence engine — footfall, queues, dwell and occupancy from the RTSP/ONVIF cameras you already own. Runs on your box; footage never leaves the building."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mesopic" }]
+keywords = ["video-analytics", "people-counting", "rtsp", "onvif", "occupancy", "footfall", "edge"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Image Recognition",
+  "Topic :: Multimedia :: Video",
+  "Typing :: Typed",
+]
+
+# Constraints here; exact pins live in the workspace uv.lock (tech-stack.md §7).
+# ABI-sensitive native wheels (onnxruntime, av, opencv) are the ones that break
+# silently across platforms — they are pinned hardest in the lockfile.
+dependencies = [
+  "av>=13.1",                       # PyAV / FFmpeg — RTSP decode
+  "numpy>=2.1",
+  "opencv-python-headless>=4.10",   # headless: no GUI/X11 on a server box
+  "onnxruntime>=1.20",              # default CPU execution provider (ADR-0012)
+  "onnx>=1.17",                     # graph IR — onnxruntime.quantization imports it (P1.4)
+  "scipy>=1.14",                    # Hungarian assignment for the tracker (ADR-0014)
+  "pydantic>=2.9",                  # mesopic.yaml validation
+  "pydantic-settings>=2.6",
+  "pyyaml>=6.0",
+  "ruamel.yaml>=0.18",              # comment-preserving round trip — the geometry writer (P3.3)
+  "fastapi>=0.115",                 # local dashboard + /healthz + /metrics
+  "uvicorn[standard]>=0.52.1",      # a floor, not a pin: keeps a downstream install off old CVEs
+  "jinja2>=3.1",
+  "typer>=0.15",                    # the CLI
+  "httpx>=0.28",                    # webhook exporter + cloud sync (timeouts always explicit)
+  "paho-mqtt>=2.1",                 # MQTT exporter — Frigate + Home Assistant bus
+  "prometheus-client>=0.21",
+]
+
+[project.optional-dependencies]
+# Opportunistic accelerators. Never required — the CPU path always works (ADR-0003).
+openvino = ["openvino>=2024.4"]
+
+# ⚠ AGPL-3.0. Deliberately NOT a default dependency: the default install carries no
+# AGPL anywhere (ADR-0013). Installing this extra is the user's own act, and the CLI
+# prints the licence consequence on first use.
+ultralytics = ["ultralytics>=8.3"]
+
+# [project.urls] is intentionally absent until the repository is public — a wheel
+# carrying links to a 404 is worse than a wheel carrying none.
+
+[project.scripts]
+mesopic = "mesopic.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mesopic"]

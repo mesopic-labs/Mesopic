@@ -18,11 +18,11 @@
 
 # Licence boundaries. ADR-0008 and ADR-0013 live or die in these files.
 /LICENSE                    @Emil1J
-/muster-engine/LICENSE      @Emil1J
+/mesopic-engine/LICENSE      @Emil1J
 /pyproject.toml             @Emil1J
-/muster-engine/pyproject.toml @Emil1J
+/mesopic-engine/pyproject.toml @Emil1J
 
 # The privacy invariants and the boundaries that enforce them.
-/muster-engine/src/muster/store/          @Emil1J
-/muster-engine/src/muster/sync/           @Emil1J
-/muster-engine/tests/test_privacy_invariants.py @Emil1J
+/mesopic-engine/src/mesopic/store/          @Emil1J
+/mesopic-engine/src/mesopic/sync/           @Emil1J
+/mesopic-engine/tests/test_privacy_invariants.py @Emil1J

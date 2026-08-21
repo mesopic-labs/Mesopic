@@ -20,22 +20,22 @@ services:
     build:
       context: .
       dockerfile: docker/engine.Dockerfile
-    image: muster-engine:dev
+    image: mesopic-engine:dev
     restart: unless-stopped
     ports:
       - "8080:8080"        # local HUD dashboard, /healthz, /metrics
     volumes:
-      - muster-data:/data  # SQLite store, muster.yaml, model cache — nothing else persists
+      - mesopic-data:/data  # SQLite store, mesopic.yaml, model cache — nothing else persists
     environment:
       # Secrets by reference from the host env, never inline here. See .env.example.
-      MUSTER_RTSP_URL: ${MUSTER_RTSP_URL:-}
-      MUSTER_WEBHOOK_SECRET: ${MUSTER_WEBHOOK_SECRET:-}
-      MUSTER_SITE_TOKEN: ${MUSTER_SITE_TOKEN:-}
+      MESOPIC_RTSP_URL: ${MESOPIC_RTSP_URL:-}
+      MESOPIC_WEBHOOK_SECRET: ${MESOPIC_WEBHOOK_SECRET:-}
+      MESOPIC_SITE_TOKEN: ${MESOPIC_SITE_TOKEN:-}
       # Deliberately a plain default rather than `:?`. Compose interpolates the whole file
       # at parse time regardless of which services a command selects, so a required
       # variable here would break `make test-stream`, which starts no engine at all. Unset
       # is caught at startup instead, by an error that already names the variable.
-      MUSTER_ADMIN_PASSWORD: ${MUSTER_ADMIN_PASSWORD:-}
+      MESOPIC_ADMIN_PASSWORD: ${MESOPIC_ADMIN_PASSWORD:-}
     # The engine reads a stream and writes one file. Give it nothing more than that.
     security_opt:
       - no-new-privileges:true
@@ -69,17 +69,17 @@ services:
   # overwrites: a demo brought up twice keeps whatever was drawn the first time.
   seed:
     profiles: ["demo", "gate"]
-    image: muster-engine:dev
+    image: mesopic-engine:dev
     build:
       context: .
       dockerfile: docker/engine.Dockerfile
     entrypoint: ["/bin/sh", "-c"]
-    # `MUSTER_SEED` is `demo.yaml` unless the gate profile asked for its own.
-    command: ["[ -f /data/muster.yaml ] || cp /seed/$${MUSTER_SEED:-demo.yaml} /data/muster.yaml"]
+    # `MESOPIC_SEED` is `demo.yaml` unless the gate profile asked for its own.
+    command: ["[ -f /data/mesopic.yaml ] || cp /seed/$${MESOPIC_SEED:-demo.yaml} /data/mesopic.yaml"]
     environment:
-      MUSTER_SEED: ${MUSTER_SEED:-demo.yaml}
+      MESOPIC_SEED: ${MESOPIC_SEED:-demo.yaml}
     volumes:
-      - muster-data:/data
+      - mesopic-data:/data
       - ./docker/demo.yaml:/seed/demo.yaml:ro
       - ./docker/gate.yaml:/seed/gate.yaml:ro
     security_opt:
@@ -113,5 +113,5 @@ services:
       - ./docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
 
 volumes:
-  muster-data:
+  mesopic-data:
   frigate-data:

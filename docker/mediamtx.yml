@@ -41,6 +41,6 @@ paths:
       exec ffmpeg -re -stream_loop -1 -i /clips/sample.mp4
       -c:v libx264 -preset veryfast -tune zerolatency -g 50 -pix_fmt yuv420p -an
       -f rtsp rtsp://localhost:8554/sample;
-      else echo "muster: no /clips/sample.mp4 — use /synthetic, or run scripts/make-sample-clip.sh";
+      else echo "mesopic: no /clips/sample.mp4 — use /synthetic, or run scripts/make-sample-clip.sh";
       sleep 86400; fi'
     runOnInitRestart: yes

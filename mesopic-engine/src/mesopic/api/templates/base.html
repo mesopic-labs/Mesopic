@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}{{ site_id }} — Mesopic{% endblock %}</title>
+    {# Every asset is served from this box. A CDN font or script would turn a dashboard
+       load into an off-box request and break the airgapped installs this is built for.
+       It is also why the type is a system stack: there is no webfont to fetch.
+
+       Root-relative rather than `url_for`, which renders an absolute URL and so bakes
+       the request's host into the page — wrong the moment the dashboard is reached
+       through a reverse proxy or by IP instead of by name. #}
+    <link rel="stylesheet" href="/static/vendor/uPlot.min.css" />
+    <link rel="stylesheet" href="/static/hud.css" />
+    {# Vendored, not linked: see static/vendor/VENDOR.md. `defer` rather than `async` —
+       board.js needs uPlot defined, and defer preserves document order. #}
+    <script src="/static/vendor/htmx.min.js" defer></script>
+    <script src="/static/vendor/uPlot.iife.min.js" defer></script>
+    <script src="/static/board.js" defer></script>
+    <script src="/static/heatmap.js" defer></script>
+    {% block scripts %}{% endblock %}
+  </head>
+  <body>
+    <div class="frame">
+      <header class="masthead">
+        <p class="mark">Mesopic</p>
+        <h1>{% block heading %}{{ site_id }}{% endblock %}</h1>
+        {# A block, not a constant: the claim is true of every page but the calibration
+           view, which is the one place §13 puts a frame on screen. A page that shows a
+           frame under a banner saying it does not is worse than no banner. #}
+        <p class="subtitle">
+          {%- block subtitle -%}
+          Your cameras, counted. No frame is written to disk, and none appears on this page.
+          {%- endblock -%}
+        </p>
+      </header>
+      {% block content %}{% endblock %}
+    </div>
+  </body>
+</html>

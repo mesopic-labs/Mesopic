@@ -1,8 +1,8 @@
-# gitleaks config for Muster.
+# gitleaks config for Mesopic.
 # Runs in pre-commit (staged changes) and in CI (full history on PRs).
 # Extends the upstream default ruleset rather than replacing it.
 
-title = "Muster gitleaks config"
+title = "Mesopic gitleaks config"
 
 [extend]
 useDefault = true
@@ -13,17 +13,17 @@ useDefault = true
 # gitleaks uses Go's RE2, which has no lookahead — the documented `user:pass@`
 # placeholder is exempted in the allowlist below rather than in this pattern.
 [[rules]]
-id = "muster-rtsp-credentials"
+id = "mesopic-rtsp-credentials"
 description = "RTSP URL with embedded credentials"
 regex = '''rtsp://[A-Za-z0-9._%-]+:[^@\s/'"]+@'''
-tags = ["muster", "camera", "credentials"]
+tags = ["mesopic", "camera", "credentials"]
 
 # Per-site cloud sync tokens (see cloud-architecture §5.1).
 [[rules]]
-id = "muster-site-token"
-description = "Muster per-site API key"
+id = "mesopic-site-token"
+description = "Mesopic per-site API key"
 regex = '''\bsk_site_[A-Za-z0-9]{16,}\b'''
-tags = ["muster", "api-key"]
+tags = ["mesopic", "api-key"]
 
 # --- Allowlist --------------------------------------------------------------
 [allowlist]

@@ -6,13 +6,13 @@
 *.key
 *.p12
 secrets/
-muster.yaml
-muster.yml
-!examples/muster.yaml
+mesopic.yaml
+mesopic.yml
+!examples/mesopic.yaml
 # The geometry the ground-truth clips are labelled against. Committed for the same reason
 # the truth files are: a crossing of `entrance` means nothing without the line it crossed.
 # Loopback replay paths only — a real camera URL is a secret and never belongs in either.
-!fixtures/muster.yaml
+!fixtures/mesopic.yaml
 
 # --- Runtime data: never commit a metric store, and never a frame ---
 /data/
