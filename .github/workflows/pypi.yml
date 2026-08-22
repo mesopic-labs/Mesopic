@@ -29,16 +29,17 @@ jobs:
     name: build and publish mesopic to PyPI
     runs-on: ubuntu-latest
 
-    # No `environment:` here, deliberately. GitHub gates environments and their
-    # protection rules behind Pro/Team on private repositories, and this organisation is
-    # on the free plan — so depending on one would make the release fail for a reason
-    # that has nothing to do with the release. The trusted publisher is still scoped to
-    # this organisation, this repository, and this workflow filename, which is the part
-    # that actually stops another workflow minting an upload token.
+    # Restored 2026-08-22 when the repository went public: free organisations get
+    # environments on public repositories, so the reason this was absent no longer holds.
     #
-    # Restore it when the repository goes public (free organisations get environments on
-    # public repositories) and add the environment to the publisher on PyPI at the same
-    # time — one without the other fails closed.
+    # It is a second, independent lock rather than a nicety. The trusted publisher is
+    # scoped to this organisation, repository, and workflow filename; the environment adds
+    # "and only a run that entered *this* environment", which is what protection rules
+    # attach to. The PyPI publisher must name the same environment — one side without the
+    # other fails closed, which is exactly why this and the PyPI change land together.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/mesopic/
 
     permissions:
       contents: read
