@@ -68,7 +68,7 @@ services:
   # would render the calibration page and then fail every save made on it. It never
   # overwrites: a demo brought up twice keeps whatever was drawn the first time.
   seed:
-    profiles: ["demo", "gate", "gif"]
+    profiles: ["demo", "gate", "gif", "ha"]
     image: mesopic-engine:dev
     build:
       context: .
@@ -83,6 +83,7 @@ services:
       - ./docker/demo.yaml:/seed/demo.yaml:ro
       - ./docker/gate.yaml:/seed/gate.yaml:ro
       - ./docker/gif.yaml:/seed/gif.yaml:ro
+      - ./docker/ha.yaml:/seed/ha.yaml:ro
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -92,7 +93,7 @@ services:
   # In the `camera` profile as well as `demo`, so `make test-stream` can bring up just a
   # stream to develop ingest against without building or running the engine.
   mediamtx:
-    profiles: ["demo", "camera", "gate", "gif"]
+    profiles: ["demo", "camera", "gate", "gif", "ha"]
     # The plain tag is distroless — no shell, no ffmpeg — so `runOnInit` silently
     # does nothing. The -ffmpeg variant is the one that can serve a looped clip.
     image: bluenviron/mediamtx:latest-ffmpeg
@@ -105,7 +106,7 @@ services:
 
   # For exercising the MQTT exporter and the Home Assistant discovery path locally.
   mosquitto:
-    profiles: ["demo", "gate", "gif"]
+    profiles: ["demo", "gate", "gif", "ha"]
     image: eclipse-mosquitto:2
     restart: unless-stopped
     ports:
@@ -113,6 +114,31 @@ services:
     volumes:
       - ./docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
 
+  # A real Home Assistant, for the one check P4.5 deliberately did not make (P4.8).
+  #
+  # The M2 gate proved the engine publishes what HA's MQTT discovery schema specifies.
+  # It did not prove HA *accepts* it — a reserved field, a units string it will not take,
+  # or a device block it silently drops all look identical from the publishing side.
+  # r/homeassistant is a launch surface, so that gap is worth closing by hand.
+  #
+  # Its own profile, never folded into `gate`. HA's onboarding is UI-only — account
+  # creation, then adding the MQTT integration through a config flow that has no YAML
+  # equivalent — so this cannot be a gate step that re-runs unattended, and pretending
+  # otherwise is how a gate starts asserting something nobody checked.
+  homeassistant:
+    profiles: ["ha"]
+    image: ghcr.io/home-assistant/home-assistant:stable
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+    volumes:
+      - ha-config:/config
+      # HA refuses to start with a wildly wrong clock, and containers inherit UTC.
+      - /etc/localtime:/etc/localtime:ro
+    depends_on:
+      - mosquitto
+
 volumes:
   mesopic-data:
   frigate-data:
+  ha-config:
