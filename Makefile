@@ -1,9 +1,9 @@
 # The same gate as CI, one command. If `make check` is green, CI will be too.
 .DEFAULT_GOAL := help
-.PHONY: help setup fmt lint types arch test check cov image run demo gate gif compose-check test-stream clean
+.PHONY: help setup fmt lint types arch test check cov docs image run demo gate gif compose-check test-stream clean
 
 UV ?= uv
-ALL := mesopic-engine/src mesopic-engine/tests
+ALL := mesopic-engine/src mesopic-engine/tests tools/docs
 
 help:  ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -33,6 +33,10 @@ cov:  ## Fast tests with coverage
 	$(UV) run pytest -m "not slow" --cov --cov-report=term-missing
 
 check: lint types arch test  ## The merge gate
+
+docs:  ## Build the docs site into ./site (P5.3)
+	$(UV) run --group docs python -m tools.docs.build
+	@echo "  built ./site — open site/index.html"
 
 image:  ## Build the engine container and assert its invariants
 	docker build -f docker/engine.Dockerfile -t mesopic-engine:dev .

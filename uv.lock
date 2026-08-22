@@ -4,6 +4,7 @@ requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'linux'",
+    "python_version < '0'",
     "python_full_version >= '3.15' and sys_platform != 'linux' and sys_platform != 'win32'",
     "python_full_version >= '3.13' and python_full_version < '3.15' and sys_platform == 'win32'",
     "python_full_version < '3.13' and sys_platform == 'win32'",
@@ -30,6 +31,10 @@ dev = [
     { name = "pytest-cov", specifier = ">=6.0" },
     { name = "ruff", specifier = ">=0.14.2" },
     { name = "types-pyyaml", specifier = ">=6.0" },
+]
+docs = [
+    { name = "markdown", specifier = ">=3.10" },
+    { name = "types-markdown", specifier = ">=3.7" },
 ]
 
 [[package]]
@@ -1011,6 +1016,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d2/de/e123239b4806f3cf9324871478bb5a3da9fdf78a4a1eb4618449b737cf96/librt-0.14.0-cp315-cp315t-win32.whl", hash = "sha256:36d0695186da49f4e9323869e50767391772a04c7bacee4ad3d85dd69e671154", size = 104287, upload-time = "2026-08-06T14:51:56.975Z" },
     { url = "https://files.pythonhosted.org/packages/e0/78/b1b1efbe13d8e31859d077aa2ef02719f3a03392cb50aa09fe7c84770940/librt-0.14.0-cp315-cp315t-win_amd64.whl", hash = "sha256:5982d33852bef29eae68bbc62444b793fbac2fe366acf27eaa8051138ddfabdd", size = 126847, upload-time = "2026-08-06T14:51:58.411Z" },
     { url = "https://files.pythonhosted.org/packages/4a/78/fadc5159a101366998ddcc505e43d24610222c3780ce2c47790676d9f44c/librt-0.14.0-cp315-cp315t-win_arm64.whl", hash = "sha256:14fcc7495ee5a0343b33713139a059e35929a4c337cc276774508a9448a4f320", size = 110636, upload-time = "2026-08-06T14:51:59.759Z" },
+]
+
+[[package]]
+name = "markdown"
+version = "3.10.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/29/6f/da4c6aea59b3001f2e8c0ec7497475aadaf3b021c10cab5b2858f0f32b26/markdown-3.10.3.tar.gz", hash = "sha256:3589362618f743188b4d955b874402bc814f4f83f544dc207719f4baa7d9c45f", size = 372596, upload-time = "2026-07-30T19:05:29.005Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/64/69/4a5af2bc115a9a33fefe51709749de8262be3f9ba063d1753a837cdbc49c/markdown-3.10.3-py3-none-any.whl", hash = "sha256:fa6c92a00a4a3c98b22728c64a935ae1928250ae65058a6ded814d2cc29a4cea", size = 110757, upload-time = "2026-07-30T19:05:27.883Z" },
 ]
 
 [[package]]
@@ -2393,6 +2407,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ae/40/4a3db7990d1f62a53182aa96eaef57aeb2886a27f90a195bc66713565d31/typer-0.27.1.tar.gz", hash = "sha256:a79bef8469a79c45498e7b814ecf8d603cc7644e9acbd9e19cac0334240b18df", size = 203994, upload-time = "2026-08-03T14:41:03.438Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/43/89/9518bc0c3929bee36b3a4a8e3daddd6e03f92f9961c66d4983b837160543/typer-0.27.1-py3-none-any.whl", hash = "sha256:53150287edd11baeb4e4722c8e394fcdf8181c0ae89485cba8d25c778d5edd56", size = 122874, upload-time = "2026-08-03T14:41:04.391Z" },
+]
+
+[[package]]
+name = "types-markdown"
+version = "3.10.2.20260712"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/19/eb/9520ed01687401b47265594955c0a9202a4f547795176de61bff77c8dfda/types_markdown-3.10.2.20260712.tar.gz", hash = "sha256:25aea17282490f35ab6b17a87771abd2f479185aaff8e8f4a0035043f02f2c52", size = 20185, upload-time = "2026-07-12T05:13:53.537Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9f/ea/a8dc2c8977870d27b8b44c4ba2952d765f9d39626e42d0083c871c1c1ebf/types_markdown-3.10.2.20260712-py3-none-any.whl", hash = "sha256:a551ddedde46e0eaca7059aa3d0e42db71afe2b53d8b58f72f2de63f3284f625", size = 25842, upload-time = "2026-07-12T05:13:52.702Z" },
 ]
 
 [[package]]

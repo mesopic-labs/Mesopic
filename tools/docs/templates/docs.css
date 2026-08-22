@@ -1,0 +1,97 @@
+/* Docs-site layout only. Every colour comes from `hud.css` — this file defines no
+ * palette of its own, so the site cannot drift away from the dashboard (P5.7). */
+
+.docs-nav {
+  margin: 0 0 2rem;
+  border-block: var(--rule);
+  padding-block: 0.75rem;
+}
+
+.docs-nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.docs-nav a {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+}
+
+.docs-nav a:hover,
+.docs-nav a:focus-visible {
+  color: var(--ink);
+}
+
+.docs-nav a[aria-current="page"] {
+  color: var(--safelight);
+}
+
+.docs-body {
+  max-width: var(--measure);
+}
+
+.docs-body h2 {
+  margin-block: 2.5rem 0.75rem;
+}
+
+.docs-body h3 {
+  margin-block: 2rem 0.5rem;
+}
+
+.docs-body :is(h2, h3):first-child {
+  margin-block-start: 0;
+}
+
+.docs-body pre {
+  overflow-x: auto;
+  border: var(--rule);
+  background: var(--panel-2);
+  padding: 1rem;
+}
+
+.docs-body :not(pre) > code {
+  background: var(--panel-2);
+  font-family: var(--mono);
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+}
+
+.docs-body table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  max-width: 100%;
+}
+
+.docs-body :is(th, td) {
+  border: var(--rule);
+  padding: 0.5rem 0.75rem;
+  text-align: start;
+  vertical-align: top;
+}
+
+.docs-body th {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.docs-body blockquote {
+  border-inline-start: 2px solid var(--safelight);
+  background: var(--safelight-soft);
+  margin-inline: 0;
+  padding: 0.75rem 1rem;
+}
+
+.docs-body a {
+  color: var(--safelight);
+}

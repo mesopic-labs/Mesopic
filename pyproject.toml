@@ -8,6 +8,14 @@ members = ["mesopic-engine"]
 # The proprietary hosted layer lives in its own private repository. It is not a
 # workspace member, not a dependency, and not present in this tree — see README.
 
+# `docs` is a default group so `uv sync` installs it everywhere. It was non-default
+# once, and the split showed up as a green `make check` against a red CI: the type check
+# and the test run both reach `tools/docs`, but CI's bare `uv sync --frozen` had no
+# `markdown` to resolve. One package with no transitive deps is a cheap price for the
+# local gate and the merge gate agreeing by construction.
+[tool.uv]
+default-groups = ["dev", "docs"]
+
 [tool.uv.sources]
 mesopic = { workspace = true }
 
@@ -23,6 +31,13 @@ dev = [
   "hypothesis>=6.115",
   "pre-commit>=4.0",
   "types-PyYAML>=6.0",
+]
+
+# Builds the docs site (P5.3). Docs-only: `markdown` is never a runtime dependency of
+# the engine, so nothing here reaches a user who installs `mesopic`.
+docs = [
+  "markdown>=3.10",
+  "types-Markdown>=3.7",
 ]
 
 # ---------------------------------------------------------------------------
@@ -117,8 +132,10 @@ ignore_missing_imports = true
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["mesopic-engine/tests"]
+testpaths = ["mesopic-engine/tests", "tools/docs/tests"]
 addopts = "-ra --strict-markers --strict-config"
+# `tools/` is not an installed package; the docs builder is imported from the tree.
+pythonpath = ["."]
 asyncio_mode = "auto"
 filterwarnings = ["error"]
 markers = [

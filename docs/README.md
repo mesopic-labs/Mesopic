@@ -1,13 +1,15 @@
 # Documentation
 
-This directory is where Mesopic's published documentation will live — the quickstart,
-configuration reference, integration guides, camera compatibility matrix, and the
-architecture and decision records that are useful to someone running or extending the
-engine. It is built into a static site as part of the launch milestone.
+This directory is Mesopic's published documentation — start at [index.md](./index.md).
+Every page here renders on GitHub as it stands, and `make docs` builds the same set into
+a static site under `site/`, styled by the engine's own `hud.css` so the docs and the
+dashboard cannot drift into looking like different products.
 
-Until then, the documentation that exists is in the [README](../README.md):
-what Mesopic measures, how to run it, how to configure cameras, lines, and zones, and
-what it does and does not store about people.
+A page whose content the [README](../README.md) also carries is **included from it**
+rather than copied: `<!--include:README.md#Quickstart-->` expands at build time. There is
+one copy of the quickstart command, and it is the one a launch visitor reads on GitHub.
+Add a page by writing the markdown here and adding it to `NAV` in `tools/docs/build.py` —
+a page missing from either side fails the build tests.
 
 ## Where new documentation goes
 
