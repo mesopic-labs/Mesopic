@@ -120,7 +120,7 @@ so an **Intel N100-class mini-PC (4 cores, no GPU)** handles a couple of cameras
 NPU is an **optional** speed-up, never a requirement.
 
 > For more than the single-camera demo, mount a config file (`-v ./mesopic.yaml:/data/mesopic.yaml`)
-> and define your cameras, lines, and zones — see [Example config](#example-config).
+> and define your cameras, lines, and zones — see [Configuration](#configuration).
 
 ---
 
@@ -170,35 +170,27 @@ decision record before it ever were — it would break both the cost model and t
 
 ## Supported cameras
 
-**Any camera that speaks RTSP or ONVIF** — which is essentially every IP security camera made in the
-last decade (Hikvision, Dahua, Reolink, Amcrest, Axis, Ubiquiti, generic ONVIF, and re-badges of all
-of the above). Mesopic ingests the existing stream; it does not need its own sensor, unlike
-FootfallCam or Milesight, which require dedicated hardware per door.
+**Any camera that speaks RTSP or ONVIF** — essentially every IP security camera made in the
+last decade (Hikvision, Dahua, Reolink, Amcrest, Axis, Ubiquiti, generic ONVIF, and re-badges
+of all of the above). Mesopic ingests the existing stream; it does not need its own sensor.
 
-- Prefer a **sub-stream** (e.g. 640×480–1280×720) for counting — it's cheaper to decode and plenty for
-  foot-point detection. Mesopic does not need your 4K main stream.
-- Both **H.264** and **H.265/HEVC** are supported via FFmpeg.
+Prefer a sub-stream (640×480–1280×720) for counting, and note that both H.264 and H.265/HEVC
+work — the full detail is in **[docs/cameras.md](./docs/cameras.md)**.
 
 ---
-
 ## How Mesopic compares
 
-Mesopic is not the first open-source project to point a model at a camera. It is aimed at a different
-layer from most of them.
+Mesopic is not the first open-source project to point a model at a camera; it is aimed at a
+different layer from most of them. Frigate answers *"what happened, and do I have the clip?"* —
+Mesopic answers *"how many, how long, and is that up on last week?"* Run both.
 
-| | What it is | Where Mesopic differs |
-| --- | --- | --- |
-| **[Frigate](https://frigate.video/)** | An excellent open-source NVR — recording, review, and real-time detection, with accelerator support Mesopic does not try to match. | Frigate answers *"what happened, and do I have the clip?"* Mesopic answers *"how many, how long, and is that up on last week?"* A zone in an NVR tells you an object was present; that is not the same thing as a time-weighted metric series. Run both — Frigate is a first-class [integration](#integrations), not a competitor. |
-| **[OpenDataCam](https://opendata.cam/)** | MIT, and the reference tool for *urban traffic* studies — modal split, turn counts, 50+ object classes across drawn counters. | Built for streets and pitched at city researchers, and it wants an NVIDIA GPU or a Jetson. Mesopic is CPU-first and shaped for premises: occupancy, dwell, queue length, and conversion are metrics OpenDataCam does not model. Line-crossing is where the two genuinely overlap. |
-| **Perception libraries** — e.g. [Supervision](https://github.com/roboflow/supervision), [trio-retina](https://github.com/machinefi/trio-retina) | Well-built toolkits that turn detections into tracks and zone/line events. | They stop at the event stream, by design. Turning `zone.enter` into a defensible occupancy figure — sampling, Δt-weighting, minute buckets, a store, idempotent rollups — is most of the work, and it is the part Mesopic is. |
-| **Commercial counters** — V-Count, RetailNext, FootfallCam, Verkada, Spot AI | Mature, accurate, supported, and the incumbents Mesopic is aimed at. | A dedicated sensor per door or a proprietary camera estate, an annual contract, and a sales call. Mesopic runs on the cameras already screwed to your ceiling, installs in one command, and the engine is MIT. |
+Two things Mesopic does not claim: it is not more accurate than an audited commercial counter
+today, and it does not do the security-camera job Frigate does well.
 
-Two things Mesopic does not claim: it is not more accurate than an audited commercial counter today,
-and it does not do the security-camera job Frigate does well. It does the measurement layer, in the
-open, on hardware you already own.
+The full comparison — Frigate, OpenDataCam, perception libraries, and the commercial counters —
+is in **[docs/comparison.md](./docs/comparison.md)**.
 
 ---
-
 ## Integrations
 
 ### Home Assistant (MQTT)
@@ -275,58 +267,16 @@ share the `mesopic_` prefix.
 
 ---
 
-## Example config
+## Configuration
 
-`mesopic.yaml` — one camera, one counting line, one dwell zone. Coordinates are normalized `[0,1]`
-image space, so they survive resolution changes.
+`mesopic.yaml` defines your cameras, counting lines, and zones. Coordinates are normalized
+`[0,1]` image space, so they survive resolution changes, and secrets are referenced by
+environment-variable name rather than written inline.
 
-```yaml
-# mesopic.yaml — mount at /data/mesopic.yaml
-site:
-  site_id: "front-of-house"
-  timezone: "Europe/London"        # display only; everything is stored in UTC
-
-cameras:
-  - camera_id: entrance
-    name: "Front door"
-    source:
-      kind: rtsp                   # rtsp | onvif | frigate
-      url: "rtsp://user:pass@192.168.1.64:554/stream1"
-      transport: tcp
-    reference_resolution: [1280, 720]
-
-# Directional tripwire: A→B counts as "in", B→A as "out".
-lines:
-  - line_id: door
-    camera_id: entrance
-    a: [0.20, 0.85]
-    b: [0.80, 0.85]
-    positive_dir: in
-    metrics: [line_cross, footfall]
-
-# Region people linger in; emits dwell, live occupancy, and queue length.
-zones:
-  - zone_id: waiting_area
-    camera_id: entrance
-    role: queue                    # area | queue | staff
-    polygon: [[0.10, 0.40], [0.60, 0.40], [0.60, 0.95], [0.10, 0.95]]
-    metrics: [dwell_seconds, occupancy, queue_len]
-
-exporters:
-  mqtt: { enabled: true, broker: "192.168.1.10", base_topic: "mesopic" }
-  prometheus: { enabled: true }    # scrape at :8080/metrics
-
-# Optional: push metrics-only to the hosted dashboard. Omit to stay fully local.
-cloud_sync:
-  enabled: false
-  # site_token_env: "MESOPIC_SITE_TOKEN"   # by reference; never the token itself
-```
-
-A fuller worked example, with two cameras and every metric wired up, is in
-[`examples/mesopic.yaml`](./examples/mesopic.yaml).
+- **[docs/configuration.md](./docs/configuration.md)** — the annotated reference.
+- **[`examples/mesopic.yaml`](./examples/mesopic.yaml)** — a fuller worked example.
 
 ---
-
 ## Mesopic Cloud (optional, paid)
 
 The engine and local dashboard are **free forever.** Cloud is the thin, self-serve layer for people who
@@ -374,66 +324,33 @@ If you self-host and disable the cloud sync, nothing leaves your network at all.
 
 ## Roadmap
 
-| Horizon     | What                                                                                     |
-| ----------- | ---------------------------------------------------------------------------------------- |
-| **MVP (6–8 wks)** | Engine (core six + two adjacencies), local HUD dashboard, Docker one-command run, Frigate + HA/MQTT integration, CSV/webhook/MQTT/Prometheus exports. |
-| **Month 2–3** | Cloud v0: hosted dashboard, metrics-only sync, magic-link auth, Stripe, email/webhook alerts, TimescaleDB rollups. |
-| **Later**   | Managed appliance (pre-flashed, self-registering); vertical fine-tuned models (£50/yr).  |
-| **Deferred** | Loss-prevention/theft, face recognition, pose estimation, ANPR/parking. Explicitly **not** v1. |
-| **ADR-flagged future** | Optional, separately-priced cloud-side inference — never on by default, never required. |
+MVP is the engine, the local dashboard, one-command Docker, the Frigate and Home Assistant
+integrations, and the CSV/webhook/MQTT/Prometheus exports. Cloud v0 follows. Loss-prevention,
+face recognition, pose estimation, and ANPR are explicitly **not** v1.
 
+Horizons and the ADR-flagged future items are in **[docs/roadmap.md](./docs/roadmap.md)**.
 Dates are targets, not commitments — this is early software built in the open.
 
 ---
-
 ## Repository layout
 
-**This repository is the engine, and only the engine.** It is MIT, top to bottom, with
-no proprietary code in it. The hosted cloud is a separate service in a separate,
-closed repository — it is not required to run anything here, and nothing here depends
-on it.
+**This repository is the engine, and only the engine** — MIT top to bottom, with no proprietary
+code in it. The hosted cloud is a separate service in a separate, closed repository; it is not
+required to run anything here, and nothing here depends on it.
 
-```
-mesopic/
-├── mesopic-engine/          # the MIT engine — the whole open-source product
-│   ├── src/mesopic/
-│   │   ├── types.py            domain vocabulary: ids, UTC time, normalized geometry
-│   │   ├── config/             mesopic.yaml schema + loader (validated, fail-loud)
-│   │   ├── ingest/             RTSP/ONVIF via PyAV; Frigate via MQTT; one interface
-│   │   ├── sampler/            adaptive fps — the CPU-budget lever
-│   │   ├── detector/           ONNX Runtime; model fetch/export/quantize/cache
-│   │   ├── tracker/            ByteTrack; owns foot-point + pixel→normalized
-│   │   ├── analytics/          tracks + geometry → raw events; metric plugins
-│   │   ├── aggregator/         events → minute buckets, idempotent
-│   │   ├── store/              SQLite (WAL, STRICT) — single writer, sync buffer
-│   │   ├── exporters/          CSV · webhook · MQTT · Prometheus
-│   │   ├── api/                local HUD dashboard, /healthz, /metrics
-│   │   ├── sync/               metrics-only push to the cloud — optional, off by default
-│   │   ├── supervisor/         process-per-camera, backpressure, restart
-│   │   └── cli.py              `mesopic run | discover | calibrate | export | doctor`
-│   └── tests/
-├── docker/                 # engine image + the local dev stack (mediamtx, mosquitto)
-├── examples/mesopic.yaml    # a worked config: one camera, one line, one zone
-└── pyproject.toml          # the shared lint / type / test / boundary config
-```
+The annotated tree is in **[docs/architecture.md](./docs/architecture.md)**.
 
-The one piece of cloud-facing code here is `mesopic/sync/` — the client that pushes your
-own metrics to the hosted dashboard if you choose to use it. It is MIT like everything
-else, it is off by default, and you can read exactly what it sends. It reads the metrics
-tables and nothing else: an enforced import boundary means it has no path to a frame at
-all, so "video never leaves the building" is a structural property of the code rather
-than a promise in a README.
-
+---
 ## Documentation
 
-Architecture, algorithms, and the decision records are published alongside the docs site
-as it lands (see the roadmap). The short version of the design lives in this README; the
-things most people want next are:
+The full documentation set lives in **[docs/](./docs/)** and is published as a static site
+(see [docs/index.md](./docs/index.md) for the map). The short version of the design lives in
+this README; the things most people want next are:
 
 | Question | Where |
 |---|---|
 | How do I run it? | [Quickstart](#quickstart) above |
-| How do I configure cameras, lines, and zones? | [Example config](#example-config), and `examples/mesopic.yaml` |
+| How do I configure cameras, lines, and zones? | [docs/configuration.md](./docs/configuration.md) |
 | How do I connect Home Assistant or Frigate? | [Integrations](#integrations) above |
 | What licence is the model under? | [License](#license) below, and `/healthz` on a running engine |
 | How do I contribute? | [CONTRIBUTING.md](./CONTRIBUTING.md) |

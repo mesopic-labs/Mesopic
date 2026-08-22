@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}{{ page.title }} — Mesopic{% endblock %}</title>
+    {# `hud.css` is copied from the engine at build time, never forked. The docs site is
+       the second surface to take the darkroom palette (P5.7); a fork is how the two
+       drift into looking like different products. #}
+    <link rel="stylesheet" href="hud.css" />
+    <link rel="stylesheet" href="docs.css" />
+  </head>
+  <body>
+    <div class="frame">
+      <header class="masthead">
+        <p class="mark">Mesopic</p>
+        <h1>{% block heading %}{{ page.title }}{% endblock %}</h1>
+        <p class="subtitle">
+          Open-source video-intelligence for the cameras you already own.
+        </p>
+      </header>
+      <nav class="docs-nav" aria-label="Documentation">
+        <ul>
+          {% for entry in nav %}
+          <li>
+            <a href="{{ entry.slug }}.html"{% if entry.slug == page.slug %} aria-current="page"{% endif %}>
+              {{ entry.title }}
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+      </nav>
+      {% block content %}{% endblock %}
+    </div>
+  </body>
+</html>

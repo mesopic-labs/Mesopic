@@ -1,9 +1,9 @@
 """The configuration we document must be configuration that actually works.
 
-The README's example is the first thing a new user copies, and `examples/mesopic.yaml` is
-the second. Both are prose from the code's point of view, so they drift silently: a key
-gets renamed in the schema, and the documented example keeps saying the old name until
-someone files an issue saying "your quickstart doesn't work".
+The annotated example in `docs/configuration.md` is the first thing a new user copies, and
+`examples/mesopic.yaml` is the second. Both are prose from the code's point of view, so
+they drift silently: a key gets renamed in the schema, and the documented example keeps
+saying the old name until someone files an issue saying "your quickstart doesn't work".
 
 These tests make that drift a build failure instead. Until P2.1 there was no loader to
 check them against, so they compared *names* — sections, identity keys, the metric
@@ -12,8 +12,8 @@ was to run both documents through it for real. That is what they now do: every d
 we publish is validated by the same code path a user's file takes, so a renamed key, an
 out-of-range coordinate or an invented metric name fails here first.
 
-What is left alongside that is only what validation cannot see: that the README and the
-worked example describe the same schema as each other, and that none of these documents
+What is left alongside that is only what validation cannot see: that the documented config
+and the worked example describe the same schema as each other, and that none of these documents
 inlines a secret.
 
 `fixtures/mesopic.yaml` is checked here too, though nobody reads it as documentation. It
@@ -33,7 +33,12 @@ import yaml
 from mesopic.config import load_config
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-README = REPO_ROOT / "README.md"
+DOCUMENTED_CONFIG = REPO_ROOT / "docs" / "configuration.md"
+"""The annotated `mesopic.yaml` a reader copies.
+
+It lived in the README until P5.3 moved it onto the docs site; the README now points here
+rather than carrying a second copy that could disagree with this one.
+"""
 EXAMPLE_CONFIG = REPO_ROOT / "examples" / "mesopic.yaml"
 DEMO_CONFIG = REPO_ROOT / "docker" / "demo.yaml"
 """The config `make demo` seeds into the container's volume (P3.6).
@@ -60,10 +65,12 @@ line this file defines.
 """
 
 
-def _readme_config_block() -> dict[str, Any]:
-    """The `mesopic.yaml` example embedded in the README."""
-    match = re.search(r"```yaml\n(# mesopic\.yaml.*?)```", README.read_text(encoding="utf-8"), re.S)
-    assert match, "the README no longer contains a mesopic.yaml example block"
+def _documented_config_block() -> dict[str, Any]:
+    """The `mesopic.yaml` example embedded in the configuration page."""
+    match = re.search(
+        r"```yaml\n(# mesopic\.yaml.*?)```", DOCUMENTED_CONFIG.read_text(encoding="utf-8"), re.S
+    )
+    assert match, "docs/configuration.md no longer contains a mesopic.yaml example block"
     parsed = yaml.safe_load(match.group(1))
     assert isinstance(parsed, dict)
     return parsed
@@ -71,7 +78,7 @@ def _readme_config_block() -> dict[str, Any]:
 
 @pytest.fixture(scope="module")
 def documented() -> dict[str, Any]:
-    return _readme_config_block()
+    return _documented_config_block()
 
 
 def _yaml_document(path: Path) -> dict[str, Any]:
@@ -89,7 +96,7 @@ def example() -> dict[str, Any]:
 def documents(documented: dict[str, Any], example: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Every config this repository commits, by the name the tests parametrize over."""
     return {
-        "readme": documented,
+        "documented": documented,
         "example": example,
         "fixtures": _yaml_document(FIXTURE_CONFIG),
         "demo": _yaml_document(DEMO_CONFIG),
@@ -97,7 +104,7 @@ def documents(documented: dict[str, Any], example: dict[str, Any]) -> dict[str, 
     }
 
 
-@pytest.mark.parametrize("document", ["readme", "example", "fixtures", "demo", "gif"])
+@pytest.mark.parametrize("document", ["documented", "example", "fixtures", "demo", "gif"])
 def test_every_documented_config_validates(
     document: str, documents: dict[str, dict[str, Any]], tmp_path: Path
 ) -> None:
@@ -116,19 +123,20 @@ def test_every_documented_config_validates(
     assert loaded.cameras, f"{document} describes a site with no cameras"
 
 
-def test_readme_and_example_agree_on_structure(
+def test_the_documented_config_and_example_agree_on_structure(
     documented: dict[str, Any], example: dict[str, Any]
 ) -> None:
     """Two documents describing one schema should not describe two schemas."""
     assert set(documented) <= set(example), (
-        f"README uses sections the worked example does not: {set(documented) - set(example)}"
+        f"docs/configuration.md uses sections the example does not: "
+        f"{set(documented) - set(example)}"
     )
     assert set(documented["cameras"][0]) <= set(example["cameras"][0])
     assert set(documented["lines"][0]) <= set(example["lines"][0])
     assert set(documented["zones"][0]) <= set(example["zones"][0])
 
 
-@pytest.mark.parametrize("document", ["readme", "example", "fixtures", "demo", "gif"])
+@pytest.mark.parametrize("document", ["documented", "example", "fixtures", "demo", "gif"])
 def test_every_documented_config_shows_some_geometry(
     document: str, documents: dict[str, dict[str, Any]]
 ) -> None:
@@ -146,7 +154,7 @@ def test_every_documented_config_shows_some_geometry(
 
 
 @pytest.mark.privacy
-@pytest.mark.parametrize("document", ["readme", "example", "fixtures", "demo", "gif"])
+@pytest.mark.parametrize("document", ["documented", "example", "fixtures", "demo", "gif"])
 def test_no_document_inlines_a_secret(document: str, documents: dict[str, dict[str, Any]]) -> None:
     """Secrets are referenced by env-var name, never written into the config file.
 
