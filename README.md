@@ -6,8 +6,13 @@
 
 **Open-source video-intelligence for the cameras you already own.**
 
-<!-- Badges (CI, licence, stars, discussions) go in when the repository goes public;
-     they render broken until then and would assert things that are not true yet. -->
+<!-- These hardcode the owner because a shields.io URL cannot be written relatively.
+     Known debt, same as the GHCR path below — a move means editing both by hand. -->
+[![CI](https://github.com/mesopic-labs/Mesopic/actions/workflows/ci.yml/badge.svg)](https://github.com/mesopic-labs/Mesopic/actions/workflows/ci.yml)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-1a75ab.svg)](./LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/mesopic.svg?color=1a75ab)](https://pypi.org/project/mesopic/)
+[![Stars](https://img.shields.io/github/stars/mesopic-labs/Mesopic?style=flat&color=8a5a0c)](https://github.com/mesopic-labs/Mesopic/stargazers)
+[![Discussions](https://img.shields.io/github/discussions/mesopic-labs/Mesopic?color=14a053)](https://github.com/mesopic-labs/Mesopic/discussions)
 
 ![Mesopic counting people at a storefront: footfall, line crossings, live occupancy and dwell time on a live dashboard](docs/assets/demo.gif)
 

@@ -56,6 +56,14 @@ rarely. A key renamed six months from now would not fail anything until someone 
 reshoot it, found the bring-up dead, and had no record of what the original was shot with.
 """
 
+HA_CONFIG = REPO_ROOT / "docker" / "ha.yaml"
+"""The config `make ha` seeds for the Home Assistant check (P4.8).
+
+Held to the same bar for the same reason as the demo config: nobody reads it, so drift is
+invisible until the one time it is brought up — which is a manual, human-in-the-loop
+session that does not happen often enough to catch it any other way.
+"""
+
 FIXTURE_CONFIG = REPO_ROOT / "fixtures" / "mesopic.yaml"
 """The geometry the ground-truth clips are labelled against.
 
@@ -101,10 +109,11 @@ def documents(documented: dict[str, Any], example: dict[str, Any]) -> dict[str, 
         "fixtures": _yaml_document(FIXTURE_CONFIG),
         "demo": _yaml_document(DEMO_CONFIG),
         "gif": _yaml_document(GIF_CONFIG),
+        "ha": _yaml_document(HA_CONFIG),
     }
 
 
-@pytest.mark.parametrize("document", ["documented", "example", "fixtures", "demo", "gif"])
+@pytest.mark.parametrize("document", ["documented", "example", "fixtures", "demo", "gif", "ha"])
 def test_every_documented_config_validates(
     document: str, documents: dict[str, dict[str, Any]], tmp_path: Path
 ) -> None:
@@ -136,7 +145,7 @@ def test_the_documented_config_and_example_agree_on_structure(
     assert set(documented["zones"][0]) <= set(example["zones"][0])
 
 
-@pytest.mark.parametrize("document", ["documented", "example", "fixtures", "demo", "gif"])
+@pytest.mark.parametrize("document", ["documented", "example", "fixtures", "demo", "gif", "ha"])
 def test_every_documented_config_shows_some_geometry(
     document: str, documents: dict[str, dict[str, Any]]
 ) -> None:
@@ -154,7 +163,7 @@ def test_every_documented_config_shows_some_geometry(
 
 
 @pytest.mark.privacy
-@pytest.mark.parametrize("document", ["documented", "example", "fixtures", "demo", "gif"])
+@pytest.mark.parametrize("document", ["documented", "example", "fixtures", "demo", "gif", "ha"])
 def test_no_document_inlines_a_secret(document: str, documents: dict[str, dict[str, Any]]) -> None:
     """Secrets are referenced by env-var name, never written into the config file.
 
