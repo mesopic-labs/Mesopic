@@ -1,6 +1,6 @@
 # The same gate as CI, one command. If `make check` is green, CI will be too.
 .DEFAULT_GOAL := help
-.PHONY: help setup fmt lint types arch test check cov docs image run demo gate gif compose-check test-stream clean
+.PHONY: help setup fmt lint types arch test check cov docs image run demo gate gif compose-check test-stream ha clean
 
 UV ?= uv
 ALL := mesopic-engine/src mesopic-engine/tests tools/docs
@@ -102,10 +102,44 @@ gif:  ## Bring up exactly what the launch demo GIF is recorded against (P5.5)
 	printf '  stop:    docker compose --profile gif down -v\n\n'; \
 	MESOPIC_SEED=gif.yaml docker compose --profile gif up
 
+ha:  ## Bring up a real Home Assistant against a live engine (P4.8 — by hand, once)
+	@command -v openssl >/dev/null || { echo "error: openssl not found; export MESOPIC_ADMIN_PASSWORD yourself" >&2; exit 1; }
+	@set -eu; \
+	: "$${MESOPIC_ADMIN_PASSWORD:=$$(openssl rand -hex 16)}"; \
+	: "$${MESOPIC_RTSP_URL:=rtsp://mediamtx:8554/sample}"; \
+	export MESOPIC_ADMIN_PASSWORD MESOPIC_RTSP_URL; \
+	MESOPIC_SEED=ha.yaml docker compose --profile ha build; \
+	MESOPIC_SEED=ha.yaml docker compose --profile ha run --rm seed; \
+	printf '\n  dashboard        http://localhost:8080  (password %s)\n' "$$MESOPIC_ADMIN_PASSWORD"; \
+	printf '  home assistant   http://localhost:8123\n\n'; \
+	if command -v colima >/dev/null && colima status >/dev/null 2>&1; then \
+	  printf '  NOTE: Colima publishes ports to its VM, not to macOS, so both URLs are\n'; \
+	  printf '  dead in a Mac browser even while the containers are healthy. Check with\n'; \
+	  printf '    colima ssh -- curl -sI http://localhost:8123\n'; \
+	  printf '  and forward them into the browser with\n'; \
+	  printf '    colima ssh-config > /tmp/colima.ssh\n'; \
+	  printf '    ssh -F /tmp/colima.ssh -N -L 8123:localhost:8123 -L 8080:localhost:8080 colima\n\n'; \
+	fi; \
+	printf '  HA onboarding is UI-only, so these four steps are by hand:\n'; \
+	printf '    1. create an account at :8123\n'; \
+	printf '    2. Settings > Devices & Services > Add Integration > MQTT\n'; \
+	printf '       broker: mosquitto   port: 1883   (no credentials)\n'; \
+	printf '    3. confirm a Mesopic device appears carrying live values\n'; \
+	printf '    4. add an automation on the occupancy sensor crossing a threshold\n\n'; \
+	printf '  Then the part P4.5 could not check: kill the engine and confirm the\n'; \
+	printf '  entities go UNAVAILABLE rather than sticking at their last reading.\n'; \
+	printf '    docker compose --profile ha kill engine\n\n'; \
+	printf '  what the engine is publishing:\n'; \
+	printf '    docker compose --profile ha exec mosquitto mosquitto_sub -v -t "homeassistant/#"\n'; \
+	printf '  stop:  docker compose --profile ha down -v\n\n'; \
+	printf '  Anything HA rejects becomes its own card. Record findings on P4.8.\n\n'; \
+	MESOPIC_SEED=ha.yaml docker compose --profile ha up
+
 compose-check:  ## Validate the compose file and its demo profile
 	docker compose --profile demo config -q
 	docker compose --profile gate config -q
 	docker compose --profile gif config -q
+	docker compose --profile ha config -q
 	docker compose config -q
 
 test-stream:  ## Serve a synthetic RTSP camera on :8554 (no engine, no clip needed)
