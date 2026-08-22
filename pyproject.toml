@@ -8,6 +8,14 @@ members = ["mesopic-engine"]
 # The proprietary hosted layer lives in its own private repository. It is not a
 # workspace member, not a dependency, and not present in this tree — see README.
 
+# `docs` is a default group so `uv sync` installs it everywhere. It was non-default
+# once, and the split showed up as a green `make check` against a red CI: the type check
+# and the test run both reach `tools/docs`, but CI's bare `uv sync --frozen` had no
+# `markdown` to resolve. One package with no transitive deps is a cheap price for the
+# local gate and the merge gate agreeing by construction.
+[tool.uv]
+default-groups = ["dev", "docs"]
+
 [tool.uv.sources]
 mesopic = { workspace = true }
 

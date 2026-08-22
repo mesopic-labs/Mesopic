@@ -197,7 +197,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
-      - run: uv sync --frozen --group docs
+      - run: uv sync --frozen
       # The build is the test: a page in `NAV` with no markdown behind it, a link that
       # goes nowhere, or a `var(--token)` `hud.css` does not define all fail here.
       - run: uv run pytest tools/docs/tests -q
@@ -237,7 +237,7 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
-      - run: uv sync --frozen --group docs
+      - run: uv sync --frozen
       - run: uv run python -m tools.docs.build
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
