@@ -1,0 +1,52 @@
+# The config `make ha` seeds, for the Home Assistant check (P4.8).
+#
+# Deliberately narrower than gate.yaml: no Frigate, one camera, one line, one zone. P4.5
+# already proved the discovery payloads are schema-valid against the gate stack. What is
+# unproven, and what this config exists to exercise, is whether Home Assistant *accepts*
+# them — so the smallest config that produces every entity shape is the one that makes a
+# rejection easy to attribute.
+#
+# The zone is `role: area` rather than `queue`: this check wants live occupancy, which is
+# what the plan's own P4.4 acceptance criterion automates against.
+
+site:
+  site_id: "ha-check"
+  timezone: "Europe/London"
+
+cameras:
+  - camera_id: entrance
+    name: "Front door"
+    source:
+      kind: rtsp
+      # Points at the bundled mediamtx stream by default; override to use real footage,
+      # which you want here — an automation cannot fire on a test pattern's zero.
+      url_env: "MESOPIC_RTSP_URL"
+      transport: tcp
+    reference_resolution: [1280, 720]
+
+lines:
+  - line_id: door
+    camera_id: entrance
+    a: [0.20, 0.85]
+    b: [0.80, 0.85]
+    positive_dir: in
+    metrics: [line_cross, footfall]
+
+zones:
+  - zone_id: lobby
+    camera_id: entrance
+    role: area
+    polygon: [[0.10, 0.40], [0.90, 0.40], [0.90, 0.95], [0.10, 0.95]]
+    metrics: [dwell_seconds, occupancy]
+
+exporters:
+  # `discovery` defaults to true, so this publishes retained configs to
+  # `homeassistant/sensor/<unique_id>/config` and the availability topic Home Assistant
+  # needs to mark entities unavailable when the engine dies.
+  mqtt: { enabled: true, broker: "mosquitto", base_topic: "mesopic" }
+  prometheus: { enabled: true }
+  webhook: { enabled: false }
+  csv: { enabled: false }
+
+cloud_sync:
+  enabled: false

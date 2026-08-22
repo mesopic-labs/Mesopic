@@ -53,8 +53,14 @@ openvino = ["openvino>=2024.4"]
 # prints the licence consequence on first use.
 ultralytics = ["ultralytics>=8.3"]
 
-# [project.urls] is intentionally absent until the repository is public — a wheel
-# carrying links to a 404 is worse than a wheel carrying none.
+# Every URL here must resolve for an anonymous visitor: these ship inside the wheel and
+# render on the PyPI page, where a 404 is the first thing a stranger sees.
+[project.urls]
+Homepage = "https://mesopic.dev"
+Documentation = "https://mesopic-labs.github.io/Mesopic/"
+Source = "https://github.com/mesopic-labs/Mesopic"
+Issues = "https://github.com/mesopic-labs/Mesopic/issues"
+Changelog = "https://github.com/mesopic-labs/Mesopic/releases"
 
 [project.scripts]
 mesopic = "mesopic.cli:app"
