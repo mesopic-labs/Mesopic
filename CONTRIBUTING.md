@@ -43,7 +43,7 @@ correctness-critical core on a laptop with no camera and no accelerator.
 **Setup**
 
 ```bash
-git clone <repo-url> mesopic
+git clone https://github.com/mesopic-labs/Mesopic.git mesopic
 cd mesopic
 make setup          # uv sync + install the git hooks
 make check          # lint, types, boundaries, tests — the same gate CI runs
