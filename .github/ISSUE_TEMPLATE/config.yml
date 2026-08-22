@@ -1,8 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: mailto:mesopic.project@gmail.com
-    about: Report privately. Please do not open a public issue for a vulnerability.
+    url: https://github.com/mesopic-labs/Mesopic/security/advisories/new
+    about: Report privately through a security advisory. Never open a public issue for a vulnerability.
   - name: Question or idea
-    url: mailto:mesopic.project@gmail.com
+    url: https://github.com/mesopic-labs/Mesopic/discussions
     about: Usage questions, camera setup help, and feature ideas.
+  - name: Security vulnerability (by email)
+    url: mailto:mesopic.project@gmail.com
+    about: If you cannot use GitHub advisories, mail us instead.
