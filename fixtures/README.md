@@ -173,7 +173,7 @@ to the line.
 
 **Eighty-eight of the 120 minutes are empty, and one quiet stretch runs 53 minutes**
 (33:43 to 1:26:40). That is real footage of an empty hallway, not a hole in the labelling:
-all three subjects are inside when it begins and the first two marks after it are exits, so
+all three subjects are inside when it begins and the first mark after it is an exit, so
 occupancy joins up across it. A quiet minute is an observation the engine can get wrong,
 which is why `_empty_minutes` keeps every one of them.
 
