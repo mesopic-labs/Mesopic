@@ -31,11 +31,24 @@ docker compose --profile camera up -d mediamtx     # rtsp://127.0.0.1:8554/<clip
 The stream is a straight remux, not a re-encode — an accuracy number measured against
 different pixels from the ones a human labelled is not measured against the clip.
 
-**Get the file itself; do not re-make it.** `scripts/normalize-clip.sh` is bit-exact on one
-machine and not across machines: libx264 defaults its thread count to the core count, and
-frame threading changes the bytes. Re-normalising an original elsewhere yields a
-structurally identical artefact — same duration, same frame count, same colour tags — that
-`resolve_clip` refuses, because the manifest names one file rather than one recipe.
+**The manifest names one file, not one recipe.** `scripts/normalize-clip.sh` is bit-exact
+on one machine and not across machines: libx264 defaults its thread count to the core
+count, and frame threading changes the bytes. Re-normalising an original elsewhere yields a
+structurally identical artefact — same duration, same frame count, same colour tags — with
+a different SHA-256, which `resolve_clip` refuses.
+
+Which of the two you fix depends on what the labels are bound to, and that differs by clip:
+
+- **Labelled by watching a file** — `residential-lobby-01` and the `home-hallway-*` clips.
+  The times mean what they mean *because* of the artefact somebody scrubbed through, so
+  get that file. Re-cutting it and repointing the manifest would silently redefine what
+  the labels describe.
+- **Labelled without one** — `home-entrance-01`, tallied live on paper while the recording
+  happened. There is no artefact the labels are bound to: the times are media seconds on
+  the recording's own timeline, and any faithful normalisation of the original carries them
+  identically. Here re-normalising and repointing the manifest is the cheaper fix, and it
+  is what happened — the SHA-256 names a cut made from the original on the maintainer's
+  machine, not the one the labeller happened to produce.
 
 ## Gate-eligibility is derived, never stored
 
@@ -173,13 +186,27 @@ Lighting is the axis that bound every earlier clip here to `hard`, and this is t
 one it does not bind:
 
 - **Daylight only** — no artificial light at all, sun out, through an open living-room
-  window — and **nothing clips**. Sampled at six points across the two hours, 0.00 % of
-  pixels reach 100 % signal, ~0.1 % sit above 95 %, and ~2–3 % fall in the bottom tenth.
-  Levels are flat end to end: 90th-percentile luma stays between 88.9 % and 89.6 % over
-  fourteen samples spanning the clip. **A daylight source is not what makes a doorway
-  `hard`; a blown-out one is**, and this doorway is not blown out. Contrast
-  `residential-lobby-01`, where the doorway is white for most of the clip and everyone
-  crossing it is a silhouette.
+  window — and **nothing clips**. Measured on the artefact the manifest names, from exact
+  luma histograms of 30 frames spread across the two hours, in the raw code values the
+  encoder wrote:
+
+  | | |
+  |---|---|
+  | Pixels at 255 | **0.0000 %** — the brightest pixel in any sample is 240–245 |
+  | Pixels above 95 % of full scale (Y > 242) | **0.000 %** |
+  | Pixels in the bottom tenth (Y < 26) | 3.8 % |
+  | 90th-percentile luma | **226–232 of 255** (88.6 %–91.0 %), across all 30 samples |
+
+  Nothing clips at the top and nothing crushes at the bottom, and the levels hold flat
+  end to end. **A daylight source is not what makes a doorway `hard`; a blown-out one
+  is**, and this doorway is not blown out. Contrast `residential-lobby-01`, where the
+  doorway is white for most of the clip and everyone crossing it is a silhouette.
+
+  > Measure the **raw Y plane**, not `format=gray`. `gray` is a full-range format, so the
+  > scaler expands tv range 16–235 onto 0–255 on the way in and manufactures clipping that
+  > is not in the file — it reports 6.1 % of pixels at 255 for a clip whose true maximum
+  > is 245. Read the first `w*h` bytes of a `yuv420p` frame instead, or use `signalstats`,
+  > which does not convert. The two agree; `gray` disagrees with both.
 
 **Sixty-five crossings, 33 in and 32 out** — denser than anything else here, and still not
 dense. The limit is the grain rather than the count: the gate is stated at hour grain, two
