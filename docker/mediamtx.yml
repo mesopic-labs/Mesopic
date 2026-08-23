@@ -11,6 +11,11 @@
 #                                     ./examples/clips/sample.mp4. Absent by design —
 #                                     see below.
 #
+#   rtsp://127.0.0.1:8554/<clip-id>   any ground-truth clip, by the id in its manifest.
+#                                     `MESOPIC_CLIPS_DIR` is what gets mounted at /clips,
+#                                     so this is the path `fixtures/mesopic.yaml` names
+#                                     for each fixture camera.
+#
 # (On the Apple `container` compatibility layer the VM is at 192.168.64.2, not localhost.)
 #
 # Clips are gitignored (`*.mp4`). A real clip of a real space is personal data, and this
@@ -44,3 +49,34 @@ paths:
       else echo "mesopic: no /clips/sample.mp4 — use /synthetic, or run scripts/make-sample-clip.sh";
       sleep 86400; fi'
     runOnInitRestart: yes
+
+  # Any ground-truth clip, served under its own clip id, so `fixtures/mesopic.yaml` can
+  # name a camera's source without a path per clip being added here first.
+  #
+  # THE REGEX IS THE SECURITY BOUNDARY, not decoration. `$MTX_PATH` is a string a client
+  # chose, and it is interpolated into a shell command — so it is constrained to the same
+  # slug `scripts/normalize-clip.sh` enforces on a clip id, which admits no character a
+  # shell treats specially. It is quoted below as well, because one of those two is going
+  # to be edited some day.
+  #
+  # Named paths above win over this one, so `synthetic` and `sample` keep their meaning.
+  #
+  # `runOnDemand` rather than `runOnInit`: mediamtx refuses `runOnInit` on a regular
+  # expression outright — "a path with a regular expression does not support option
+  # 'runOnInit'" — and a config it refuses takes the whole server down with it, `synthetic`
+  # included. On-demand is the right shape anyway: one ffmpeg per clip somebody is actually
+  # watching, rather than one per clip that exists.
+  #
+  # `-c copy` rather than a re-encode: these clips are already H.264 with a keyframe every
+  # 2 s, which is what RTSP wants, and re-encoding would hand the engine different pixels
+  # from the ones the labels were made against. An accuracy number measured on a re-encode
+  # of the clip is not measured on the clip.
+  "~^[a-z0-9]+(-[a-z0-9]+)*$":
+    runOnDemand: >
+      sh -c 'if [ -f "/clips/$MTX_PATH.mp4" ]; then
+      exec ffmpeg -re -stream_loop -1 -i "/clips/$MTX_PATH.mp4"
+      -c copy -an -f rtsp "rtsp://localhost:8554/$MTX_PATH";
+      else echo "mesopic: no /clips/$MTX_PATH.mp4 — set MESOPIC_CLIPS_DIR to the directory holding it";
+      exit 1; fi'
+    runOnDemandRestart: no
+    runOnDemandCloseAfter: 10s

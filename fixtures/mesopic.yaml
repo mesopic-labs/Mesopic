@@ -6,9 +6,17 @@
 # walk counts at all, so an oblique clip's labels mean nothing without the config they
 # were made against. This file is that config, committed beside the labels.
 #
-# Replay a clip with the rig, then point the engine at it:
-#   MESOPIC_CLIPS_DIR=~/Projects/mesopic-clips  (bytes live outside the repo — ADR-0015)
+# Replay a clip with the rig, then point the engine at it. The clips directory is what
+# gets mounted into the RTSP sidecar, and every clip in it is served under its own clip
+# id — which is the URL each camera below names:
+#
+#   export MESOPIC_CLIPS_DIR=~/Projects/mesopic-clips   (bytes outside the repo — ADR-0015)
+#   docker compose --profile camera up -d mediamtx
 #   mesopic run --config fixtures/mesopic.yaml
+#
+# On a VM-backed Docker (Colima, Lima, Docker Desktop) only paths the VM mounts are
+# visible to it — `$HOME` and little else by default — so a clips directory outside your
+# home directory bind-mounts as empty and every clip 400s.
 #
 # Geometry is normalized [0,1], origin top-left, so it survives the 4K -> 1080p
 # normalisation `scripts/normalize-clip.sh` applies.
@@ -18,8 +26,9 @@ site:
   timezone: "Europe/London"
 
 cameras:
-  # The hallway clips (`-01` and `-02`) share one framing, so one camera serves both:
-  # swap the mediamtx path to replay the other.
+  # The hallway clips (`-01` and `-02`) share one framing, so one camera serves both, and
+  # they share `home-hallway-corridor` for the same reason. Both are served at once under
+  # their own ids; point this `url` at the other clip to replay it.
   - camera_id: "home-hallway"
     name: "Home hallway (fixture replay)"
     source:

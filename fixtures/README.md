@@ -20,6 +20,23 @@ So a clip is described here and stored elsewhere. Point `MESOPIC_CLIPS_DIR` at a
 directory containing `<clip_id>.mp4`, and the manifest's SHA-256 confirms it is the same
 file the labels were made against. `*.mp4` is in `.gitignore`; keep it that way.
 
+That directory is also what the RTSP sidecar serves, each clip under its own id, so
+replaying one is two commands:
+
+```
+export MESOPIC_CLIPS_DIR=~/Projects/mesopic-clips
+docker compose --profile camera up -d mediamtx     # rtsp://127.0.0.1:8554/<clip-id>
+```
+
+The stream is a straight remux, not a re-encode — an accuracy number measured against
+different pixels from the ones a human labelled is not measured against the clip.
+
+**Get the file itself; do not re-make it.** `scripts/normalize-clip.sh` is bit-exact on one
+machine and not across machines: libx264 defaults its thread count to the core count, and
+frame threading changes the bytes. Re-normalising an original elsewhere yields a
+structurally identical artefact — same duration, same frame count, same colour tags — that
+`resolve_clip` refuses, because the manifest names one file rather than one recipe.
+
 ## Gate-eligibility is derived, never stored
 
 There is no `gate_eligible` field. It is computed, every time it is asked for:
