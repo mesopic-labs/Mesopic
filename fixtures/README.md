@@ -44,6 +44,7 @@ for a published number.
 
 | Clip | Provenance | Consent | Scene | Labels | Gate-eligible |
 |---|---|---|---|---|---|
+| `home-entrance-01` | own_rig | obtained | good_doorway | 33 in, 32 out — markos | yes |
 | `home-hallway-oblique-01` | own_rig | obtained | hard | 3 in, 3 out — emil | yes |
 | `home-hallway-oblique-02` | own_rig | obtained | hard | 1 in, 1 out — emil | yes |
 | `home-kitchen-oblique-01` | own_rig | obtained | hard | n/a — no counting line | yes |
@@ -57,7 +58,7 @@ something concrete to run against. Neither is inside the reference mounting enve
 (both are near eye-level rather than 30–60° from horizontal), and being stock, neither
 can ever gate.
 
-### The `home-*` clips: what they are and what they are not
+### The 2.1 m `home-hallway-*` and `home-kitchen-*` clips: what they are and what they are not
 
 Three own-rig clips of a domestic hallway and kitchen, 3 min 34 s in total, one subject,
 a fixed mount, daylight. They are the first footage here that **is** gate-eligible: the
@@ -81,10 +82,13 @@ paperwork:
 What they are good for is the thing that was actually blocked: metric plugins can now be
 written against real detections on real footage instead of invented expectations.
 
-**The accuracy gate still needs a dedicated recording session** — 2.5–3.5 m, ≥ 1 hour
-continuous, several people walking a known schedule. See `../../Mesopic-docs/docs/04-testing/ground-truth-clip-set-design.md`
-§7 and §8; §8's hour-grain-vs-minute-grain question wants an answer *before* that session,
-not after.
+**That dedicated recording session has since happened** — 2.5–3.5 m, ≥ 1 hour continuous,
+several people walking a known schedule — and it is `home-entrance-01` below. Note that it
+shares the `home-` prefix and nothing else: different house, different rig, different
+mount, three subjects rather than one. Nothing in this section describes it. See
+`../../Mesopic-docs/docs/04-testing/ground-truth-clip-set-design.md` §7 and §8; §8's
+hour-grain-vs-minute-grain question was meant to be answered *before* that session and was
+not, so it now has to be answered against the footage rather than ahead of it.
 
 > **Gate-eligibility answers permission, not validity.** `gate_eligible()` asks whether we
 > may publish from footage of these people at all — provenance and consent, and nothing
@@ -139,6 +143,75 @@ Two properties of the file a labeller needs to know before opening it:
   2408 s, and the last two seconds are an editor's outro card. Media time is unaffected,
   which is the whole reason `t_s` is media time — the burnt-in clock is not a timebase and
   must not be used as one.
+
+### `home-entrance-01`: the first clip inside the good-doorway envelope
+
+Two hours of a domestic entrance, own rig, consent obtained, three subjects. It is the
+first clip here whose scene classifies as `good_doorway` — the scene the gate is specified
+on — so it is the first one that can produce that number at all rather than a proxy for it.
+
+The mount is **2.6 m at 34°**, measured at the rig with a tape before the camera moved, and
+both figures sit inside the reference envelope on both axes. Feet are visible throughout.
+Lighting is the axis that bound every earlier clip here to `hard`, and this is the first
+one it does not bind:
+
+- **Daylight only** — no artificial light at all, sun out, through an open living-room
+  window — and **nothing clips**. Sampled at six points across the two hours, 0.00 % of
+  pixels reach 100 % signal, ~0.1 % sit above 95 %, and ~2–3 % fall in the bottom tenth.
+  Levels are flat end to end: 90th-percentile luma stays between 88.9 % and 89.6 % over
+  fourteen samples spanning the clip. **A daylight source is not what makes a doorway
+  `hard`; a blown-out one is**, and this doorway is not blown out. Contrast
+  `residential-lobby-01`, where the doorway is white for most of the clip and everyone
+  crossing it is a silhouette.
+
+**Sixty-five crossings, 33 in and 32 out** — denser than anything else here, and still not
+dense. The limit is the grain rather than the count: the gate is stated at hour grain, two
+hours is **two buckets** (footfall 20 and 13), and a single miscount is 5.0 % or 7.7 % of
+its bucket against the good doorway's ≤ 7 %. That is a far better instrument than
+`residential-lobby-01`'s eleven crossings and still a coarse one for a pass/fail that close
+to the line.
+
+**Eighty-eight of the 120 minutes are empty, and one quiet stretch runs 53 minutes**
+(33:43 to 1:26:40). That is real footage of an empty hallway, not a hole in the labelling:
+all three subjects are inside when it begins and the first mark after it is an exit, so
+occupancy joins up across it. A quiet minute is an observation the engine can get wrong,
+which is why `_empty_minutes` keeps every one of them.
+
+**The clip is the first two hours of a 2 h 3 min original**, cut with the fourth argument
+to `scripts/normalize-clip.sh`. The tail is footage nobody labelled, and scoring it would
+charge the engine for crossings the truth file was never going to contain.
+
+Two things it still cannot do:
+
+- **There is no camera or line for it in `mesopic.yaml`**, so nothing can be scored against
+  it yet. The endpoint order that decides the sign of every crossing has to be drawn
+  against the frame, not guessed — the same gap the section below describes.
+- **`gate_blockers()` returns nothing for it**: own rig, consent obtained, `good_doorway`,
+  and a named rater. It is the first clip here that clears every check the code makes,
+  which leaves the judgement the code does *not* make as the only thing in the way — is
+  two hours and 33 inward crossings a **sufficient** basis for a published number? That is
+  not obviously yes, and the code will not stop anyone who decides it is.
+
+#### How `home-entrance-01` was labelled
+
+Rater `markos`, tallied **live on paper while the recording was happening**, then
+transcribed. That is a different method from every other clip here and it cuts both ways: a
+live observer sees the room rather than a compressed frame and cannot be fooled by the
+codec, but they cannot rewind either, and the footage has not been re-watched since.
+
+**Marks are whole seconds, so read them as ±0.5 s.** Exactly one crossing sits on a minute
+boundary — the inward mark at 1440.0 s — making it the only label in the file whose
+uncertainty spans two minute buckets. At hour grain nothing moves.
+
+The transcription was checked by walking each subject's entries and exits in order: all
+three alternate cleanly end to end, and nobody enters a house they are already inside. That
+caught one real error — the mark at 24:04 was attributed to the wrong subject, which had
+made one subject's exit at 24:18 impossible and another's entry at 26:04 a double — and it
+is worth being exact about
+what the check proves. It finds contradictions **among the marks that were written down**.
+It cannot see a crossing that was never written down at all, and a *pair* of missed
+crossings — out and back in, unobserved — leaves occupancy consistent and invisible. The
+rater field says a human stands behind these labels; it does not say they were re-watched.
 
 ### How the `home-hallway-*` clips were labelled
 

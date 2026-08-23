@@ -11,19 +11,27 @@
 # no audio, no metadata. Run it once, hash the output, and never re-encode — a clip that
 # does not match its manifest's SHA-256 is refused by `resolve_clip`, which is the point.
 #
-# Usage:  scripts/normalize-clip.sh <input> <clip_id> <output_dir>
+# Usage:  scripts/normalize-clip.sh <input> <clip_id> <output_dir> [duration_s]
 # Example: scripts/normalize-clip.sh ~/Downloads/IMG_5286.MOV home-hallway-oblique-01 ~/clips
+#
+# A fourth argument keeps only the first <duration_s> seconds. A recording runs past the
+# end of the session somebody labelled, and the tail is footage no human watched: scored
+# as-is it charges the engine for crossings the truth file was never going to contain.
+# `check_pairing` refuses a truth file whose duration disagrees with its manifest by more
+# than a millisecond, so the cut has to happen here, once, before the hash. Omit the
+# argument and the whole input is encoded, byte-for-byte as before.
 
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-  echo "usage: $0 <input> <clip_id> <output_dir>" >&2
+if [[ $# -lt 3 || $# -gt 4 ]]; then
+  echo "usage: $0 <input> <clip_id> <output_dir> [duration_s]" >&2
   exit 2
 fi
 
 IN="$1"
 CLIP_ID="$2"
 OUT_DIR="$3"
+DURATION="${4:-}"
 OUT="${OUT_DIR}/${CLIP_ID}.mp4"
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
@@ -40,8 +48,22 @@ if [[ ! "${CLIP_ID}" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
   echo "error: clip_id must be a lowercase slug: ${CLIP_ID}" >&2
   exit 1
 fi
+if [[ -n "${DURATION}" && ! "${DURATION}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  echo "error: duration_s must be a positive number of seconds: ${DURATION}" >&2
+  exit 1
+fi
 
 mkdir -p "${OUT_DIR}"
+
+# `-t` goes on the *output*, so it counts frames the filter chain has already decimated
+# rather than frames of the source. At 25 fps that makes the length exact — 7200 s is
+# 180000 frames and the container says 7200.0 — where trimming the input would land a
+# frame either side of it and fail the manifest's millisecond tolerance.
+TRIM=()
+if [[ -n "${DURATION}" ]]; then
+  echo "keeping the first ${DURATION}s of the input"
+  TRIM=(-t "${DURATION}")
+fi
 
 # --- HLG -> SDR ---------------------------------------------------------------------
 #
@@ -105,6 +127,7 @@ CHAIN="${CHAIN},setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709
 ffmpeg -hide_banner -loglevel error -y \
   -i "${IN}" \
   -map 0:v:0 -map_metadata -1 -map_chapters -1 -an -sn -dn \
+  ${TRIM[@]+"${TRIM[@]}"} \
   -vf "${CHAIN}" \
   -c:v libx264 -preset slow -crf 20 -g 50 -pix_fmt yuv420p \
   -color_primaries bt709 -color_trc bt709 -colorspace bt709 \
