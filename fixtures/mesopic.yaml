@@ -25,6 +25,18 @@ site:
   site_id: "fixtures"
   timezone: "Europe/London"
 
+# Reads need no credential — the loopback bind is the access control for those. Saving
+# geometry rewrites this file, so it needs one, and `mesopic calibrate`'s save button is
+# how `home-entrance-door` is meant to arrive. Without this the engine still runs and
+# every write answers 503 "no credential is configured".
+api:
+  host: "127.0.0.1"
+  # 8081 rather than the documented default. A VM-backed Docker (Colima, Lima, Docker
+  # Desktop) runs a port forwarder that commonly holds 8080 for as long as the VM is up,
+  # and this config is meant to be run beside the RTSP sidecar in exactly that setup.
+  port: 8081
+  password_env: "MESOPIC_ADMIN_PASSWORD"
+
 cameras:
   # The hallway clips (`-01` and `-02`) share one framing, so one camera serves both, and
   # they share `home-hallway-corridor` for the same reason. Both are served at once under
@@ -68,19 +80,25 @@ lines:
   # bottom of frame and `b` up by the wall corner, the doorway side is `-1` and the living
   # room is `+1`, so walking in from the back door is `+1` and `positive_dir: in` reads
   # correctly. Swapping `a` and `b` silently inverts every count.
-  - line_id: "home-hallway-corridor"
-    camera_id: "home-hallway"
-    a: [0.44, 1.00]
+  - line_id: home-hallway-corridor
+    camera_id: home-hallway
+    a: [0.44, 1.0]
     b: [0.62, 0.42]
     positive_dir: in
     metrics: [line_cross, footfall]
-
-  # `home-entrance-door` IS MISSING ON PURPOSE, and `home-entrance-01`'s labels cannot be
-  # scored until it exists. It is the one part of this file that cannot be derived: a line
-  # is a threshold drawn in a frame, and which side is "outside" is not recoverable from
-  # the truth file — endpoint order alone decides the sign of all 65 crossings, so a
-  # guessed line does not read as wrong, it reads as an engine counting backwards. Draw it
-  # against the footage with `mesopic calibrate`, do not write coordinates here by hand.
+  # Drawn against the footage in `mesopic calibrate`, not written by hand — which is the
+  # only way the sign of a crossing can be got right. See the endpoint-order note above.
+  - line_id: home-entrance-door
+    camera_id: home-entrance
+    # ENDPOINTS SWAPPED after drawing. The editor produced a -> b running right-to-left,
+    # which puts the +1 side at the top of the frame; people enter this doorway walking
+    # TOWARD the camera, down the frame. Left as drawn, all 65 crossings would have come
+    # out with the sign reversed -- and the gate would not have caught it, because 33 in
+    # against 32 out makes an inverted footfall total wrong by one.
+    a: [0.4776, 0.7859]
+    b: [0.6514, 0.7277]
+    positive_dir: in
+    metrics: [line_cross, footfall]
 
   # The kitchen clip deliberately has NO counting line. Nobody transits a threshold in
   # it — the subject moves between three stations and stands at each — so any line drawn
@@ -88,20 +106,18 @@ lines:
   # occupancy and dwell fixture, and the zones below are the whole of its geometry.
 
 zones:
-  - zone_id: "living-room"
-    camera_id: "home-hallway"
+  - zone_id: living-room
+    camera_id: home-hallway
     role: area
-    polygon: [[0.62, 0.30], [1.00, 0.30], [1.00, 0.78], [0.66, 0.78]]
+    polygon: [[0.62, 0.3], [1.0, 0.3], [1.0, 0.78], [0.66, 0.78]]
     metrics: [occupancy, dwell_seconds]
-
-  - zone_id: "kitchen-counter"
-    camera_id: "home-kitchen"
+  - zone_id: kitchen-counter
+    camera_id: home-kitchen
     role: area
     polygon: [[0.02, 0.52], [0.34, 0.52], [0.34, 0.88], [0.02, 0.88]]
     metrics: [occupancy, dwell_seconds]
-
-  - zone_id: "tv-corner"
-    camera_id: "home-kitchen"
+  - zone_id: tv-corner
+    camera_id: home-kitchen
     role: area
-    polygon: [[0.70, 0.30], [1.00, 0.30], [1.00, 0.58], [0.70, 0.58]]
+    polygon: [[0.7, 0.3], [1.0, 0.3], [1.0, 0.58], [0.7, 0.58]]
     metrics: [occupancy, dwell_seconds]
