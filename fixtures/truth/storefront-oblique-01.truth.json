@@ -5,9 +5,9 @@
   "labelled_at_utc": "2026-08-16T13:25:00Z",
   "duration_s": 19.8,
   "crossings": [
-    { "t_s": 3.5, "line_id": "entrance", "direction": "in" },
-    { "t_s": 12.5, "line_id": "entrance", "direction": "in" },
-    { "t_s": 15.0, "line_id": "entrance", "direction": "in" },
-    { "t_s": 17.0, "line_id": "entrance", "direction": "out" }
+    { "t_s": 3.5, "line_id": "storefront-oblique-door", "direction": "in" },
+    { "t_s": 12.5, "line_id": "storefront-oblique-door", "direction": "in" },
+    { "t_s": 15.0, "line_id": "storefront-oblique-door", "direction": "in" },
+    { "t_s": 17.0, "line_id": "storefront-oblique-door", "direction": "out" }
   ]
 }
