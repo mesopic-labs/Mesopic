@@ -255,7 +255,7 @@ find hard:
 
 - **`storefront-oblique-01` @ 0.1–1.9 s** — a man walks right-to-left across the front of
   the store, over the mat, without entering. Recorded as *no crossing*. Whether that is
-  right depends entirely on where the `entrance` line is drawn (see below).
+  right depends entirely on where the `storefront-oblique-door` line is drawn (see below).
 - **`storefront-oblique-01` @ 17.0 s** — a man walks *out*. Recorded as `out`.
 - Timestamps are ±0.3 s throughout.
 
@@ -283,8 +283,19 @@ line sits. Until the clicker can overlay the configured line, an oblique clip's 
 only meaningful alongside the config they were made against.
 
 **`mesopic.yaml` in this directory is that config**, committed beside the labels for
-exactly this reason. It defines one line, `entrance`, on the hallway camera, and three
-zones. Read it before labelling anything — particularly the note on endpoint order, which
+exactly this reason. It defines one line, `home-hallway-corridor`, on the hallway camera,
+and three zones. Line ids are namespaced to the rig that owns them: `line_id` is a
+PRIMARY KEY in the store and unique across a whole config, so two clips sharing one can
+never both have geometry here — the config is rejected with `duplicate line_id`, and the
+second clip cannot be given a line without renaming the first one's labels. A line is
+geometry inside a frame, so it is shared only by clips of the same rig in the same
+framing, which is what the two `home-hallway-*` clips are.
+
+`home-entrance-01`'s line, `home-entrance-door`, is **not there yet**, so nothing can be
+scored against the gate clip. It is the one thing in that file nobody can derive: which
+side of the threshold is "outside" is not in the truth file, and endpoint order alone
+decides the sign of all 65 crossings. Draw it against the footage with `mesopic
+calibrate`. Read it before labelling anything — particularly the note on endpoint order, which
 decides the sign of every crossing and is invisible in the resulting truth file.
 
 The kitchen clip has no counting line on purpose. Nobody transits a threshold in it; the

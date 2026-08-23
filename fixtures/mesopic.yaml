@@ -30,6 +30,17 @@ cameras:
       transport: tcp
     reference_resolution: [1920, 1080]
 
+  # The MK.8 gate clip. Two hours, `good_doorway`, a different house and rig from the
+  # `home-hallway` pair above — the shared `home-` prefix is the only thing they have in
+  # common.
+  - camera_id: "home-entrance"
+    name: "Home entrance (fixture replay)"
+    source:
+      kind: rtsp
+      url: "rtsp://127.0.0.1:8554/home-entrance-01"
+      transport: tcp
+    reference_resolution: [1920, 1080]
+
   - camera_id: "home-kitchen"
     name: "Home kitchen (fixture replay)"
     source:
@@ -48,12 +59,19 @@ lines:
   # bottom of frame and `b` up by the wall corner, the doorway side is `-1` and the living
   # room is `+1`, so walking in from the back door is `+1` and `positive_dir: in` reads
   # correctly. Swapping `a` and `b` silently inverts every count.
-  - line_id: "entrance"
+  - line_id: "home-hallway-corridor"
     camera_id: "home-hallway"
     a: [0.44, 1.00]
     b: [0.62, 0.42]
     positive_dir: in
     metrics: [line_cross, footfall]
+
+  # `home-entrance-door` IS MISSING ON PURPOSE, and `home-entrance-01`'s labels cannot be
+  # scored until it exists. It is the one part of this file that cannot be derived: a line
+  # is a threshold drawn in a frame, and which side is "outside" is not recoverable from
+  # the truth file — endpoint order alone decides the sign of all 65 crossings, so a
+  # guessed line does not read as wrong, it reads as an engine counting backwards. Draw it
+  # against the footage with `mesopic calibrate`, do not write coordinates here by hand.
 
   # The kitchen clip deliberately has NO counting line. Nobody transits a threshold in
   # it — the subject moves between three stations and stands at each — so any line drawn

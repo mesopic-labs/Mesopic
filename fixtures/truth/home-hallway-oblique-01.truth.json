@@ -5,11 +5,11 @@
   "labelled_at_utc": "2026-08-17T11:00:45Z",
   "duration_s": 80.0,
   "crossings": [
-    { "t_s": 4.0, "line_id": "entrance", "direction": "out" },
-    { "t_s": 11.0, "line_id": "entrance", "direction": "in" },
-    { "t_s": 53.0, "line_id": "entrance", "direction": "out" },
-    { "t_s": 61.0, "line_id": "entrance", "direction": "in" },
-    { "t_s": 67.0, "line_id": "entrance", "direction": "out" },
-    { "t_s": 76.0, "line_id": "entrance", "direction": "in" }
+    { "t_s": 4.0, "line_id": "home-hallway-corridor", "direction": "out" },
+    { "t_s": 11.0, "line_id": "home-hallway-corridor", "direction": "in" },
+    { "t_s": 53.0, "line_id": "home-hallway-corridor", "direction": "out" },
+    { "t_s": 61.0, "line_id": "home-hallway-corridor", "direction": "in" },
+    { "t_s": 67.0, "line_id": "home-hallway-corridor", "direction": "out" },
+    { "t_s": 76.0, "line_id": "home-hallway-corridor", "direction": "in" }
   ]
 }

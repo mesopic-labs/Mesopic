@@ -230,6 +230,36 @@ def test_every_committed_truth_file_pairs_with_its_manifest() -> None:
         check_pairing(truth, manifest)
 
 
+def test_a_line_id_is_only_shared_by_clips_of_the_same_framing() -> None:
+    """`line_id` is a PRIMARY KEY in the store and unique across a whole config, so two
+    clips claiming one can never both have geometry in `fixtures/mesopic.yaml` — the file
+    is rejected outright with `duplicate line_id`, and the second clip cannot be given a
+    line at all without renaming the first one's labels.
+
+    Sharing is legitimate in exactly one case: a line is geometry inside a frame, so it
+    transfers between clips that are the same rig in the same framing and nowhere else.
+    The manifest's scene stanza and pixel dimensions are what says so, which is why they
+    are the test rather than the clip's name.
+    """
+    framings: dict[str, dict[str, object]] = {}
+    owners: dict[str, list[str]] = {}
+    for path in sorted(FIXTURE_TRUTH.glob("*.truth.json")):
+        truth = load_truth(path)
+        manifest = load_manifest(FIXTURE_CLIPS / f"{truth.clip_id}.clip.json")
+        framings[truth.clip_id] = {
+            "scene": manifest.scene.model_dump(),
+            "size": (manifest.width, manifest.height, manifest.fps),
+        }
+        for line_id in {crossing.line_id for crossing in truth.crossings}:
+            owners.setdefault(line_id, []).append(truth.clip_id)
+
+    for shared_id, clips in sorted(owners.items()):
+        distinct = {repr(framings[clip]) for clip in clips}
+        assert len(distinct) == 1, (
+            f"line {shared_id!r} is claimed by clips of different framings: {sorted(clips)}"
+        )
+
+
 # --- What a rejection message may contain -----------------------------------
 #
 # Added on review. `config/loader.py` already suppresses pydantic's `input` rendering for
