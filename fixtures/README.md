@@ -205,8 +205,9 @@ uncertainty spans two minute buckets. At hour grain nothing moves.
 
 The transcription was checked by walking each subject's entries and exits in order: all
 three alternate cleanly end to end, and nobody enters a house they are already inside. That
-caught one real error — a mark written as `dad` at 24:04 was `mom`, which had made her exit
-at 24:18 impossible and dad's entry at 26:04 a double — and it is worth being exact about
+caught one real error — the mark at 24:04 was attributed to the wrong subject, which had
+made one subject's exit at 24:18 impossible and another's entry at 26:04 a double — and it
+is worth being exact about
 what the check proves. It finds contradictions **among the marks that were written down**.
 It cannot see a crossing that was never written down at all, and a *pair* of missed
 crossings — out and back in, unobserved — leaves occupancy consistent and invisible. The
