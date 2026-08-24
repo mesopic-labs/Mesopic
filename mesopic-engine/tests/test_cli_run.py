@@ -565,3 +565,42 @@ async def test_the_saved_document_is_what_the_app_renders_next(
     await engine.save_config(edited)
 
     assert engine.config_document() == edited
+
+
+# --- Cloud sync is optional, and must never take the engine with it (C5) -----
+
+
+def test_an_engine_without_cloud_sync_has_no_loop(config: MesopicConfig, store: Store) -> None:
+    """Off by default, and off means absent rather than idle (ADR-0001)."""
+    assert Engine(config, store, entry=run_until_stopped).sync_loop is None
+
+
+async def test_a_sync_that_dies_does_not_take_the_engine_with_it(
+    config: MesopicConfig, store: Store
+) -> None:
+    """The resilience property ADR-0005 buys: the edge is authoritative and the cloud is a
+    downstream cache, so a sync that fails leaves a cache stale rather than a shop blind.
+
+    Written as the harshest version — the loop raises the moment it is started — because
+    the tempting wiring is to put the sync task into the same race as the supervisor and
+    the server, where exactly this would stop the engine.
+    """
+    started = asyncio.Event()
+
+    class ExplodingLoop:
+        async def run(self) -> None:
+            started.set()
+            msg = "the cloud fell over"
+            raise RuntimeError(msg)
+
+    engine = Engine(config, store, entry=run_until_stopped)
+    engine.sync_loop = ExplodingLoop()  # type: ignore[assignment]
+    engine.supervisor.request_shutdown()
+
+    await engine.run(serve=_never_returns)
+
+    assert started.is_set(), "the sync loop should have been started at all"
+
+
+async def _never_returns(app: Any, api: Any) -> None:
+    await asyncio.sleep(3600)
