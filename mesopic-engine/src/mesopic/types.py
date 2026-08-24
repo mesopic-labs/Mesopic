@@ -142,6 +142,12 @@ class MetricName(StrEnum):
     mean and ``OCCUPANCY_RAW`` the peak. The third, ``net_occupancy``, is deliberately
     absent — it is opt-in, it is the only metric in the set that accumulates drift, and
     whether it should exist in v1 at all is still open (ADR-0016).
+
+    ``TRANSACTIONS`` is conversion's numerator, carried as its own series because a ratio
+    cannot be rolled up from ratios: an hour's conversion is ``Σ txns / Σ footfall``, and
+    nothing downstream can recover the numerator from a number that has already been
+    divided (cloud-architecture.md §3.4). The cloud learns this name *before* an engine
+    emits it — the reverse refuses the whole batch with a 422.
     """
 
     FOOTFALL = "footfall"
@@ -152,6 +158,7 @@ class MetricName(StrEnum):
     DWELL_SECONDS = "dwell_seconds"
     LINE_CROSS = "line_cross"
     CONVERSION = "conversion"
+    TRANSACTIONS = "transactions"
     HEATMAP = "heatmap"
 
 
