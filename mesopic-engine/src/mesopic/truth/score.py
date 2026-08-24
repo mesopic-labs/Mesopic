@@ -15,7 +15,7 @@ a truth file carries, so nothing here computes them.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from math import ceil
 
@@ -107,6 +107,34 @@ def line_crossings_per_minute(truth: TruthFile) -> dict[int, int]:
     for crossing in truth.crossings:
         series[int(crossing.t_s // SECONDS_PER_MINUTE)] += 1
     return series
+
+
+def _traffic(row: MetricRow) -> float:
+    """`line_cross` carries the signed net in `value`; its traffic is `sample_count`.
+
+    `LineCrossPlugin` stores the net on purpose — the direction is the information, and a
+    net is what makes a line usable as an occupancy integrator. The truth series counts
+    every crossing, because an exit is traffic even though it is not a visit. Folding
+    `value` would therefore compare a net against a total and read a minute of three
+    arrivals and one departure — which the engine got exactly right — as a 50%
+    under-count. `sample_count` is the field that means the same thing on both sides.
+    """
+    return float(row.sample_count)
+
+
+def _value(row: MetricRow) -> float:
+    return row.value
+
+
+_PREDICTED_QUANTITY: dict[MetricName, Callable[[MetricRow], float]] = {
+    MetricName.FOOTFALL: _value,
+    MetricName.LINE_CROSS: _traffic,
+}
+"""Which field of a run's row corresponds to each truth series.
+
+Kept beside `_TRUTH_SERIES` because the two have to agree: a metric that names a truth
+series and reads the wrong column of the run scores a correct engine as a broken one.
+"""
 
 
 _TRUTH_SERIES = {
@@ -255,10 +283,11 @@ def _predicted_per_minute(
     selected = [row for row in metrics if row.metric is metric]
     _refuse_mixed_scopes(selected)
 
+    read = _PREDICTED_QUANTITY[metric]
     predicted: dict[int, float] = {}
     for row in selected:
         minute = int((row.bucket - stream_start).total_seconds() // SECONDS_PER_MINUTE)
-        predicted[minute] = predicted.get(minute, 0.0) + row.value
+        predicted[minute] = predicted.get(minute, 0.0) + read(row)
     return predicted
 
 
