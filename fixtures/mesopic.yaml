@@ -86,17 +86,22 @@ lines:
     b: [0.62, 0.42]
     positive_dir: in
     metrics: [line_cross, footfall]
-  # Drawn against the footage in `mesopic calibrate`, not written by hand — which is the
-  # only way the sign of a crossing can be got right. See the endpoint-order note above.
+  # Redrawn 2026-08-24 after the first gate run scored 55% inward recall against 97%
+  # outward. The heatmap showed why: the old line sat at y 0.73-0.79, which holds 1.4 s of
+  # foot-point presence across ten minutes against 7-28 s in the rows either side. It was
+  # drawn inside the band where the chair hides the walker, so an inbound track died above
+  # it and a new one was born below, seeded on the inside with nothing to flip from.
+  #
+  # This one separates the doorway approach from the room rather than lying across the
+  # walking path, and sits below the occlusion.
+  #
+  # ENDPOINTS SWAPPED after drawing, again. As drawn, the doorway side computed as +1 and
+  # the room side as -1 -- and `direction = +1 if crossed_from < 0`, so walking in from the
+  # doorway would have been emitted as -1 and labelled "out".
   - line_id: home-entrance-door
     camera_id: home-entrance
-    # ENDPOINTS SWAPPED after drawing. The editor produced a -> b running right-to-left,
-    # which puts the +1 side at the top of the frame; people enter this doorway walking
-    # TOWARD the camera, down the frame. Left as drawn, all 65 crossings would have come
-    # out with the sign reversed -- and the gate would not have caught it, because 33 in
-    # against 32 out makes an inverted footfall total wrong by one.
-    a: [0.4776, 0.7859]
-    b: [0.6514, 0.7277]
+    a: [0.5449, 0.9504]
+    b: [0.6981, 0.7211]
     positive_dir: in
     metrics: [line_cross, footfall]
 
