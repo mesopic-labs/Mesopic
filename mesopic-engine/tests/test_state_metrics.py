@@ -290,6 +290,10 @@ def test_the_registry_is_built_from_the_core_six_and_nothing_else() -> None:
 
     Heatmap is P4.1 and is absent rather than stubbed — a registered plugin that emits
     nothing would read as a working metric reporting no activity.
+
+    `TRANSACTIONS` is the seventh name and not a seventh metric: it is conversion's
+    numerator, declared by the same plugin because one fold over one till reading produces
+    both. The cloud needs it kept because a ratio cannot be rolled up from ratios (C7).
     """
     registry = build_registry(_geometry())
 
@@ -303,6 +307,7 @@ def test_the_registry_is_built_from_the_core_six_and_nothing_else() -> None:
             MetricName.QUEUE_LEN_RAW,
             MetricName.DWELL_SECONDS,
             MetricName.CONVERSION,
+            MetricName.TRANSACTIONS,
         }
     )
 

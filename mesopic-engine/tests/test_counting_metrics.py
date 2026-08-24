@@ -29,6 +29,7 @@ from mesopic.types import (
     EventKind,
     FrameTs,
     LineId,
+    MetricName,
     MetricRow,
     MinuteBucket,
     RawEvent,
@@ -143,6 +144,12 @@ def _sample(*, camera: CameraId = CAMERA, zone: ZoneId = FLOOR, inside: float = 
 
 def _by_scope(rows: list[MetricRow]) -> dict[ScopeId | None, float]:
     return {row.scope_id: row.value for row in rows}
+
+
+def _by_metric(rows: list[MetricRow]) -> dict[MetricName, float]:
+    """Conversion emits two rows on the same (camera-wide) scope, so its tests key by
+    metric instead — `_by_scope` would silently let one overwrite the other."""
+    return {row.metric: row.value for row in rows}
 
 
 # --- Footfall ---------------------------------------------------------------
@@ -290,6 +297,12 @@ def test_a_line_that_does_not_ask_for_line_cross_produces_no_row() -> None:
 
 
 # --- Conversion -------------------------------------------------------------
+#
+# Conversion emits two rows per camera-minute, not one: the ratio, which is the honest
+# number at this grain, and `transactions`, which is the numerator it was built from.
+# The cloud needs the numerator because an hour's conversion is `Σ txns / Σ footfall` and
+# never the mean of sixty minute-ratios — and a ratio cannot be un-divided after the fact
+# (cloud-architecture.md §3.4).
 
 
 def test_conversion_is_transactions_over_footfall() -> None:
@@ -301,7 +314,26 @@ def test_conversion_is_transactions_over_footfall() -> None:
         [_cross(track=1), _cross(track=2), _cross(track=3), _cross(track=4)], BUCKET
     )
 
-    assert _by_scope(rows) == {None: 0.25}
+    assert _by_metric(rows)[MetricName.CONVERSION] == 0.25
+
+
+def test_the_numerator_is_kept_as_its_own_series() -> None:
+    """Without this row the cloud can only average ratios, which is never correct."""
+    plugin = ConversionPlugin(
+        FootfallPlugin(_geometry(lines=[_line()])), transactions={(CAMERA, BUCKET): 1}
+    )
+
+    rows = plugin.reduce([_cross(track=1), _cross(track=2)], BUCKET)
+
+    assert _by_metric(rows) == {MetricName.CONVERSION: 0.5, MetricName.TRANSACTIONS: 1.0}
+
+
+def test_the_plugin_declares_both_names() -> None:
+    """One fold over one bucket produces both, so one plugin owns both. Splitting them
+    would read the same till twice and leave the pair free to disagree (ADR-0016)."""
+    plugin = ConversionPlugin(FootfallPlugin(_geometry(lines=[_line()])), transactions={})
+
+    assert plugin.names == frozenset({MetricName.CONVERSION, MetricName.TRANSACTIONS})
 
 
 def test_conversion_is_camera_wide() -> None:
@@ -313,23 +345,36 @@ def test_conversion_is_camera_wide() -> None:
 
     rows = plugin.reduce([_cross(track=1), _cross(track=2, line=BACK)], BUCKET)
 
-    assert _by_scope(rows) == {None: 1.5}
+    assert _by_metric(rows)[MetricName.CONVERSION] == 1.5
+    assert {row.scope_id for row in rows} == {None}
 
 
 def test_a_missing_till_reading_produces_no_row() -> None:
-    """A fabricated zero reads as "nobody bought anything" — a damaging lie (§9)."""
+    """A fabricated zero reads as "nobody bought anything" — a damaging lie (§9).
+
+    Neither row is emitted: with no till signal there is no numerator either.
+    """
     plugin = ConversionPlugin(FootfallPlugin(_geometry(lines=[_line()])), transactions={})
 
     assert plugin.reduce([_cross(track=1)], BUCKET) == []
 
 
-def test_zero_footfall_produces_no_row() -> None:
-    """Usually a vision gap while the till ran. Undefined, not zero, not infinite."""
+def test_zero_footfall_keeps_the_transactions_but_not_the_ratio() -> None:
+    """Usually a vision gap while the till ran. The ratio is undefined — not zero, not
+    infinite — but the till reading is a real observation and stays.
+
+    Dropping it would make `transactions` an unfaithful record of the till in exactly the
+    minutes vision was failing, and those are the minutes an operator most wants to see.
+    The cost is accepted knowingly: an hour containing such a minute has a numerator its
+    denominator did not observe, which nudges the hourly ratio up.
+    """
     plugin = ConversionPlugin(
         FootfallPlugin(_geometry(lines=[_line()])), transactions={(CAMERA, BUCKET): 2}
     )
 
-    assert plugin.reduce([_sample()], BUCKET) == []
+    rows = plugin.reduce([_sample()], BUCKET)
+
+    assert _by_metric(rows) == {MetricName.TRANSACTIONS: 2.0}
 
 
 def test_conversion_above_one_is_reported_rather_than_clamped() -> None:
@@ -341,4 +386,4 @@ def test_conversion_above_one_is_reported_rather_than_clamped() -> None:
 
     rows = plugin.reduce([_cross(track=1), _cross(track=2)], BUCKET)
 
-    assert _by_scope(rows) == {None: 1.5}
+    assert _by_metric(rows)[MetricName.CONVERSION] == 1.5
