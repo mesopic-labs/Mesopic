@@ -98,12 +98,15 @@ def _seed(data_dir: Path, rows: list[MetricRow]) -> None:
 
 
 def _row(minute: int, value: float, metric: MetricName = MetricName.FOOTFALL) -> MetricRow:
+    """`sample_count` is set because a `line_cross` row is scored on it, not on `value`:
+    the engine stores the signed net there and the crossing count beside it."""
     return MetricRow(
         camera_id=CAMERA,
         bucket=MinuteBucket(STREAM_START + timedelta(minutes=minute)),
         metric=metric,
         scope_id=None,
         value=value,
+        sample_count=int(abs(value)),
     )
 
 

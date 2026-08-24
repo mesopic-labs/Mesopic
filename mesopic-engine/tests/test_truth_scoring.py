@@ -485,13 +485,17 @@ def test_mixing_scoped_and_camera_wide_footfall_is_refused() -> None:
 # --- Scoring line_cross rather than footfall ---------------------------------
 
 
-def _cross_row(minute: int, value: float) -> MetricRow:
+def _cross_row(minute: int, net: float, *, crossings: int | None = None) -> MetricRow:
+    """A `line_cross` row as the engine writes one: the signed net, and beside it the
+    number of crossings that produced it. Both are needed — the net alone cannot say
+    whether a zero was a quiet minute or a busy one that balanced out."""
     return MetricRow(
         camera_id=CAMERA,
         bucket=MinuteBucket(STREAM_START + timedelta(minutes=minute)),
         metric=MetricName.LINE_CROSS,
         scope_id=None,
-        value=value,
+        value=net,
+        sample_count=int(abs(net)) if crossings is None else crossings,
     )
 
 
@@ -587,3 +591,38 @@ def test_a_score_carries_the_metric_it_was_measured_on() -> None:
 
     assert footfall.metric is MetricName.FOOTFALL
     assert traffic.metric is MetricName.LINE_CROSS
+
+
+def test_line_cross_is_scored_as_traffic_rather_than_as_the_engine_s_net() -> None:
+    """The engine's `line_cross` value is the SIGNED NET; this truth series is traffic.
+
+    `LineCrossPlugin` documents its value as "the signed net across each counting line",
+    with `sample_count` carrying how many crossings produced it — so a minute holding
+    three arrivals and one departure stores `value=2, sample_count=4`. The truth side
+    counts every crossing, because an exit is traffic even though it is not a visit.
+
+    Folding `value` therefore compares a net against a total, and reads a perfect minute
+    as a 50% under-count. `sample_count` is the quantity that actually corresponds.
+    """
+    truth = _truth((10.0, "in"), (20.0, "in"), (30.0, "in"), (40.0, "out"))
+    busy_minute = MetricRow(
+        camera_id=CAMERA,
+        bucket=MinuteBucket(STREAM_START),
+        metric=MetricName.LINE_CROSS,
+        scope_id=None,
+        value=2.0,
+        sample_count=4,
+    )
+
+    result = score(
+        truth,
+        _manifest(),
+        [busy_minute],
+        stream_start=STREAM_START,
+        gating=False,
+        metric=MetricName.LINE_CROSS,
+    )
+
+    assert result.truth_total == 4
+    assert result.predicted_total == 4.0
+    assert result.total_error_pct == 0.0
