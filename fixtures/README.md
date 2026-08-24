@@ -74,7 +74,7 @@ for a published number.
 
 | Clip | Provenance | Consent | Scene | Labels | Gate-eligible |
 |---|---|---|---|---|---|
-| `home-entrance-01` | own_rig | obtained | good_doorway | 33 in, 32 out — markos | yes |
+| `home-entrance-01` | own_rig | obtained | good_doorway | 37 in, 36 out — markos+emil | yes |
 | `home-hallway-oblique-01` | own_rig | obtained | hard | 3 in, 3 out — emil | yes |
 | `home-hallway-oblique-02` | own_rig | obtained | hard | 1 in, 1 out — emil | yes |
 | `home-kitchen-oblique-01` | own_rig | obtained | hard | n/a — no counting line | yes |
@@ -208,18 +208,18 @@ one it does not bind:
   > is 245. Read the first `w*h` bytes of a `yuv420p` frame instead, or use `signalstats`,
   > which does not convert. The two agree; `gray` disagrees with both.
 
-**Sixty-five crossings, 33 in and 32 out** — denser than anything else here, and still not
-dense. The limit is the grain rather than the count: the gate is stated at hour grain, two
-hours is **two buckets** (footfall 20 and 13), and a single miscount is 5.0 % or 7.7 % of
-its bucket against the good doorway's ≤ 7 %. That is a far better instrument than
+**Seventy-three crossings, 37 in and 36 out** — denser than anything else here, and still
+not dense. The limit is the grain rather than the count: the gate is stated at hour grain,
+two hours is **two buckets** (footfall 23 and 14), and a single miscount is 4.3 % or 7.1 %
+of its bucket against the good doorway's ≤ 7 %. That is a far better instrument than
 `residential-lobby-01`'s eleven crossings and still a coarse one for a pass/fail that close
 to the line.
 
-**Eighty-eight of the 120 minutes are empty, and one quiet stretch runs 53 minutes**
-(33:43 to 1:26:40). That is real footage of an empty hallway, not a hole in the labelling:
-all three subjects are inside when it begins and the first mark after it is an exit, so
-occupancy joins up across it. A quiet minute is an observation the engine can get wrong,
-which is why `_empty_minutes` keeps every one of them.
+**Eighty-three of the 120 minutes are empty, and the longest quiet stretch runs 28
+minutes** (58:26 to 1:26:40). It used to read as 53 minutes, and that was a labelling
+artefact rather than an empty house — see the correction below. A quiet minute is an
+observation the engine can get wrong, which is why `_empty_minutes` keeps every one of
+them.
 
 **The clip is the first two hours of a 2 h 3 min original**, cut with the fourth argument
 to `scripts/normalize-clip.sh`. The tail is footage nobody labelled, and scoring it would
@@ -247,9 +247,31 @@ codec, but they cannot rewind either, and the footage has not been re-watched si
 boundary — the inward mark at 1440.0 s — making it the only label in the file whose
 uncertainty spans two minute buckets. At hour grain nothing moves.
 
-The transcription was checked by walking each subject's entries and exits in order: all
-three alternate cleanly end to end, and nobody enters a house they are already inside. That
-caught one real error — the mark at 24:04 was attributed to the wrong subject, which had
+#### The correction of 2026-08-24, and how it was arrived at
+
+**Eight crossings were missing, and the M1 gate run is what found them.** The engine
+reported crossings in six minutes the labels called empty. Those minutes were re-watched
+and every one of them held a real crossing: 42:46 in, 43:29 in, 43:48 out, 45:26 out,
+57:22 in, 58:26 out, 86:41 in, 86:55 out. Rater is now `markos+emil` — a live tally plus a
+targeted re-watch.
+
+This is exactly the hole the paragraph below predicted. A live observer cannot see a
+crossing they never wrote down, and a 53-minute lull is when an observer stops watching;
+six of the eight sit inside what was recorded as the empty stretch, which was never
+53 minutes of empty house.
+
+**Read the accuracy number knowing how these labels were reached.** Only the minutes where
+the engine disagreed were re-watched. That procedure can find crossings the labels missed
+and structurally cannot find crossings the *engine* missed, because those minutes look
+quiet in both records and nothing points a reviewer at them. The labels are therefore not
+fully independent of the run they were scored against, and the residual — the engine's 36
+inward against 37 — is a floor on the error rather than a measurement of it. Requirement 8
+of MK.8, a second rater over the whole clip, is what would make this independent, and it
+has not been done.
+
+The original transcription was checked by walking each subject's entries and exits in
+order: all three alternate cleanly end to end, and nobody enters a house they are already
+inside. That caught one real error — the mark at 24:04 was attributed to the wrong subject, which had
 made one subject's exit at 24:18 impossible and another's entry at 26:04 a double — and it
 is worth being exact about
 what the check proves. It finds contradictions **among the marks that were written down**.
