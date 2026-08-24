@@ -363,3 +363,22 @@ async def test_a_frigate_camera_is_refused_a_snapshot_with_a_reason(
 
     assert response.status_code == 422
     assert "Frigate" in response.json()["detail"]
+
+
+async def test_the_page_carries_the_ids_this_camera_already_uses(
+    client: httpx.AsyncClient,
+) -> None:
+    """A redraw must be able to keep the name a truth file points at.
+
+    The canvas deliberately starts empty — a save replaces the camera's geometry
+    wholesale, and showing a half-edited set as if it were merged would be worse. Their
+    *ids* are a different matter: nothing dereferences a `line_id` at scoring time, so a
+    redraw that renames `door-count` to `line-1` orphans every label referencing it and
+    fails nothing at all. The page has to hand the canvas the existing names for that not
+    to happen.
+    """
+    response = await client.get(f"/calibrate/{FRONT_DOOR}")
+
+    assert response.status_code == 200
+    assert 'data-line-ids="door-count"' in response.text
+    assert 'data-zone-ids="shop-floor"' in response.text
