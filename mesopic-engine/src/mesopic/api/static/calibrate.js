@@ -27,7 +27,18 @@
 
   /* Shapes already saved are not loaded back into the editor: a save replaces this
      camera's geometry wholesale, so what is on the canvas is what the camera will have.
-     Starting empty makes that plain rather than letting a half-edited set look merged. */
+     Starting empty makes that plain rather than letting a half-edited set look merged.
+
+     Their IDS are carried, though, which is a different thing. A truth file points at a
+     line by name, and a redraw that renames `home-entrance-door` to `line-1` orphans every
+     label that referenced it without failing anything — the scorer never dereferences the
+     id, so nothing complains and the number is quietly measured against a line that no
+     longer exists under that name. Redrawing the first line keeps the first line's name. */
+  const existing = (key) =>
+    (stage.dataset[key] || "").split(",").filter((id) => id.length > 0);
+  const keptZoneIds = existing("zoneIds");
+  const keptLineIds = existing("lineIds");
+
   const shapes = [];
   let pending = [];
   let mode = "zone";
@@ -63,16 +74,37 @@
       const [a, b] = shape.points;
       overlay.appendChild(node("line", { x1: a[0], y1: a[1], x2: b[0], y2: b[1] }, cls));
       /* Which way is "in". A directed line whose direction is invisible is a line whose
-         sign nobody can check until the counts come out backwards. */
+         sign nobody can check until the counts come out backwards.
+
+         It carries an arrowhead rather than being a bare tick. The tick was correct and
+         still got read the wrong way round twice in one session: perpendicular to a line,
+         a plain stub reads as a normal — an axis, not a direction — and says nothing about
+         which end of it is "in". The head is what makes it a claim instead of a mark. */
       const mx = (a[0] + b[0]) / 2;
       const my = (a[1] + b[1]) / 2;
       const dx = b[0] - a[0];
       const dy = b[1] - a[1];
       const length = Math.hypot(dx, dy) || 1;
+      /* (-dy, dx) is the +1 half-plane of `side_of`, and a crossing INTO it is direction
+         +1, which `positive_dir: in` labels "in". The arrow points where an arrival goes. */
+      const nx = -dy / length;
+      const ny = dx / length;
+      const tipX = mx + nx * 0.06;
+      const tipY = my + ny * 0.06;
+      overlay.appendChild(node("line", { x1: mx, y1: my, x2: tipX, y2: tipY }, "normal"));
+      const backX = tipX - nx * 0.025;
+      const backY = tipY - ny * 0.025;
+      const wingX = (dx / length) * 0.018;
+      const wingY = (dy / length) * 0.018;
       overlay.appendChild(
         node(
-          "line",
-          { x1: mx, y1: my, x2: mx - (dy / length) * 0.06, y2: my + (dx / length) * 0.06 },
+          "polyline",
+          {
+            points:
+              backX + wingX + "," + (backY + wingY) + " " +
+              tipX + "," + tipY + " " +
+              (backX - wingX) + "," + (backY - wingY),
+          },
           "normal",
         ),
       );
@@ -146,14 +178,14 @@
     for (const shape of shapes) {
       if (shape.kind === "zone") {
         edit.zones.push({
-          zone_id: "zone-" + ++zones,
+          zone_id: keptZoneIds[zones++] || "zone-" + zones,
           role: "area",
           polygon: shape.points,
           metrics: ["occupancy", "dwell_seconds"],
         });
       } else {
         edit.lines.push({
-          line_id: "line-" + ++lines,
+          line_id: keptLineIds[lines++] || "line-" + lines,
           a: shape.points[0],
           b: shape.points[1],
           positive_dir: "in",

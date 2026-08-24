@@ -25,7 +25,12 @@ never uploaded, and never stored — what you save is the geometry, not the pict
 
 {% block content %}
 <section class="stage" aria-label="Calibration">
-  <div class="darkroom" data-camera="{{ camera.camera_id }}">
+  {# The ids this camera already uses, so a redraw keeps the name its labels point at
+     rather than minting a fresh `line-1`. Ids are `[A-Za-z0-9_-]+`, so comma-joining
+     them needs no escaping. #}
+  <div class="darkroom" data-camera="{{ camera.camera_id }}"
+       data-zone-ids="{{ zones | map(attribute='zone_id') | join(',') }}"
+       data-line-ids="{{ lines | map(attribute='line_id') | join(',') }}">
     <img class="still" alt="Still from {{ camera.name }}, for drawing on"
          src="/api/cameras/{{ camera.camera_id }}/snapshot" />
     <svg class="overlay" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true"></svg>
