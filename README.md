@@ -92,6 +92,19 @@ cosign verify ghcr.io/mesopic-labs/mesopic-engine:latest \
 
 Prefer to build it yourself? `make image` does exactly what CI does.
 
+**Not sure of the URL, or not sure it works?** `mesopic doctor` opens the stream once and
+reports the resolution and frame rate — or, when it cannot, says what to go and check. It
+never prints the URL back at you, because that URL is your camera's password:
+
+```bash
+export MESOPIC_RTSP_URL="rtsp://user:pass@192.168.1.64:554/stream1"
+docker run --rm -e MESOPIC_RTSP_URL \
+  ghcr.io/mesopic-labs/mesopic-engine:latest doctor --rtsp-env MESOPIC_RTSP_URL
+```
+
+With no URL it reports the box alone — cores, inference runtimes, and the detector model
+with its licence. That is the output to paste into an issue.
+
 ### Try it without a camera
 
 No RTSP stream to hand? One command brings up the engine, the dashboard, a synthetic
@@ -180,7 +193,8 @@ last decade (Hikvision, Dahua, Reolink, Amcrest, Axis, Ubiquiti, generic ONVIF, 
 of all of the above). Mesopic ingests the existing stream; it does not need its own sensor.
 
 Prefer a sub-stream (640×480–1280×720) for counting, and note that both H.264 and H.265/HEVC
-work — the full detail is in **[docs/cameras.md](./docs/cameras.md)**.
+work. `mesopic doctor --rtsp-env <VAR>` checks one before you configure it — the full detail,
+and what its answers mean, is in **[docs/cameras.md](./docs/cameras.md)**.
 
 ---
 ## How Mesopic compares
