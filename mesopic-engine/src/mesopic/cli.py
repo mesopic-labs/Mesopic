@@ -40,6 +40,7 @@ from mesopic.detector.model_manager import (
     ModelManager,
 )
 from mesopic.detector.onnx_detector import OnnxDetector
+from mesopic.doctor import host_report, preflight, render, tcp_reachable
 from mesopic.errors import ConfigError, MesopicError, TruthError
 from mesopic.ingest.rtsp import RtspFrameSource
 from mesopic.ingest.source import FrameSource
@@ -86,22 +87,18 @@ def version() -> None:
     typer.echo(__version__)
 
 
-@app.command()
-def doctor() -> None:
-    """Report what this box can do: cores, accelerators, model cache and its licence.
-
-    The first thing to ask a user for when a self-hosted install misbehaves, and the
-    surface that makes the model's licence visible rather than buried (ADR-0013).
-    """
-    raise NotImplementedError
-
-
-# The three seams the spike is built from. Separate functions so a test can replace the
-# camera, the model cache, and the tracker without touching the command's own logic.
+# The seams the commands are built from. Separate functions so a test can replace the
+# camera, the model cache, the tracker and the port probe without touching any command's
+# own logic.
 
 
 def _open_source(camera_id: CameraId, url: str) -> FrameSource:
     return RtspFrameSource(camera_id, url)
+
+
+def _reach_port(host: str, port: int) -> bool:
+    """`doctor`'s fourth seam: the plain TCP probe behind its "port open" line."""
+    return tcp_reachable(host, port)
 
 
 def _open_detector(model: str, cache_dir: Path) -> Detector:
@@ -135,6 +132,57 @@ def _resolve_url(rtsp: str | None, rtsp_env: str | None) -> str:
         message = f"environment variable {rtsp_env} is unset or empty"
         raise typer.BadParameter(message)
     return url
+
+
+@app.command()
+def doctor(
+    rtsp: Annotated[
+        str | None,
+        typer.Option(
+            "--rtsp",
+            help="Optional: an RTSP URL to preflight. Prefer --rtsp-env: this form is "
+            "visible in `ps`.",
+        ),
+    ] = None,
+    rtsp_env: Annotated[
+        str | None,
+        typer.Option("--rtsp-env", help="Name of an env var holding the RTSP URL to preflight."),
+    ] = None,
+    model: Annotated[
+        str, typer.Option("--model", help="Detector model to report on.")
+    ] = DEFAULT_MODEL,
+) -> None:
+    """Report what this box can do: cores, accelerators, model cache and its licence.
+
+    The first thing to ask a user for when a self-hosted install misbehaves, and the
+    surface that makes the model's licence visible rather than buried (ADR-0013).
+
+    Given a URL it also preflights one camera — does the stream open, at what resolution
+    and rate, and if not, what to go and check. Opt-in, because the report itself must
+    stay runnable on a box with no camera and no network: it reads the cache without ever
+    filling it.
+
+    The URL is a credential and is never printed. What is printed is the address it was
+    aimed at with the userinfo and query string replaced — enough to see a typo in the
+    stream path, and nothing anyone could log in with.
+    """
+    cache_dir = Path(os.environ.get(MODEL_CACHE_ENV_VAR, DEFAULT_MODEL_CACHE))
+    host = host_report(cache_dir=cache_dir, model_name=model)
+
+    camera = None
+    if rtsp is not None or rtsp_env is not None:
+        url = _resolve_url(rtsp, rtsp_env)
+        camera = preflight(
+            lambda: _open_source(CameraId("doctor"), url), url=url, reach=_reach_port
+        )
+
+    for line in render(host, camera):
+        typer.echo(line)
+
+    # A preflight that failed is a failed command: `mesopic doctor --rtsp ...` is the
+    # thing a setup script runs before it trusts a URL.
+    if camera is not None and not camera.opened:
+        raise typer.Exit(code=1)
 
 
 @app.command()
