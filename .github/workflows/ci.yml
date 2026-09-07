@@ -157,11 +157,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
-          # The default install must carry no AGPL anywhere (ADR-0013). Ultralytics is
-          # reachable only through the opt-in `mesopic[ultralytics]` extra, which is not
-          # part of the resolved default graph.
+          # The default install must carry no AGPL anywhere (ADR-0013).
           deny-licenses: AGPL-3.0, AGPL-3.0-only, AGPL-3.0-or-later, GPL-3.0, SSPL-1.0
           fail-on-severity: moderate
+          # Two packages are allowed past that line, and the reason is that this action
+          # reads `uv.lock`. One lockfile describes *every* extra, so the opt-in
+          # `mesopic[ultralytics]` extra puts ultralytics in it by construction — the
+          # comment that used to sit here claimed the opposite, and was wrong. Bumping an
+          # AGPL package this repository knowingly locks would otherwise fail a legitimate
+          # dependabot PR for ever, which is how a licence gate stops being read.
+          #
+          # An allow-list alone would also let ultralytics migrate into the *default*
+          # dependencies unnoticed, which is the one thing the deny-list was protecting.
+          # `test_licence_boundary.py` is what replaces that: it walks the lockfile from
+          # the root package's own dependencies and fails if an AGPL package is reachable
+          # without the extra — and it asserts this list and its list are the same list,
+          # so a third AGPL package cannot be waved through here alone.
+          allow-dependencies-licenses: pkg:pypi/ultralytics, pkg:pypi/ultralytics-platform
 
   image:
     name: engine image builds, and carries no weights
