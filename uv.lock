@@ -4,13 +4,16 @@ requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
     "python_full_version >= '3.15' and sys_platform == 'linux'",
-    "python_full_version >= '3.15' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version >= '3.15' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version >= '3.15' and sys_platform == 'darwin'",
     "python_full_version >= '3.13' and python_full_version < '3.15' and sys_platform == 'win32'",
     "python_full_version >= '3.13' and python_full_version < '3.15' and sys_platform == 'linux'",
-    "python_full_version >= '3.13' and python_full_version < '3.15' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version >= '3.13' and python_full_version < '3.15' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version >= '3.13' and python_full_version < '3.15' and sys_platform == 'darwin'",
     "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version < '3.13' and sys_platform == 'linux'",
-    "python_full_version < '3.13' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'darwin'",
     "python_version < '0'",
 ]
 
@@ -2498,7 +2501,7 @@ wheels = [
 
 [[package]]
 name = "ultralytics"
-version = "8.4.118"
+version = "8.4.138"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -2513,11 +2516,24 @@ dependencies = [
     { name = "requests" },
     { name = "torch" },
     { name = "torchvision" },
+    { name = "ultralytics-platform" },
     { name = "ultralytics-thop" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/80/2d/f5da52d87c859c5748507f5a791af1f2e500b467b0fb92c89581f065d988/ultralytics-8.4.118.tar.gz", hash = "sha256:3c6edf869146e91a67493f68abe4e2001e5d765d6d3e82aa1521edcd65d981a1", size = 1204401, upload-time = "2026-08-11T23:50:32.677Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/10/a5/d8ad681bb4740c5e7dd5aff452add8877fa8237cb1b274a86af9542a0f9b/ultralytics-8.4.138.tar.gz", hash = "sha256:4583b4cf3c2eeb2d83b54c206cb1ebaf9d8454e8e51a7d40ac7d8fa61e249d92", size = 1224480, upload-time = "2026-09-01T23:02:24.425Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4d/6b/832bcb9f798c78fe58334cc706336a6cdcd6f1924f1ac12bc76df45d00e9/ultralytics-8.4.118-py3-none-any.whl", hash = "sha256:67c4f51fb4d8379e8c37605f2bdcdddbbf12f031dd2d9d9f6312d261a246d92c", size = 1423476, upload-time = "2026-08-11T23:50:27.501Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/e6/e71e523ac92d1d0829f6f3b0abf8edc64dd1e928bc928efb7c2630245384/ultralytics-8.4.138-py3-none-any.whl", hash = "sha256:8cec72c6d36eb5a76c685fd9e780f427699e7b660dddef17b409742417d79019", size = 1441597, upload-time = "2026-09-01T23:02:20.009Z" },
+]
+
+[[package]]
+name = "ultralytics-platform"
+version = "0.1.21"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/65/61/881fdc4bbe5fe7277278d814531aff51dec9431388c6fd7b8a753b1b5def/ultralytics_platform-0.1.21.tar.gz", hash = "sha256:d408a2274800b51cca543aef21e96f6405c022df3d6c81dc4559375980c4eed1", size = 54878, upload-time = "2026-09-01T00:46:18.25Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/a8/11a454efdf6a326d735cef2e01e0f86e4b9732d583b5e5c95d1ea057b934/ultralytics_platform-0.1.21-py3-none-any.whl", hash = "sha256:f1c8a0ccfef543c0cc573b264e0bdd29605d3b67a21aee56ffe02ea611099c8d", size = 66181, upload-time = "2026-09-01T00:46:16.614Z" },
 ]
 
 [[package]]
