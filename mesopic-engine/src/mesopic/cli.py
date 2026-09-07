@@ -10,6 +10,7 @@ Commands are typed Python functions; Typer derives the interface from the annota
     mesopic spike      --rtsp <url>                 # P1: the hard-coded perf spike
     mesopic bench      --rtsp <url> --duration 1800 # P1.7: the M0 gate's soak
     mesopic truth validate fixtures/clips/*.json    # MK.2: check a label or a manifest
+    mesopic truth score    --truth … --clip …      # P2.9: the M1 accuracy number
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
@@ -44,14 +46,14 @@ from mesopic.doctor import host_report, preflight, render, tcp_reachable
 from mesopic.errors import ConfigError, MesopicError, TruthError
 from mesopic.ingest.rtsp import RtspFrameSource
 from mesopic.ingest.source import FrameSource
-from mesopic.runner import DATA_DIR_ENV_VAR, Engine, store_path
+from mesopic.runner import DATA_DIR_ENV_VAR, STORE_FILENAME, Engine, store_path
 from mesopic.sampler.sampler import FrameSampler
 from mesopic.spike import run_spike
 from mesopic.store.store import Store
 from mesopic.tracker.bytetrack import ByteTrackTracker
 from mesopic.tracker.tracker import Tracker
-from mesopic.truth import DRAFT_RATER, gate_eligible, load_manifest, load_truth
-from mesopic.types import CameraId
+from mesopic.truth import DRAFT_RATER, gate_eligible, load_manifest, load_truth, score
+from mesopic.types import CameraId, MetricName, MetricRow, MinuteBucket
 
 DEFAULT_BENCH_FPS = 2.5
 """Above the M0 floor on purpose.
@@ -422,6 +424,147 @@ def truth_validate(
 
     if failed:
         raise typer.Exit(code=1)
+
+
+SCORE_ROW_LIMIT = 100_000
+"""Ceiling on the rows one scoring run will read out of the store.
+
+Not a page size — a tripwire. A truncated read cannot be detected downstream: the missing
+minutes look exactly like minutes the engine stayed silent for, which `score` reads as a
+claim that nothing happened. Hitting this is refused rather than scored.
+"""
+
+STRAY_MARGIN = timedelta(hours=1)
+"""How far either side of the clip the store is read.
+
+`score` counts the minutes the engine spoke about that the footage does not span, and a
+query clipped to the clip's own span could never return one — the check would be
+structurally dead rather than passing. An hour covers both failure modes it exists to
+catch, a teardown flush just past the end and a `stream_start` misaligned by a whole
+series, without reaching into a different run's history.
+"""
+
+
+def _parse_stream_start(raw: str) -> datetime:
+    """Parse the flag, and insist on UTC. `score` enforces the minute boundary itself."""
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        message = f"--stream-start is not an ISO-8601 instant: {raw}"
+        raise TruthError(message) from None
+    if parsed.tzinfo is None:
+        message = "--stream-start must carry a UTC offset, so media time cannot drift with the box"
+        raise TruthError(message)
+    return parsed.astimezone(UTC)
+
+
+def _score_database(data_dir: Path | None) -> Path:
+    """Where the store is, without a config file to ask — this command reads, never runs."""
+    if data_dir is not None:
+        return data_dir.expanduser().resolve() / STORE_FILENAME
+    from_env = os.environ.get(DATA_DIR_ENV_VAR)
+    if from_env:
+        return Path(from_env).expanduser().resolve() / STORE_FILENAME
+    message = f"no store to read: pass --data-dir or set ${DATA_DIR_ENV_VAR}"
+    raise TruthError(message)
+
+
+def _run_metrics(
+    database: Path,
+    *,
+    camera_id: CameraId | None,
+    metric: MetricName,
+    stream_start: datetime,
+    duration_s: float,
+) -> list[MetricRow]:
+    """Read one run's rows out of the store — the seam between the engine and `score`."""
+    with Store(database) as store:
+        rows = store.metrics_between(
+            start=stream_start - STRAY_MARGIN,
+            end=stream_start + timedelta(seconds=duration_s) + STRAY_MARGIN,
+            limit=SCORE_ROW_LIMIT,
+            camera_id=camera_id,
+            metrics=[metric],
+        )
+    if len(rows) >= SCORE_ROW_LIMIT:
+        message = f"refusing to score a truncated read: hit the {SCORE_ROW_LIMIT}-row ceiling"
+        raise TruthError(message)
+    return rows
+
+
+@truth_app.command("score")
+def truth_score(  # noqa: PLR0917 - each argument is one flag of the gate run, not a blob
+    truth_path: Annotated[
+        Path, typer.Option("--truth", help="The truth file (*.truth.json).", show_default=False)
+    ],
+    clip_path: Annotated[
+        Path, typer.Option("--clip", help="The clip manifest (*.clip.json).", show_default=False)
+    ],
+    stream_start: Annotated[
+        str,
+        typer.Option(
+            "--stream-start",
+            help="UTC instant the clip's first frame was ingested, on a minute boundary.",
+            show_default=False,
+        ),
+    ],
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            help=f"Where the SQLite store lives. Defaults to ${DATA_DIR_ENV_VAR}.",
+            show_default=False,
+        ),
+    ] = None,
+    camera_id: Annotated[
+        str | None,
+        typer.Option("--camera-id", help="Score one camera's rows.", show_default=False),
+    ] = None,
+    metric: Annotated[
+        MetricName, typer.Option("--metric", help="Which quantity to measure.")
+    ] = MetricName.FOOTFALL,
+    gating: Annotated[
+        bool,
+        typer.Option(
+            "--gating",
+            help="Read this as a published number, and refuse if the clip may not back one.",
+        ),
+    ] = False,
+) -> None:
+    """Measure a run the engine left in the store against the labels for the same clip.
+
+    Without `--gating` this measures, which is what metric development wants all day.
+    With it, the clip has to be allowed to produce a released figure — and a refusal
+    prints the reason instead of a number, because a number nobody may quote is worse
+    than no number when it is the plausible-looking one that gets copied.
+    """
+    try:
+        truth = load_truth(truth_path)
+        manifest = load_manifest(clip_path)
+        started = _parse_stream_start(stream_start)
+        rows = _run_metrics(
+            _score_database(data_dir),
+            camera_id=None if camera_id is None else CameraId(camera_id),
+            metric=metric,
+            stream_start=started,
+            duration_s=truth.duration_s,
+        )
+        result = score(
+            truth,
+            manifest,
+            rows,
+            stream_start=MinuteBucket(started),
+            gating=gating,
+            metric=metric,
+        )
+    except MesopicError as error:
+        print(f"FAILED  {error}")
+        raise typer.Exit(code=1) from None
+
+    print(f"clip: {result.clip_id}  metric: {result.metric}  minutes: {result.minutes}")
+    print(f"truth_total: {result.truth_total}  predicted_total: {result.predicted_total:g}")
+    print(f"total_error_pct: {result.total_error_pct:.1f}")
+    print(f"mape_pct: {result.mape_pct:.1f}  stray_minutes: {result.stray_minutes}")
 
 
 @app.command()

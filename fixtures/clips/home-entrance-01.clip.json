@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "clip_id": "home-entrance-01",
+  "sha256": "83ddbd2e7aa84ef13d5c59ff16d1eacba46309461295245a485abc367d9be74f",
+  "duration_s": 7200.0,
+  "width": 1920,
+  "height": 1080,
+  "fps": 25.0,
+  "provenance": {
+    "kind": "own_rig",
+    "licence": "Own recording, retained for engine evaluation. No third-party licence applies.",
+    "licence_verified_utc": "2026-08-23",
+    "url": null
+  },
+  "consent": {
+    "model_release": "obtained",
+    "note": "Consent obtained for the identifiable people appearing in this recording"
+  },
+  "scene": {
+    "reference": "good_doorway",
+    "mount_height_m": 2.6,
+    "mount_angle_deg": 34.0,
+    "lighting": "daylight_indoor_even"
+  }
+}

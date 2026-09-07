@@ -51,6 +51,7 @@ def test_metric_vocabulary_is_locked() -> None:
         "dwell_seconds",
         "line_cross",
         "conversion",
+        "transactions",
         "heatmap",
     }
 

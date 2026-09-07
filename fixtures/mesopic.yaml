@@ -6,9 +6,17 @@
 # walk counts at all, so an oblique clip's labels mean nothing without the config they
 # were made against. This file is that config, committed beside the labels.
 #
-# Replay a clip with the rig, then point the engine at it:
-#   MESOPIC_CLIPS_DIR=~/Projects/mesopic-clips  (bytes live outside the repo — ADR-0015)
+# Replay a clip with the rig, then point the engine at it. The clips directory is what
+# gets mounted into the RTSP sidecar, and every clip in it is served under its own clip
+# id — which is the URL each camera below names:
+#
+#   export MESOPIC_CLIPS_DIR=~/Projects/mesopic-clips   (bytes outside the repo — ADR-0015)
+#   docker compose --profile camera up -d mediamtx
 #   mesopic run --config fixtures/mesopic.yaml
+#
+# On a VM-backed Docker (Colima, Lima, Docker Desktop) only paths the VM mounts are
+# visible to it — `$HOME` and little else by default — so a clips directory outside your
+# home directory bind-mounts as empty and every clip 400s.
 #
 # Geometry is normalized [0,1], origin top-left, so it survives the 4K -> 1080p
 # normalisation `scripts/normalize-clip.sh` applies.
@@ -17,9 +25,22 @@ site:
   site_id: "fixtures"
   timezone: "Europe/London"
 
+# Reads need no credential — the loopback bind is the access control for those. Saving
+# geometry rewrites this file, so it needs one, and `mesopic calibrate`'s save button is
+# how `home-entrance-door` is meant to arrive. Without this the engine still runs and
+# every write answers 503 "no credential is configured".
+api:
+  host: "127.0.0.1"
+  # 8081 rather than the documented default. A VM-backed Docker (Colima, Lima, Docker
+  # Desktop) runs a port forwarder that commonly holds 8080 for as long as the VM is up,
+  # and this config is meant to be run beside the RTSP sidecar in exactly that setup.
+  port: 8081
+  password_env: "MESOPIC_ADMIN_PASSWORD"
+
 cameras:
-  # The hallway clips (`-01` and `-02`) share one framing, so one camera serves both:
-  # swap the mediamtx path to replay the other.
+  # The hallway clips (`-01` and `-02`) share one framing, so one camera serves both, and
+  # they share `home-hallway-corridor` for the same reason. Both are served at once under
+  # their own ids; point this `url` at the other clip to replay it.
   - camera_id: "home-hallway"
     name: "Home hallway (fixture replay)"
     source:
@@ -27,6 +48,17 @@ cameras:
       # A loopback path carries no credentials, so there is nothing here to keep in an
       # env var. A real camera URL is a secret and uses `url_env` — see examples/mesopic.yaml.
       url: "rtsp://127.0.0.1:8554/home-hallway-oblique-01"
+      transport: tcp
+    reference_resolution: [1920, 1080]
+
+  # The MK.8 gate clip. Two hours, `good_doorway`, a different house and rig from the
+  # `home-hallway` pair above — the shared `home-` prefix is the only thing they have in
+  # common.
+  - camera_id: "home-entrance"
+    name: "Home entrance (fixture replay)"
+    source:
+      kind: rtsp
+      url: "rtsp://127.0.0.1:8554/home-entrance-01"
       transport: tcp
     reference_resolution: [1920, 1080]
 
@@ -48,10 +80,28 @@ lines:
   # bottom of frame and `b` up by the wall corner, the doorway side is `-1` and the living
   # room is `+1`, so walking in from the back door is `+1` and `positive_dir: in` reads
   # correctly. Swapping `a` and `b` silently inverts every count.
-  - line_id: "entrance"
-    camera_id: "home-hallway"
-    a: [0.44, 1.00]
+  - line_id: home-hallway-corridor
+    camera_id: home-hallway
+    a: [0.44, 1.0]
     b: [0.62, 0.42]
+    positive_dir: in
+    metrics: [line_cross, footfall]
+  # Redrawn 2026-08-24 after the first gate run scored 55% inward recall against 97%
+  # outward. The heatmap showed why: the old line sat at y 0.73-0.79, which holds 1.4 s of
+  # foot-point presence across ten minutes against 7-28 s in the rows either side. It was
+  # drawn inside the band where the chair hides the walker, so an inbound track died above
+  # it and a new one was born below, seeded on the inside with nothing to flip from.
+  #
+  # This one separates the doorway approach from the room rather than lying across the
+  # walking path, and sits below the occlusion.
+  #
+  # ENDPOINTS SWAPPED after drawing, again. As drawn, the doorway side computed as +1 and
+  # the room side as -1 -- and `direction = +1 if crossed_from < 0`, so walking in from the
+  # doorway would have been emitted as -1 and labelled "out".
+  - line_id: home-entrance-door
+    camera_id: home-entrance
+    a: [0.5449, 0.9504]
+    b: [0.6981, 0.7211]
     positive_dir: in
     metrics: [line_cross, footfall]
 
@@ -61,20 +111,18 @@ lines:
   # occupancy and dwell fixture, and the zones below are the whole of its geometry.
 
 zones:
-  - zone_id: "living-room"
-    camera_id: "home-hallway"
+  - zone_id: living-room
+    camera_id: home-hallway
     role: area
-    polygon: [[0.62, 0.30], [1.00, 0.30], [1.00, 0.78], [0.66, 0.78]]
+    polygon: [[0.62, 0.3], [1.0, 0.3], [1.0, 0.78], [0.66, 0.78]]
     metrics: [occupancy, dwell_seconds]
-
-  - zone_id: "kitchen-counter"
-    camera_id: "home-kitchen"
+  - zone_id: kitchen-counter
+    camera_id: home-kitchen
     role: area
     polygon: [[0.02, 0.52], [0.34, 0.52], [0.34, 0.88], [0.02, 0.88]]
     metrics: [occupancy, dwell_seconds]
-
-  - zone_id: "tv-corner"
-    camera_id: "home-kitchen"
+  - zone_id: tv-corner
+    camera_id: home-kitchen
     role: area
-    polygon: [[0.70, 0.30], [1.00, 0.30], [1.00, 0.58], [0.70, 0.58]]
+    polygon: [[0.7, 0.3], [1.0, 0.3], [1.0, 0.58], [0.7, 0.58]]
     metrics: [occupancy, dwell_seconds]

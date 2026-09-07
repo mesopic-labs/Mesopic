@@ -102,7 +102,10 @@ services:
       - "8554:8554"
     volumes:
       - ./docker/mediamtx.yml:/mediamtx.yml:ro
-      - ./examples/clips:/clips:ro
+      # The directory of clips to serve. Defaults to the sample-clip dir the demo uses;
+      # point MESOPIC_CLIPS_DIR at the ground-truth clips (ADR-0015 keeps their bytes
+      # outside this repository) to replay one by its clip id.
+      - ${MESOPIC_CLIPS_DIR:-./examples/clips}:/clips:ro
 
   # For exercising the MQTT exporter and the Home Assistant discovery path locally.
   mosquitto:

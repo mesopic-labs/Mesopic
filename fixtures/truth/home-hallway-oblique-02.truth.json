@@ -5,7 +5,7 @@
   "labelled_at_utc": "2026-08-17T11:00:45Z",
   "duration_s": 16.64,
   "crossings": [
-    { "t_s": 4.0, "line_id": "entrance", "direction": "in" },
-    { "t_s": 13.0, "line_id": "entrance", "direction": "out" }
+    { "t_s": 4.0, "line_id": "home-hallway-corridor", "direction": "in" },
+    { "t_s": 13.0, "line_id": "home-hallway-corridor", "direction": "out" }
   ]
 }

@@ -14,11 +14,24 @@ purchases make it genuinely possible, and where it is *not*, it is revealing a f
 undercount that clamping would hide.
 
 **A minute-grain ratio does not roll up by averaging.** Hourly conversion is
-`Σ txns / Σ footfall` over the hour, not the mean of sixty ratios, and the transaction
-counts are not stored as a series today — so a correct hourly figure needs the numerator
-kept. That is P3.5's to fix when the ingress it belongs to exists.
+`Σ txns / Σ footfall` over the hour, not the mean of sixty ratios — so a correct hourly
+figure needs the numerator kept, and nothing downstream can recover it from a number that
+has already been divided. `transactions` is therefore emitted as its own series alongside
+the ratio (C7): the cloud's continuous aggregate groups by metric and can neither
+multiply a ratio back by its denominator nor join to another hypertable to find one.
 
-Implements P2.4.
+The two rows are not emitted under the same conditions, and the difference is deliberate.
+No till reading means neither row — absence of a signal is absence of a row. Zero footfall
+means the *ratio* is dropped and the transactions kept: the till reading is a real
+observation, usually made while vision was failing, and those are the minutes an operator
+most wants to see. The cost is accepted knowingly — such an hour carries a numerator its
+denominator never observed, which nudges the hourly ratio up.
+
+One edge this does not cover: a camera producing no events at all in a minute is absent
+from `cameras_in`, so its till reading is dropped. Dense `OCCUPANCY_SAMPLE` events
+(ADR-0016) mean a live camera always has some, so this is the dead-camera case.
+
+Implements P2.4, extended by C7.
 """
 
 from __future__ import annotations
@@ -47,7 +60,12 @@ class ConversionPlugin:
 
     @property
     def names(self) -> frozenset[MetricName]:
-        return frozenset({MetricName.CONVERSION})
+        """Both series come from one fold over one till reading, so one plugin owns both.
+
+        Splitting them across two plugins would read the same mapping twice and leave the
+        ratio free to drift from the numerator it was supposedly built from (ADR-0016).
+        """
+        return frozenset({MetricName.CONVERSION, MetricName.TRANSACTIONS})
 
     def reduce(self, events: list[RawEvent], bucket: MinuteBucket) -> list[MetricRow]:
         """Camera-wide: a till belongs to no single door, so neither does the ratio.
@@ -57,15 +75,23 @@ class ConversionPlugin:
         result depend on what had already been written, and re-folding after a crash
         would stop being deterministic.
         """
+        footfall = self._footfall.reduce(events, bucket)
         rows = []
         for camera_id in sorted(self._footfall.cameras_in(events)):
             transactions = self._transactions.get((camera_id, bucket))
-            visitors = sum(
-                row.value
-                for row in self._footfall.reduce(events, bucket)
-                if row.camera_id == camera_id
+            if transactions is None:
+                continue
+            rows.append(
+                MetricRow(
+                    camera_id=camera_id,
+                    bucket=bucket,
+                    metric=MetricName.TRANSACTIONS,
+                    scope_id=None,
+                    value=float(transactions),
+                )
             )
-            if transactions is None or visitors == 0:
+            visitors = sum(row.value for row in footfall if row.camera_id == camera_id)
+            if visitors == 0:
                 continue
             rows.append(
                 MetricRow(

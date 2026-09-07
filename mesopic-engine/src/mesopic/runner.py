@@ -40,6 +40,7 @@ from mesopic.store.store import Store
 from mesopic.supervisor.handle import WorkerEntry
 from mesopic.supervisor.supervisor import Supervisor
 from mesopic.supervisor.worker import run_camera_worker
+from mesopic.sync.build import build_sync_loop
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -137,6 +138,10 @@ class Engine:
         instead of inventing a path."""
         self.supervisor = Supervisor(config, store=store, entry=entry)
         self.supervisor.exporters = build_exporters(config)
+        self.sync_loop = build_sync_loop(config.cloud_sync, store)
+        """`None` unless `cloud_sync.enabled`. Built here rather than in `run` so that a
+        missing site token fails at construction, next to every other config error, rather
+        than a second into a process that has already claimed the port."""
         self.app = create_app(
             config=config,
             store=store,
@@ -203,13 +208,33 @@ class Engine:
 
     async def run(self, *, serve: Serve = serve_uvicorn) -> None:
         """Run until a signal, a stopped supervisor, or a server that gave up."""
-        with _shutdown_on_signal(self.supervisor.request_shutdown):
+        with _shutdown_on_signal(self.supervisor.request_shutdown), self._syncing():
             engine = asyncio.create_task(self.supervisor.run(), name="supervisor")
             if not self.config.api.enabled:
                 await engine
                 return
             server = asyncio.create_task(serve(self.app, self.config.api), name="api")
             await _first_to_finish(engine, server, on_stop=self.supervisor.request_shutdown)
+
+    @contextmanager
+    def _syncing(self) -> Iterator[None]:
+        """Run the cloud sync alongside, and deliberately outside the race above.
+
+        `_first_to_finish` exists so that a dead half takes the other down — a box that
+        looks off while still recording is worse than one that is off. Cloud sync is the
+        opposite case and must not join it: the edge is the source of truth and the cloud
+        is a downstream cache (ADR-0005), so a sync that dies leaves the cache stale while
+        the shop keeps counting, keeps serving its dashboard, and keeps its rows queued in
+        SQLite. Putting this task in the race would trade that for an outage.
+        """
+        if self.sync_loop is None:
+            yield
+            return
+        task = asyncio.ensure_future(self.sync_loop.run())
+        try:
+            yield
+        finally:
+            task.cancel()
 
 
 async def _first_to_finish(
