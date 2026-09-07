@@ -193,6 +193,26 @@ class ModelArtefact:
     licence: str
 
 
+def _spec_for(model_name: str) -> ModelSpec:
+    """The registered model, or a loud failure naming the ones that exist."""
+    spec = MODELS.get(model_name)
+    if spec is None:
+        known = ", ".join(sorted(MODELS))
+        message = f"unknown model {model_name!r}; known models: {known}"
+        raise ModelError(message)
+    return spec
+
+
+def _artefact_of(spec: ModelSpec, path: Path) -> ModelArtefact:
+    """Pair a cache entry with the licence its spec records (ADR-0013 decision 5)."""
+    return ModelArtefact(
+        path=path,
+        model_name=spec.name,
+        quantization="fp32",
+        licence=spec.licence,
+    )
+
+
 class ModelManager:
     """Owns the model cache directory and the fetch/export/quantize pipeline."""
 
@@ -209,21 +229,25 @@ class ModelManager:
 
     def ensure(self, model_name: str, *, runtime: Runtime = DEFAULT_RUNTIME) -> ModelArtefact:
         """Return a cached artefact, building it if absent. Idempotent and atomic."""
-        spec = MODELS.get(model_name)
-        if spec is None:
-            known = ", ".join(sorted(MODELS))
-            message = f"unknown model {model_name!r}; known models: {known}"
-            raise ModelError(message)
-
+        spec = _spec_for(model_name)
         path = self._artefact_path(spec, runtime)
         if not _is_usable(path):
             self._build(spec, path)
-        return ModelArtefact(
-            path=path,
-            model_name=spec.name,
-            quantization="fp32",
-            licence=spec.licence,
-        )
+        return _artefact_of(spec, path)
+
+    def locate(
+        self, model_name: str, *, runtime: Runtime = DEFAULT_RUNTIME
+    ) -> ModelArtefact | None:
+        """The cached artefact, or `None` if it has not been built. Never downloads.
+
+        The read-only half of `ensure`, and what a diagnostic needs: `mesopic doctor`
+        reports whether the model is already on the box, and a report that quietly pulled
+        several megabytes over a metered link would be a surprising thing for a command
+        the user ran to *look* at their install to do.
+        """
+        spec = _spec_for(model_name)
+        path = self._artefact_path(spec, runtime)
+        return _artefact_of(spec, path) if _is_usable(path) else None
 
     def _artefact_path(self, spec: ModelSpec, runtime: Runtime) -> Path:
         """Content-addressed by everything that changes the bytes.

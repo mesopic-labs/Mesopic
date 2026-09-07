@@ -232,3 +232,44 @@ def test_every_registered_model_is_permissively_licensed() -> None:
     model added later cannot quietly reintroduce copyleft into the default path.
     """
     assert {spec.licence for spec in MODELS.values()} <= {"Apache-2.0", "MIT", "BSD-3-Clause"}
+
+
+def test_locate_finds_nothing_before_the_model_has_been_built(tmp_path: Path) -> None:
+    """`mesopic doctor` asks what is on disk; asking must not start a download."""
+    manager = ModelManager(tmp_path, download=_fake_download, transform=_fake_transform)
+
+    assert manager.locate("yolox-nano") is None
+
+
+def test_locate_returns_the_cached_artefact_without_fetching(tmp_path: Path) -> None:
+    downloads = 0
+
+    def counting_download(spec: ModelSpec, dest: Path) -> None:
+        nonlocal downloads
+        downloads += 1
+        _fake_download(spec, dest)
+
+    manager = ModelManager(tmp_path, download=counting_download, transform=_fake_transform)
+    built = manager.ensure("yolox-nano")
+
+    located = manager.locate("yolox-nano")
+
+    assert located is not None
+    assert located.path == built.path
+    assert located.licence == "Apache-2.0"
+    assert downloads == 1
+
+
+def test_locate_ignores_a_half_written_entry(tmp_path: Path) -> None:
+    """A zero-byte file is what a killed build leaves; it is not a cached model."""
+    manager = ModelManager(tmp_path, download=_fake_download, transform=_fake_transform)
+    (tmp_path / "yolox-nano.fp32.op12.onnx").touch()
+
+    assert manager.locate("yolox-nano") is None
+
+
+def test_locate_refuses_a_model_it_does_not_know(tmp_path: Path) -> None:
+    manager = ModelManager(tmp_path, download=_fake_download, transform=_fake_transform)
+
+    with pytest.raises(ModelError):
+        manager.locate("no-such-model")
