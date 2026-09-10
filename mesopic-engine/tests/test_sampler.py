@@ -69,6 +69,39 @@ def test_a_frame_exactly_on_the_due_instant_is_admitted() -> None:
     assert sampler.is_due(_T0 + timedelta(milliseconds=500)) is True
 
 
+def test_a_late_frame_does_not_push_the_next_one_back() -> None:
+    """Real cameras do not stamp frames on the due instant. Re-basing on each admitted
+    frame charges its lateness to the next period, so every late frame costs rate."""
+    sampler = FrameSampler(target_fps=2.0)
+    sampler.is_due(_T0)
+    sampler.is_due(_T0 + timedelta(milliseconds=600))
+
+    assert sampler.is_due(_T0 + timedelta(milliseconds=1000)) is True
+
+
+def test_a_16_fps_stream_averages_the_target_rather_than_a_divisor_of_it() -> None:
+    """The M0 bench's case, seen on a real 16 fps camera. Waiting for the first frame
+    past the period turns 400 ms into 437.5 ms on a 62.5 ms grid, so 2.5 fps becomes
+    16/7 — the gate's floor then passes or fails on the camera's frame rate, not the box."""
+    sampler = FrameSampler(target_fps=2.5)
+
+    admitted = _admitted(sampler, _stream(_T0, fps=16.0, count=16 * 60))
+
+    assert len(admitted) == pytest.approx(2.5 * 60, abs=1)
+
+
+def test_a_late_frame_does_not_let_its_duplicate_through() -> None:
+    """Cameras that stamp on a coarse clock send several frames with one timestamp. A
+    due instant snapped *to* a late frame would admit its duplicate straight after it —
+    the detector run twice on one instant."""
+    sampler = FrameSampler(target_fps=2.5)
+    sampler.is_due(_T0)
+    late = _T0 + timedelta(milliseconds=900)
+
+    assert sampler.is_due(late) is True
+    assert sampler.is_due(late) is False
+
+
 def test_the_first_frame_after_a_reconnect_gap_is_admitted() -> None:
     """Recovery: a camera that went away and came back must resume detecting at once."""
     sampler = FrameSampler(target_fps=3.0)

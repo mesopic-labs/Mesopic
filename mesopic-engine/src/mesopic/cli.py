@@ -56,12 +56,11 @@ from mesopic.truth import DRAFT_RATER, gate_eligible, load_manifest, load_truth,
 from mesopic.types import CameraId, MetricName, MetricRow, MinuteBucket
 
 DEFAULT_BENCH_FPS = 2.5
-"""Above the M0 floor on purpose.
+"""Above the M0 floor on purpose, so a box that sustains it clears the floor with margin.
 
-The floor is 2 fps, but capture-time gating admits frames on the source's own grid: at
-25 fps a 500 ms gate lands on the 520 ms frame, pinning the effective rate at 1.923 and
-failing a `>= 2.0` assertion on arithmetic rather than on capacity. 2.5 divides 25 fps
-evenly (400 ms), and a box that sustains it clears the floor with margin.
+The sampler admits frames on the source's own grid, so any one gap between admitted
+frames can run up to a source frame long; its due instant steps by whole periods, so the
+average holds the target on any camera. The margin is for the gaps, not the average.
 """
 
 DEFAULT_BENCH_DURATION_S = 1800.0
