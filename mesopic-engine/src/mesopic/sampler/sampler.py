@@ -46,14 +46,14 @@ class FrameSampler:
     def __init__(self, target_fps: float) -> None:
         self._period = _period_for(target_fps)
         self._last_admitted: FrameTs | None = None
+        self._next_due: FrameTs | None = None
 
     def is_due(self, ts: FrameTs) -> bool:
         """Whether a frame captured at `ts` should be detected.
 
-        Consumes as well as answers: a `True` re-bases the gate on `ts`, so the caller
-        must ask exactly once per frame. Re-basing on the admitted frame rather than
-        advancing by whole periods is what keeps a reconnect cheap — an outage banks no
-        credit to spend on the buffered frames that follow it.
+        Consumes as well as answers: a `True` advances the due instant, so the caller
+        must ask exactly once per frame. How it advances is what holds the target rate on
+        a real camera, and is `_due_after`'s to explain.
 
         Args:
             ts: The frame's capture timestamp. Never its arrival time: the two diverge
@@ -68,14 +68,15 @@ class FrameSampler:
         if ts.tzinfo is None:
             msg = f"frame timestamps must be timezone-aware UTC, got {ts!r}"
             raise ValueError(msg)
-        if self._last_admitted is not None:
-            elapsed = ts - self._last_admitted
-            # The lower bound re-arms the gate on a backwards step larger than one
-            # period: a camera clock that resets would otherwise silence this sampler
-            # until real time caught up. Smaller backwards steps are ordinary arrival
-            # jitter, and fall inside the rate limit anyway.
-            if -self._period <= elapsed < self._period:
+        if self._last_admitted is not None and self._next_due is not None:
+            # A backwards step larger than one period re-arms the gate: a camera clock
+            # that resets would otherwise silence this sampler until real time caught
+            # up. Smaller backwards steps are ordinary arrival jitter, and fall inside
+            # the rate limit anyway.
+            rewound = ts < self._last_admitted - self._period
+            if ts < self._next_due and not rewound:
                 return False
+        self._next_due = self._due_after(ts)
         self._last_admitted = ts
         return True
 
@@ -89,3 +90,23 @@ class FrameSampler:
             ValueError: If `target_fps` is not a positive, finite rate.
         """
         self._period = _period_for(target_fps)
+        if self._last_admitted is not None:
+            self._next_due = FrameTs(self._last_admitted + self._period)
+
+    def _due_after(self, ts: FrameTs) -> FrameTs:
+        """The due instant once the frame at `ts` has been admitted.
+
+        On schedule, it advances by one whole period. Re-basing on the admitted frame
+        instead charges that frame's lateness to the next period: on a 16 fps camera a
+        400 ms period becomes 437.5 ms, and on one with irregular timestamps worse.
+
+        Off schedule — a reconnect, a stall, a rewound clock — it restarts one period
+        after `ts`, so an outage banks no credit to spend on the buffered frames that
+        follow it. Restarting *at* `ts` would make the next frame due too, and a camera
+        stamping on a coarse clock sends several frames with one timestamp.
+        """
+        if self._next_due is not None:
+            stepped = self._next_due + self._period
+            if self._next_due <= ts < stepped:
+                return FrameTs(stepped)
+        return FrameTs(ts + self._period)
